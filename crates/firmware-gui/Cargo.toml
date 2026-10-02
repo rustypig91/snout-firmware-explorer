@@ -1,0 +1,13 @@
+[package]
+name = "firmware-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+firmware-analysis-core.workspace = true
+eframe = { version = "0.30", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+rfd = "0.16"
+egui_extras = "0.30"
+serde_json.workspace = true
+
