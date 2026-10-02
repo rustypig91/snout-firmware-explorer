@@ -3,7 +3,7 @@ use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
 use firmware_analysis_core::{format_bytes as bytes, Analysis, FileTree};
 
-pub const ACCENT: egui::Color32 = egui::Color32::from_rgb(105, 216, 191);
+pub const ACCENT: egui::Color32 = egui::Color32::from_rgb(113, 185, 219);
 const FLASH_HELP: &str = "Allocated bytes stored in the load image. Initialized RAM data also needs initial values in Flash. Gaps and programmer-specific overhead are excluded.";
 const RAM_HELP: &str = "Static memory required while running. Includes initialized data, zero-filled storage and explicit reservations. Additional heap and stack demand is not automatically known.";
 struct Row {
@@ -47,118 +47,228 @@ impl Explorer {
                 order
             }
         });
-        ui.weak(format!(
-            "{} rows · Click a column heading to sort",
-            rows.len()
-        ));
+        self.visible_rows = rows.len();
         let mut clicked = None;
-        let mut table = TableBuilder::new(ui)
-            .striped(true)
-            .resizable(true)
-            .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
-        for (index, _) in headers.iter().enumerate() {
-            table = table.column(if index == 0 {
-                Column::initial(280.0).at_least(120.0).clip(true)
-            } else {
-                Column::initial(115.0).at_least(65.0).clip(true)
-            });
-        }
-        table
-            .header(30.0, |mut header| {
-                for (index, (title, help)) in headers.iter().enumerate() {
-                    header.col(|ui| {
-                        let indicator = if sort == index {
-                            if self.descending {
-                                " ▼"
-                            } else {
-                                " ▲"
-                            }
-                        } else {
-                            ""
-                        };
-                        if ui
-                            .button(format!("{title}{indicator}"))
-                            .on_hover_text(*help)
-                            .clicked()
-                        {
-                            if self.sort_column == index {
-                                self.descending = !self.descending;
-                            } else {
-                                self.sort_column = index;
-                                self.descending = index != 0;
-                            }
-                        }
+        let height = ui.available_height();
+        egui::ScrollArea::horizontal()
+            .id_salt("table_horizontal")
+            .show(ui, |ui| {
+                ui.set_min_width(
+                    (250.0 + (headers.len() - 2) as f32 * 96.0 + 100.0).max(ui.available_width()),
+                );
+                ui.set_min_height(height);
+                let mut table = TableBuilder::new(ui)
+                    .striped(false)
+                    .sense(egui::Sense::click())
+                    .resizable(true)
+                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
+                for (index, _) in headers.iter().enumerate() {
+                    table = table.column(if index == headers.len() - 1 {
+                        Column::remainder().at_least(100.0).clip(true)
+                    } else if index == 0 {
+                        Column::initial(250.0).at_least(120.0).clip(true)
+                    } else {
+                        Column::initial(96.0).at_least(65.0).clip(true)
                     });
                 }
-            })
-            .body(|body| {
-                body.rows(27.0, rows.len(), |mut row| {
-                    let item = &rows[row.index()];
-                    for (index, cell) in item.cells.iter().enumerate() {
-                        row.col(|ui| {
-                            let response = if index == 0 && item.action.is_some() {
-                                ui.link(cell)
-                            } else {
-                                ui.label(cell)
-                            };
-                            if response.clicked() {
-                                clicked = item.action.clone();
+                table
+                    .header(26.0, |mut header| {
+                        for (index, (title, help)) in headers.iter().enumerate() {
+                            header.col(|ui| {
+                                if sort_header(
+                                    ui,
+                                    title,
+                                    (sort == index).then_some(self.descending),
+                                )
+                                .on_hover_text(*help)
+                                .clicked()
+                                {
+                                    if self.sort_column == index {
+                                        self.descending = !self.descending;
+                                    } else {
+                                        self.sort_column = index;
+                                        self.descending = index != 0;
+                                    }
+                                }
+                            });
+                        }
+                    })
+                    .body(|body| {
+                        body.rows(23.0, rows.len(), |mut row| {
+                            let item = &rows[row.index()];
+                            row.set_selected(
+                                self.details
+                                    .as_ref()
+                                    .is_some_and(|(_, detail)| detail == &item.tip),
+                            );
+                            for (index, cell) in item.cells.iter().enumerate() {
+                                row.col(|ui| {
+                                    let numeric = item.values[index].is_some();
+                                    ui.with_layout(
+                                        if numeric {
+                                            egui::Layout::right_to_left(egui::Align::Center)
+                                        } else {
+                                            egui::Layout::left_to_right(egui::Align::Center)
+                                        },
+                                        |ui| {
+                                            let response = if index == 0 && item.action.is_some() {
+                                                ui.link(cell)
+                                            } else if numeric || index == 0 {
+                                                ui.add(
+                                                    egui::Label::new(
+                                                        RichText::new(cell).monospace(),
+                                                    )
+                                                    .truncate(),
+                                                )
+                                            } else {
+                                                ui.add(egui::Label::new(cell).truncate())
+                                            };
+                                            if response.clicked() {
+                                                clicked = item.action.clone();
+                                                self.details =
+                                                    Some((item.cells[0].clone(), item.tip.clone()));
+                                                self.show_details = true;
+                                                self.show_notes = false;
+                                            }
+                                            response.on_hover_text(cell);
+                                        },
+                                    );
+                                });
                             }
-                            response.on_hover_text(&item.tip);
+                            if row.response().clicked() {
+                                self.details = Some((item.cells[0].clone(), item.tip.clone()));
+                                self.show_details = true;
+                                self.show_notes = false;
+                            }
                         });
-                    }
-                });
+                    });
             });
         clicked
     }
     pub(super) fn overview(&mut self, ui: &mut egui::Ui, a: &Analysis) {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                metric(ui, "Flash payload", a.totals.flash, FLASH_HELP); metric(ui, "RAM at runtime · static", a.totals.ram, RAM_HELP);
-                metric(ui, "ELF file on disk", a.metadata.file_size, "Includes debug information and ELF metadata. This is not the size programmed into Flash.");
-            }); ui.add_space(8.0);
-            ui.label("Flash/RAM types are inferred unless a memory layout is configured. Capacity is unknown without a target layout.");
-            for region in &self.options.regions {
-                let used: u64 = a.sections.iter().filter(|s| {
-                    let addr = match region.kind { firmware_analysis_core::MemoryKind::Flash => s.load_address, _ => Some(s.address) };
-                    addr.is_some_and(|addr| addr >= region.start && addr.checked_add(s.size).is_some_and(|end| end <= region.start.saturating_add(region.size)))
-                }).map(|s| match region.kind { firmware_analysis_core::MemoryKind::Flash => s.usage.flash, _ => s.usage.ram }).sum();
-                ui.add(egui::ProgressBar::new((used as f64 / region.size.max(1) as f64) as f32).text(format!("{}: {} / {}", region.name, bytes(used), bytes(region.size))));
-            } ui.add_space(15.0);
-            egui::Grid::new("metadata").num_columns(4).spacing([25.0, 8.0]).show(ui, |ui| {
-                ui.weak("Architecture"); ui.label(format!("{} (machine {})", a.metadata.architecture, a.metadata.machine));
-                ui.weak("ELF format"); ui.label(format!("{}-bit / {} endian", a.metadata.bitness, a.metadata.endianness)); ui.end_row();
-                ui.weak("Entry point"); ui.monospace(format!("{:#010x}", a.metadata.entry_point)).on_hover_text("The ELF entry address. Cortex-M startup also depends on the vector table.");
-                ui.weak("Debug information"); ui.label(if a.metadata.has_dwarf { "Present" } else { "Not present" }); ui.end_row();
-            });
-            ui.add_space(20.0); ui.heading("Largest contributors");
-            ui.horizontal(|ui| {
-                if ui.selectable_label(false, "Explore files →").clicked() { self.view = View::Files; }
-                if ui.selectable_label(false, "Explore sections →").clicked() { self.view = View::Sections; }
-            });
-            let mut sections: Vec<_> = a.sections.iter().filter(|s| s.allocated).collect(); sections.sort_by_key(|s| std::cmp::Reverse(s.usage.flash + s.usage.ram));
-            for section in sections.into_iter().take(7) { ui.horizontal(|ui| {
-                ui.add_sized([155.0, 22.0], egui::Label::new(RichText::new(&section.name).monospace()));
-                ui.label(format!("{} Flash · {} RAM", bytes(section.usage.flash), bytes(section.usage.ram))).on_hover_text(&section.evidence);
-            }); }
-            ui.add_space(15.0);
-            ui.label(format!("Not attributed to a file: {} Flash · {} RAM", bytes(a.unattributed.flash), bytes(a.unattributed.ram))).on_hover_text("Includes padding, uncovered bytes and symbols whose owning source or compilation unit is unknown. File totals still reconcile with the overview.");
-            if let Some(c) = &self.comparison { ui.add_space(12.0); ui.label(format!("Compared with older build: Flash {:+} B · RAM {:+} B", c.flash_delta, c.ram_delta)); }
-            ui.add_space(16.0);
-            ui.collapsing(format!("Analysis notes ({})", a.warnings.len()), |ui| { for warning in &a.warnings { ui.label(format!("• {warning}")); } });
-            ui.collapsing("Why can the same bytes count toward Flash and RAM?", |ui| {
-                ui.label("An initialized variable lives in RAM while the program runs. Its starting value is stored in the load image, usually in Flash, and startup code copies it into RAM. Zero-initialized variables need RAM but no stored payload.");
+        ui.horizontal(|ui| {
+            metric(ui, "Flash payload", a.totals.flash, FLASH_HELP);
+            ui.separator();
+            metric(ui, "Static RAM", a.totals.ram, RAM_HELP);
+            ui.separator();
+            ui.weak(format!("ELF {}", bytes(a.metadata.file_size)))
+                .on_hover_text(
+                    "File size includes debug information; it is not the programmed image size.",
+                );
+            if let Some(c) = &self.comparison {
+                ui.separator();
+                ui.label(format!(
+                    "Change: Flash {:+} B / RAM {:+} B",
+                    c.flash_delta, c.ram_delta
+                ));
+            }
+        });
+        for region in &self.options.regions {
+            let used: u64 = a
+                .sections
+                .iter()
+                .filter(|s| {
+                    let addr = match region.kind {
+                        firmware_analysis_core::MemoryKind::Flash => s.load_address,
+                        _ => Some(s.address),
+                    };
+                    addr.is_some_and(|addr| {
+                        addr >= region.start
+                            && addr
+                                .checked_add(s.size)
+                                .is_some_and(|end| end <= region.start.saturating_add(region.size))
+                    })
+                })
+                .map(|s| match region.kind {
+                    firmware_analysis_core::MemoryKind::Flash => s.usage.flash,
+                    _ => s.usage.ram,
+                })
+                .sum();
+            ui.add(
+                egui::ProgressBar::new((used as f64 / region.size.max(1) as f64) as f32)
+                    .desired_height(14.0)
+                    .text(format!(
+                        "{}: {} / {}",
+                        region.name,
+                        bytes(used),
+                        bytes(region.size)
+                    )),
+            );
+        }
+        ui.horizontal(|ui| {
+            ui.weak(if self.options.regions.is_empty() { "Inferred memory types / capacity unknown" } else { "Configured memory regions / unmatched ranges inferred" }).on_hover_text("ELF attributes describe loading and permissions, not physical memory technology. Configure regions using Layout.");
+            ui.separator();
+            ui.weak(format!("Unattributed: {} Flash / {} RAM", bytes(a.unattributed.flash), bytes(a.unattributed.ram))).on_hover_text("Unknown file owners, padding and reservations. File totals still reconcile with the overview.");
+        });
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.strong("ALLOCATED SECTIONS");
+            if ui.small_button("Files").clicked() { self.change_view(View::Files); }
+            if ui.small_button("Symbols").clicked() { self.change_view(View::Symbols); }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label("?").on_hover_text("Initialized variables need RAM while running and initial values in Flash. No-payload storage such as BSS needs RAM only. Select a row to inspect its evidence.");
             });
         });
+        let rows = a
+            .sections
+            .iter()
+            .filter(|s| s.allocated)
+            .map(|s| {
+                Row::new(
+                    vec![
+                        s.name.clone(),
+                        bytes(s.usage.flash),
+                        bytes(s.usage.ram),
+                        bytes(s.load_size),
+                        bytes(s.runtime_size),
+                        classification(s.classification).into(),
+                    ],
+                    &[
+                        (1, s.usage.flash.into()),
+                        (2, s.usage.ram.into()),
+                        (3, s.load_size.into()),
+                        (4, s.runtime_size.into()),
+                    ],
+                    format!(
+                        "{}\nFlash: {} B / RAM: {} B\nRun address: {:#x}\nLoad address: {:?}\n{}",
+                        s.name, s.usage.flash, s.usage.ram, s.address, s.load_address, s.evidence
+                    ),
+                )
+            })
+            .collect();
+        self.table(
+            ui,
+            &[
+                ("Section", "Allocated sections; click a row for details"),
+                ("Flash", FLASH_HELP),
+                ("RAM", RAM_HELP),
+                ("Load", "Bytes stored in the image"),
+                ("Runtime", "Bytes present while executing"),
+                (
+                    "Role",
+                    "Memory role inferred from ELF attributes or configured regions",
+                ),
+            ],
+            rows,
+        );
+    }
+    pub(super) fn directory_tree(&mut self, ui: &mut egui::Ui, a: &Analysis) {
+        let mut selected = None;
+        egui::ScrollArea::both().show(ui, |ui| {
+            tree(ui, &a.tree, "", "project", "", &mut selected);
+        });
+        if let Some(path) = selected {
+            if let Some(file) = a
+                .files
+                .iter()
+                .find(|f| f.path.trim_start_matches('/') == path)
+            {
+                self.change_view(View::Symbols);
+                self.selected_file = Some(file.path.clone());
+            }
+        }
     }
     pub(super) fn files(&mut self, ui: &mut egui::Ui, a: &Analysis) {
-        ui.weak("Click a file to inspect its symbols. Compilation-unit labels are shown when a source location is unavailable.");
-        if self.tree {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                tree(ui, &a.tree, &self.search.to_lowercase(), "project");
-            });
-            return;
-        }
         let rows = a
             .files
             .iter()
@@ -196,22 +306,15 @@ impl Explorer {
             ],
             rows,
         ) {
+            self.change_view(View::Symbols);
             self.selected_file = Some(file);
-            self.search.clear();
-            self.view = View::Symbols;
         }
     }
     pub(super) fn symbols(&mut self, ui: &mut egui::Ui, a: &Analysis) {
-        if let Some(file) = self.selected_file.clone() {
-            ui.horizontal(|ui| {
-                ui.label(format!("File: {file}"));
-                if ui.small_button("Show all files").clicked() {
-                    self.selected_file = None;
-                }
-            });
+        if let Some(file) = &self.selected_file {
+            ui.weak(file);
         }
-        ui.weak("ELF size is the declared size. Flash/RAM columns assign shared bytes only once. Hover a row for metadata.");
-        let rows = a.symbols.iter().filter(|s| self.selected_file.as_ref().is_none_or(|file| {
+        let rows = a.symbols.iter().filter(|s| self.kind_filter == "All" || s.kind == self.kind_filter).filter(|s| self.selected_file.as_ref().is_none_or(|file| {
             let owner = s.source_file.as_ref().or(s.compilation_unit.as_ref()).map(|s| s.replace('\\', "/")).unwrap_or_else(|| "[unattributed]".into()); &owner == file
         })).map(|s| Row::new(vec![s.demangled_name.clone(), bytes(s.size), bytes(s.usage.flash), bytes(s.usage.ram), s.kind.clone(), s.section.clone(), format!("{:#010x}", s.address)], &[(1,s.size.into()),(2,s.usage.flash.into()),(3,s.usage.ram.into()),(6,s.address.into())],
             format!("{}\nELF size: {} B · Flash: {} B · RAM: {} B\nAddress: {:#x} · normalized: {:#x}\nSection: {} · weak: {}\nSource: {}:{}\nCompilation unit: {}\n{}", s.name, s.size, s.usage.flash, s.usage.ram, s.address, s.normalized_address, s.section, s.weak, s.source_file.as_deref().unwrap_or("Unknown"), s.source_line.map(|l| l.to_string()).unwrap_or_else(|| "?".into()), s.compilation_unit.as_deref().unwrap_or("Unknown"), s.attribution))).collect();
@@ -236,7 +339,7 @@ impl Explorer {
         );
     }
     pub(super) fn sections(&mut self, ui: &mut egui::Ui, a: &Analysis) {
-        let rows = a.sections.iter().map(|s| Row::new(vec![s.name.clone(), bytes(s.size), bytes(s.usage.flash), bytes(s.usage.ram), format!("{:#x}",s.address), s.load_address.map(|a| format!("{a:#x}")).unwrap_or_else(|| "Unknown".into()), format!("{:?}",s.classification)], &[(1,s.size.into()),(2,s.usage.flash.into()),(3,s.usage.ram.into()),(4,s.address.into()),(5,s.load_address.unwrap_or(0).into())],
+        let rows = a.sections.iter().map(|s| Row::new(vec![s.name.clone(), bytes(s.size), bytes(s.usage.flash), bytes(s.usage.ram), format!("{:#x}",s.address), s.load_address.map(|a| format!("{a:#x}")).unwrap_or_else(|| "Unknown".into()), classification(s.classification).into()], &[(1,s.size.into()),(2,s.usage.flash.into()),(3,s.usage.ram.into()),(4,s.address.into()),(5,s.load_address.unwrap_or(0).into())],
             format!("{}\nSize: {} B · load: {} B · runtime: {} B\nAlignment: {} · flags: {:#x}\nAllocated: {} · writable: {} · executable: {}\n{}", s.name,s.size,s.load_size,s.runtime_size,s.alignment,s.flags,s.allocated,s.writable,s.executable,s.evidence))).collect();
         self.table(
             ui,
@@ -265,7 +368,7 @@ impl Explorer {
         );
     }
     pub(super) fn memory_map(&mut self, ui: &mut egui::Ui, a: &Analysis) {
-        ui.weak("Load and runtime ranges are separate views of storage; do not add the two address spaces together.");
+        ui.small("Load and runtime are separate address spaces").on_hover_text("Do not add load and runtime ranges together; the same storage can appear in both views.");
         let rows = a
             .memory_map
             .iter()
@@ -300,27 +403,13 @@ impl Explorer {
         );
     }
     pub(super) fn stack_view(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.add_enabled_ui(self.receiver.is_none(), |ui| {
-                if ui.button("Open .su file…").clicked() {
-                    self.pick_stack(false);
-                }
-                if ui.button("Scan build directory…").clicked() {
-                    self.pick_stack(true);
-                }
-            });
-        });
         ui.label("Compiler-reported local frames · Call-chain total: unknown").on_hover_text("Local stack excludes callers, callees and interrupt overhead. Recursive or indirect calls require additional analysis.");
         let Some(report) = &self.stack else {
+            self.visible_rows = 0;
             ui.add_space(15.0);
             ui.label("Build with -fstack-usage, then select a .su file or its build directory. Use reports from the same firmware build.");
             return;
         };
-        ui.collapsing("Stack analysis notes", |ui| {
-            for w in &report.warnings {
-                ui.label(w);
-            }
-        });
         let rows = report
             .entries
             .iter()
@@ -347,73 +436,145 @@ impl Explorer {
         self.table(ui, &[("Function","Compiler function label"),("Local frame","Compiler reported bytes, not a call-chain estimate"),("Qualifier","static: fixed frame; dynamic,bounded: compiler bound; dynamic: total may be unbounded"),("Source","Location reported by the compiler"),("ELF matches","Exact name matches only. Zero is unresolved; more than one is ambiguous.")], rows);
     }
     pub(super) fn compare_view(&mut self, ui: &mut egui::Ui) {
-        if ui
-            .add_enabled(
-                self.receiver.is_none(),
-                egui::Button::new("Select older build…"),
-            )
-            .clicked()
-        {
-            self.pick_elf(true);
-        }
         let Some(c) = &self.comparison else {
-            ui.add_space(20.0);
-            ui.label("Open your current firmware, then select an older build to see what grew or shrank.");
+            self.visible_rows = 0;
+            ui.weak(
+                "Use Compare in the header to select an older build. Current minus older is shown.",
+            );
             return;
         };
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.label(format!("Older: {}\nCurrent: {}", c.old_path, c.new_path));
-            ui.add_space(12.0);
-            ui.heading(format!(
-                "Flash {:+} B    ·    RAM {:+} B",
-                c.flash_delta, c.ram_delta
-            ));
-            ui.label(format!(
-                "Flash: {} → {}    RAM: {} → {}",
-                bytes(c.old.flash),
-                bytes(c.new.flash),
-                bytes(c.old.ram),
-                bytes(c.new.ram)
-            ));
-            ui.weak("Positive values mean the current build uses more memory.");
-            for (title, changes) in [("Changed files", &c.files), ("Changed symbols", &c.symbols)] {
-                ui.add_space(15.0);
-                ui.heading(title);
-                if changes.is_empty() {
-                    ui.label("No memory contribution changes.");
-                }
-                egui::Grid::new(title).striped(true).show(ui, |ui| {
-                    ui.strong("Flash delta");
-                    ui.strong("RAM delta");
-                    ui.strong("Identity");
-                    ui.end_row();
-                    for change in changes {
-                        ui.monospace(format!("{:+} B", change.flash_delta));
-                        ui.monospace(format!("{:+} B", change.ram_delta));
-                        ui.label(&change.identity).on_hover_text(&change.status);
-                        ui.end_row();
-                    }
-                });
-            }
-            ui.collapsing("Comparison notes", |ui| {
-                for warning in &c.warnings {
-                    ui.label(warning);
-                }
-            });
+        ui.horizontal(|ui| {
+            ui.label(format!("Flash {:+} B", c.flash_delta))
+                .on_hover_text(format!("{} to {}", bytes(c.old.flash), bytes(c.new.flash)));
+            ui.separator();
+            ui.label(format!("RAM {:+} B", c.ram_delta))
+                .on_hover_text(format!("{} to {}", bytes(c.old.ram), bytes(c.new.ram)));
+            ui.separator();
+            ui.weak("Current minus older")
+                .on_hover_text(format!("Older: {}\nCurrent: {}", c.old_path, c.new_path));
         });
+        let changes = if self.comparison_symbols {
+            &c.symbols
+        } else {
+            &c.files
+        };
+        let rows = changes
+            .iter()
+            .map(|c| {
+                Row::new(
+                    vec![
+                        c.identity.clone(),
+                        format!("{:+} B", c.flash_delta),
+                        format!("{:+} B", c.ram_delta),
+                        c.status.clone(),
+                    ],
+                    &[(1, c.flash_delta), (2, c.ram_delta)],
+                    format!(
+                        "{}\n{}\nFlash: {} to {}\nRAM: {} to {}",
+                        c.identity,
+                        c.status,
+                        bytes(c.old.flash),
+                        bytes(c.new.flash),
+                        bytes(c.old.ram),
+                        bytes(c.new.ram)
+                    ),
+                )
+            })
+            .collect();
+        self.table(
+            ui,
+            &[
+                (
+                    "Identity",
+                    "File or symbol identity; select to inspect the change",
+                ),
+                ("Flash delta", "Positive values mean growth"),
+                ("RAM delta", "Positive values mean growth"),
+                ("Status", "Added, removed or changed"),
+            ],
+            rows,
+        );
     }
 }
-fn metric(ui: &mut egui::Ui, title: &str, value: u64, help: &str) {
-    egui::Frame::group(ui.style())
-        .inner_margin(18.0)
-        .show(ui, |ui| {
-            ui.set_min_width(210.0);
-            ui.label(title).on_hover_text(help);
-            ui.label(RichText::new(bytes(value)).size(29.0).color(ACCENT))
-                .on_hover_text(format!("{value} bytes\n{help}"));
-        });
+fn classification(value: firmware_analysis_core::Classification) -> &'static str {
+    use firmware_analysis_core::Classification::*;
+    match value {
+        ReadOnly => "Read-only",
+        InitializedRam => "Initialized RAM",
+        NoLoadRam => "RAM / no payload",
+        NonAllocated => "Not allocated",
+    }
 }
-fn tree(ui: &mut egui::Ui, node: &FileTree, filter: &str, id: &str) {
+/// Draw the direction indicator geometrically, without depending on font glyphs.
+fn sort_header(ui: &mut egui::Ui, title: &str, descending: Option<bool>) -> egui::Response {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let text = ui
+        .painter()
+        .layout_no_wrap(title.into(), font, ui.visuals().text_color());
+    let padding = ui.spacing().button_padding;
+    let icon_width = if descending.is_some() { 16.0 } else { 0.0 };
+    let size = egui::vec2(
+        (text.size().x + padding.x * 2.0 + icon_width).max(ui.available_width()),
+        (text.size().y + padding.y * 2.0).max(ui.spacing().interact_size.y),
+    );
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let label = match descending {
+        Some(true) => format!("{title}, sorted descending"),
+        Some(false) => format!("{title}, sorted ascending"),
+        None => title.into(),
+    };
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &label)
+    });
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact(&response);
+        if response.hovered() || response.has_focus() {
+            ui.painter().rect_filled(rect, 0.0, visuals.weak_bg_fill);
+        }
+        ui.painter().line_segment(
+            [rect.left_bottom(), rect.right_bottom()],
+            ui.visuals().widgets.noninteractive.bg_stroke,
+        );
+        let text_pos = egui::pos2(
+            rect.left() + padding.x,
+            rect.center().y - text.size().y * 0.5,
+        );
+        ui.painter().galley(text_pos, text, visuals.text_color());
+        if let Some(descending) = descending {
+            let center = egui::pos2(rect.right() - padding.x - 5.0, rect.center().y);
+            let direction = if descending { 1.0 } else { -1.0 };
+            let points = vec![
+                center + egui::vec2(-4.0, -2.5 * direction),
+                center + egui::vec2(4.0, -2.5 * direction),
+                center + egui::vec2(0.0, 2.5 * direction),
+            ];
+            ui.painter().add(egui::Shape::convex_polygon(
+                points,
+                visuals.text_color(),
+                egui::Stroke::NONE,
+            ));
+        }
+    }
+    response
+}
+fn metric(ui: &mut egui::Ui, title: &str, value: u64, help: &str) {
+    ui.label(title).on_hover_text(help);
+    ui.label(
+        RichText::new(bytes(value))
+            .strong()
+            .monospace()
+            .color(ACCENT),
+    )
+    .on_hover_text(format!("{value} bytes\n{help}"));
+}
+fn tree(
+    ui: &mut egui::Ui,
+    node: &FileTree,
+    filter: &str,
+    id: &str,
+    parent: &str,
+    selected: &mut Option<String>,
+) {
     fn matches(node: &FileTree, filter: &str) -> bool {
         node.name.to_lowercase().contains(filter)
             || node.children.iter().any(|c| matches(c, filter))
@@ -421,14 +582,31 @@ fn tree(ui: &mut egui::Ui, node: &FileTree, filter: &str, id: &str) {
     if !matches(node, filter) {
         return;
     }
+    let path = if id == "project" {
+        String::new()
+    } else if parent.is_empty() {
+        node.name.clone()
+    } else {
+        format!("{parent}/{}", node.name)
+    };
     let label = format!(
-        "{}    {} Flash · {} RAM",
+        "{}  {} / {}",
         node.name,
         bytes(node.usage.flash),
         bytes(node.usage.ram)
     );
+    let help = format!(
+        "{}\nFlash: {} B\nRAM: {} B",
+        node.name, node.usage.flash, node.usage.ram
+    );
     if node.children.is_empty() {
-        ui.label(label);
+        if ui
+            .selectable_label(false, label)
+            .on_hover_text(help)
+            .clicked()
+        {
+            *selected = Some(path);
+        }
     } else {
         egui::CollapsingHeader::new(label)
             .id_salt(id)
@@ -440,8 +618,17 @@ fn tree(ui: &mut egui::Ui, node: &FileTree, filter: &str, id: &str) {
                     filter
                 };
                 for (index, child) in node.children.iter().enumerate() {
-                    tree(ui, child, next_filter, &format!("{id}/{index}"));
+                    tree(
+                        ui,
+                        child,
+                        next_filter,
+                        &format!("{id}/{index}"),
+                        &path,
+                        selected,
+                    );
                 }
-            });
+            })
+            .header_response
+            .on_hover_text(help);
     }
 }

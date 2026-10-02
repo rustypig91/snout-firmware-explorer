@@ -11,7 +11,7 @@ cargo build --workspace --locked
 cargo run -p firmware-gui -- fixtures/cortex-m.elf
 ```
 
-Open your own `.elf`, `.axf`, or ELF-format `.out` file using the toolbar or drag-and-drop. The GUI provides Overview, Files, Symbols, Sections, Memory map, Stack and Compare views. Tables support search and sorting; click a file to inspect its symbols. Hover headings and rows for explanations, exact bytes and metadata. File-dialog choices are local; the application does not upload firmware.
+Open your own `.elf`, `.axf`, or ELF-format `.out` file using the toolbar, Ctrl+O or drag-and-drop. Compact tabs switch between Overview, Files, Symbols, Sections, Memory map, Stack and Compare. Tables support search and sorting, with right-aligned numeric columns. Click a row for a resizable bottom inspector, or a file name to inspect its symbols. Enable Directories for an optional tree sidebar. The footer shows memory totals, row counts and expandable analysis notes; Escape collapses the inspector. Hover headings for short explanations. File-dialog choices are local; the application does not upload firmware.
 
 ```sh
 cargo run -p firmware-cli -- analyze fixtures/cortex-m.elf
@@ -98,7 +98,7 @@ This is the first implementation milestone, not a claim of universal firmware su
 
 1. **Attribution:** add DWARF variable DIE attribution and GNU linker MAP input for reliable object/archive ownership. Currently global variables without a local compilation-unit label remain unattributed. Compressed and split/external DWARF are not supported.
 2. **Memory layouts:** add saved target profiles, explicit unknown memory roles, overlay policies and segment-only fallback. Relocatable objects, overlapping allocated/load ranges, TLS and sectionless ELFs currently return clear unsupported errors. HEX/BIN/MAP-only input is not parsed. Dynamic-symbol-only attribution is not yet implemented.
-3. **Comparisons:** normalize source roots across build machines, improve duplicate/renamed symbol matching, add GUI filtering for large comparisons and introduce simple CI budgets. Matching currently uses file label, section and mangled symbol name, with duplicate identities aggregated. Differences in attribution or debug availability can affect per-file/symbol deltas.
+3. **Comparisons:** normalize source roots across build machines, improve duplicate/renamed symbol matching and introduce simple CI budgets. Matching currently uses file label, section and mangled symbol name, with duplicate identities aggregated. Differences in attribution or debug availability can affect per-file/symbol deltas.
 4. **Stack:** import evidenced call graphs and represent recursion, indirect calls, assembly, interrupts and missing data before estimating call chains. The model reserves these uncertainty categories. CFA/disassembly, RTOS task stacks and runtime high-water marks are later inputs.
 5. **Desktop delivery:** validate on representative user firmware and Linux desktops, refine large-report performance, add installers, accessibility/keyboard review and preferences. Source tables currently rebuild their display rows each frame, although visible rows are virtualized. No session persistence or export dialog is included yet; use CLI JSON for export.
 

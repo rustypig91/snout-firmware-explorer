@@ -1,4 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+mod shell;
 #[cfg(test)]
 mod tests;
 mod views;
@@ -67,6 +68,12 @@ struct Explorer {
     descending: bool,
     error: Option<String>,
     tree: bool,
+    details: Option<(String, String)>,
+    show_details: bool,
+    show_notes: bool,
+    visible_rows: usize,
+    kind_filter: String,
+    comparison_symbols: bool,
 }
 impl Default for Explorer {
     fn default() -> Self {
@@ -83,6 +90,12 @@ impl Default for Explorer {
             descending: true,
             error: None,
             tree: false,
+            details: None,
+            show_details: false,
+            show_notes: false,
+            visible_rows: 0,
+            kind_filter: "All".into(),
+            comparison_symbols: false,
         }
     }
 }
@@ -152,7 +165,22 @@ impl Explorer {
                 .add_filter("Stack usage", &["su"])
                 .pick_file()
         };
-        if let (Some(path), Some(analysis)) = (path, self.analysis.clone()) {
+        if let Some(path) = path {
+            self.scan_stack(path);
+        }
+    }
+    fn scan_elf_folder(&mut self) {
+        if let Some(analysis) = &self.analysis {
+            let path = std::path::Path::new(&analysis.path);
+            let folder = path
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| std::path::Path::new("."));
+            self.scan_stack(folder.to_owned());
+        }
+    }
+    fn scan_stack(&mut self, path: PathBuf) {
+        if let Some(analysis) = self.analysis.clone() {
             self.job(move || {
                 analyze_stack(&analysis, path)
                     .map(Loaded::Stack)
@@ -171,16 +199,19 @@ impl Explorer {
                         self.stack = None;
                         self.selected_file = None;
                         self.search.clear();
+                        self.details = None;
+                        self.visible_rows = 0;
                     }
                     Ok(Loaded::Baseline(c)) => {
                         self.comparison = Some(c);
-                        self.view = View::Compare;
+                        self.change_view(View::Compare);
                     }
                     Ok(Loaded::Stack(s)) => {
                         self.stack = Some(s);
-                        self.view = View::Stack;
+                        self.change_view(View::Stack);
                     }
                     Ok(Loaded::Config(options, analysis)) => {
+                        self.details = None;
                         self.options = options;
                         self.analysis = analysis.map(Arc::new);
                         self.comparison = None;
@@ -203,128 +234,7 @@ impl eframe::App for Explorer {
         if self.receiver.is_some() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
-        if let Some(path) = ctx.input(|i| i.raw.dropped_files.iter().find_map(|f| f.path.clone())) {
-            if self.receiver.is_none() {
-                self.open(path);
-            }
-        }
-        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new("RUSTY'S SNOUT")
-                        .strong()
-                        .color(views::ACCENT),
-                );
-                ui.label("/ Firmware Explorer");
-                ui.separator();
-                ui.add_enabled_ui(self.receiver.is_none(), |ui| {
-                    if ui
-                        .button("Open firmware…")
-                        .on_hover_text(
-                            "Open a linked ELF, AXF or OUT file, or drop it onto this window.",
-                        )
-                        .clicked()
-                    {
-                        self.pick_elf(false);
-                    }
-                    if ui
-                        .add_enabled(self.analysis.is_some(), egui::Button::new("Compare build…"))
-                        .on_hover_text("Select an older build. Deltas show current minus older.")
-                        .clicked()
-                    {
-                        self.pick_elf(true);
-                    }
-                    ui.menu_button("Memory layout", |ui| {
-                        ui.label(format!("{} configured regions", self.options.regions.len()));
-                        if ui.button("Load region configuration…").clicked() {
-                            if let Some(path) = rfd::FileDialog::new()
-                                .add_filter("JSON", &["json"])
-                                .pick_file()
-                            {
-                                self.configure(Some(path));
-                            }
-                            ui.close_menu();
-                        }
-                        if ui.button("Reset to ELF inference").clicked() {
-                            self.configure(None);
-                            ui.close_menu();
-                        }
-                    });
-                });
-                if self.receiver.is_some() {
-                    ui.spinner();
-                    ui.label("Analyzing…");
-                }
-            });
-            ui.add_space(8.0);
-        });
-        egui::SidePanel::left("navigation")
-            .resizable(false)
-            .exact_width(165.0)
-            .show(ctx, |ui| {
-                ui.add_space(18.0);
-                ui.weak("EXPLORE");
-                ui.add_space(10.0);
-                for view in View::ALL {
-                    if ui
-                        .add_sized(
-                            [145.0, 36.0],
-                            egui::Button::new(view.label()).selected(self.view == view),
-                        )
-                        .clicked()
-                    {
-                        self.view = view;
-                        self.search.clear();
-                        self.sort_column = 1;
-                        self.descending = true;
-                    }
-                }
-                ui.add_space(25.0);
-                ui.separator();
-                ui.small("ARM Cortex-M first");
-                ui.small("All sizes use bytes / KiB")
-                    .on_hover_text("1 KiB = 1,024 bytes. Hover values for exact byte counts.");
-            });
-        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
-            if let Some(a) = &self.analysis {
-                ui.horizontal(|ui| {
-                    ui.small(&a.path);
-                    ui.separator();
-                    ui.small(format!(
-                        "{} · {}-bit · {} endian",
-                        a.metadata.architecture, a.metadata.bitness, a.metadata.endianness
-                    ));
-                });
-            } else {
-                ui.small("Ready · Open firmware to begin");
-            }
-        });
-        egui::CentralPanel::default().show(ctx, |ui| {
-            if let Some(error) = self.error.clone() { egui::Frame::group(ui.style()).show(ui, |ui| { ui.colored_label(egui::Color32::LIGHT_RED, error); if ui.small_button("Dismiss").clicked() { self.error = None; } }); }
-            let Some(analysis) = self.analysis.clone() else {
-                ui.add_space(70.0); ui.heading("Understand your firmware's footprint."); ui.add_space(12.0);
-                ui.label("See what occupies Flash and RAM, find large contributors, and compare builds."); ui.add_space(20.0);
-                if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Open an ELF firmware file…")).clicked() { self.pick_elf(false); }
-                ui.add_space(15.0); ui.weak("You can also drop an ELF file here."); ui.add_space(30.0);
-                ui.collapsing("Where do I find my ELF file?", |ui| {
-                    ui.label("Look in your build output for a .elf, .axf or .out file. It contains the linked code, data and memory layout.");
-                    ui.label("A .bin or .hex file lacks much of this information. Debug information (-g) improves file attribution but is not needed for section sizes.");
-                }); return;
-            };
-            ui.add_space(8.0); ui.heading(self.view.label()); ui.add_space(8.0);
-            if !matches!(self.view, View::Overview | View::Compare) {
-                ui.horizontal(|ui| { ui.label("Search"); ui.add(egui::TextEdit::singleline(&mut self.search).hint_text("Filter names, files or sections…").desired_width(310.0));
-                    if ui.small_button("Clear").clicked() { self.search.clear(); self.selected_file = None; }
-                    if self.view == View::Files { ui.checkbox(&mut self.tree, "Directory tree"); }
-                }); ui.add_space(8.0);
-            }
-            match self.view {
-                View::Overview => self.overview(ui, &analysis), View::Files => self.files(ui, &analysis),
-                View::Symbols => self.symbols(ui, &analysis), View::Sections => self.sections(ui, &analysis),
-                View::MemoryMap => self.memory_map(ui, &analysis), View::Stack => self.stack_view(ui), View::Compare => self.compare_view(ui),
-            }
-        });
+        self.show(ctx);
     }
 }
 fn main() -> eframe::Result {
@@ -338,11 +248,7 @@ fn main() -> eframe::Result {
         "Rusty's Snout - Firmware Explorer",
         options,
         Box::new(|cc| {
-            let mut style = (*cc.egui_ctx.style()).clone();
-            style.visuals = egui::Visuals::dark();
-            style.visuals.selection.bg_fill = egui::Color32::from_rgb(36, 86, 92);
-            style.spacing.item_spacing = egui::vec2(10.0, 8.0);
-            cc.egui_ctx.set_style(style);
+            shell::configure_style(&cc.egui_ctx);
             let mut app = Explorer::default();
             if let Some(path) = std::env::args_os().nth(1) {
                 app.open(path.into());
