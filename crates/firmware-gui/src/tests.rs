@@ -678,3 +678,109 @@ fn overview_mouse_back_returns_from_section_to_root() {
     let _ = ctx.run(back, |ctx| app.show(ctx));
     assert_eq!(app.overview_section, None);
 }
+
+#[test]
+fn refresh_restores_selection_and_layout_and_preserves_report_on_failure() {
+    let mut app = Explorer::default();
+    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures"));
+    finish_job(&mut app);
+    let path = app.build.as_ref().unwrap().root.join("cortex-m.elf");
+    app.open(path.clone());
+    finish_job(&mut app);
+    app.configure(Some(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/cortex-m-memory.json"),
+    ));
+    finish_job(&mut app);
+    app.view = View::MemoryMap;
+    let options = app.options.clone();
+    let source = app.layout_source.clone();
+    app.refresh();
+    finish_job(&mut app);
+    assert!(app.error.is_none());
+    assert_eq!(app.options, options);
+    assert_eq!(app.layout_source, source);
+    assert!(app.view == View::MemoryMap);
+    assert_eq!(
+        std::path::Path::new(&app.analysis.as_ref().unwrap().path),
+        path
+    );
+    Arc::make_mut(app.analysis.as_mut().unwrap()).path =
+        path.with_extension("missing").display().to_string();
+    let previous = app.analysis.clone().unwrap();
+    app.refresh();
+    finish_job(&mut app);
+    assert!(app.error.is_some());
+    assert!(Arc::ptr_eq(app.analysis.as_ref().unwrap(), &previous));
+    assert_eq!(app.options, options);
+}
+
+#[test]
+fn preferences_restore_selected_firmware_layout_and_view() {
+    let mut original = Explorer::default();
+    original.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures"));
+    finish_job(&mut original);
+    original.open(original.build.as_ref().unwrap().root.join("cortex-m.elf"));
+    finish_job(&mut original);
+    original.configure(Some(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/cortex-m-memory.json"),
+    ));
+    finish_job(&mut original);
+    original.view = View::Symbols;
+    original.tree = true;
+    original.overview_metric = overview::Metric::Ram;
+    let value = original.preference_value();
+    let mut restored = Explorer::default();
+    restored.apply_preferences(&value);
+    finish_job(&mut restored);
+    finish_job(&mut restored);
+    assert!(restored.error.is_none());
+    assert!(restored.view == View::Symbols);
+    assert!(restored.tree);
+    assert!(restored.overview_metric == overview::Metric::Ram);
+    assert_eq!(restored.options, original.options);
+    assert_eq!(restored.layout_source, original.layout_source);
+    assert_eq!(
+        restored.analysis.as_ref().unwrap().path,
+        original.analysis.as_ref().unwrap().path
+    );
+}
+
+#[test]
+fn notes_and_cached_rankings_follow_the_report_and_view() {
+    let mut app = Explorer::default();
+    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures"));
+    finish_job(&mut app);
+    app.open(app.build.as_ref().unwrap().root.join("cortex-m.elf"));
+    finish_job(&mut app);
+    let a = app.analysis.clone().unwrap();
+    let base = a.warnings.len();
+    let stack = app.stack.as_ref().unwrap().warnings.len();
+    assert_eq!(app.visible_notes().len(), base + stack);
+    app.view = View::Files;
+    assert_eq!(app.visible_notes().len(), base);
+    app.view = View::Stack;
+    assert_eq!(app.visible_notes().len(), base + stack);
+    app.ensure_region_cache(&a);
+    for (slot, metric) in [overview::Metric::Flash, overview::Metric::Ram]
+        .into_iter()
+        .enumerate()
+    {
+        assert!(app.top_symbols[slot]
+            .windows(2)
+            .all(|w| metric.value(a.symbols[w[0]].usage) >= metric.value(a.symbols[w[1]].usage)));
+    }
+    app.configure(Some(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/cortex-m-memory.json"),
+    ));
+    finish_job(&mut app);
+    let a = app.analysis.clone().unwrap();
+    app.ensure_region_cache(&a);
+    assert_eq!(app.region_cache.len(), a.options.regions.len());
+    assert!(!app.region_cache.is_empty());
+    for (region, usage) in a.options.regions.iter().zip(&app.region_cache) {
+        assert_eq!(
+            usage.used,
+            firmware_analysis_core::regions::region_usage(&a, region).used
+        );
+    }
+}

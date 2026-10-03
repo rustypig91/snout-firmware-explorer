@@ -74,6 +74,9 @@ impl Explorer {
         {
             self.overview_back();
         }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F5)) {
+            self.refresh();
+        }
         let title = self
             .build
             .as_ref()
@@ -111,6 +114,16 @@ impl Explorer {
                     }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add_enabled(
+                            self.receiver.is_none() && self.build.is_some(),
+                            egui::Button::new("Refresh"),
+                        )
+                        .on_hover_text("Rescan and reload selected firmware (F5)")
+                        .clicked()
+                    {
+                        self.refresh();
+                    }
                     ui.add_enabled_ui(self.receiver.is_none(), |ui| {
                         ui.menu_button("Menu", |ui| {
                             if ui.button("Open build folder...").clicked() {
@@ -125,9 +138,7 @@ impl Explorer {
                                 .clicked()
                             {
                                 ui.close_menu();
-                                if let Some(build) = &self.build {
-                                    self.scan_build(build.root.clone());
-                                }
+                                self.refresh();
                             }
                             if ui
                                 .add_enabled(
@@ -194,16 +205,15 @@ impl Explorer {
                     ui.small("Ready / Select or drop a build folder to begin");
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if let Some(a) = &self.analysis {
-                        if ui
+                    if self.analysis.is_some()
+                        && ui
                             .selectable_label(
                                 self.show_notes,
-                                format!("{} notes", a.warnings.len()),
+                                format!("{} notes", self.visible_notes().len()),
                             )
                             .clicked()
-                        {
-                            self.show_notes = !self.show_notes;
-                        }
+                    {
+                        self.show_notes = !self.show_notes;
                     }
                     if self.receiver.is_some() {
                         ui.spinner();
@@ -229,24 +239,8 @@ impl Explorer {
                     });
                     ui.separator();
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        if let Some(a) = &self.analysis {
-                            for note in &a.warnings {
-                                ui.label(note);
-                            }
-                        }
-                        if self.view == View::Stack {
-                            if let Some(s) = &self.stack {
-                                for note in &s.warnings {
-                                    ui.label(note);
-                                }
-                            }
-                        }
-                        if self.view == View::Compare {
-                            if let Some(c) = &self.comparison {
-                                for note in &c.warnings {
-                                    ui.label(note);
-                                }
-                            }
+                        for note in self.visible_notes() {
+                            ui.label(note);
                         }
                     });
                 });

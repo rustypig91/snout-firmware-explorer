@@ -51,7 +51,7 @@ impl Explorer {
             Ok(Loaded::Text(artifact.path, text))
         });
     }
-    fn apply_map(&mut self, path: PathBuf) {
+    pub(super) fn apply_map(&mut self, path: PathBuf) {
         let current_path = self.analysis.as_ref().map(|a| a.path.clone());
         self.job(move || {
             let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
@@ -61,7 +61,7 @@ impl Explorer {
                 a.warnings.push(format!("Memory regions selected from {}. Flash/RAM roles are inferred from names and attributes; verify this map belongs to the selected firmware.", path.display()));
                 Ok::<_, firmware_analysis_core::Error>(a)
             }).transpose().map_err(|e| e.to_string())?;
-            Ok(Loaded::Config(options, analysis))
+            Ok(Loaded::Config(options, analysis, path.display().to_string()))
         });
     }
     pub(super) fn build_browser(&mut self, ctx: &egui::Context) {

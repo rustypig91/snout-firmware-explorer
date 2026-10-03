@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+mod overview;
 mod pie;
+mod preferences;
 mod shell;
 #[cfg(test)]
 mod tests;
@@ -50,13 +52,20 @@ impl View {
         }
     }
 }
+type Refreshed = (
+    firmware_analysis_core::build::BuildFolder,
+    Analysis,
+    Option<StackReport>,
+    Option<AnalysisOptions>,
+);
 enum Loaded {
+    Refresh(Box<Refreshed>),
     Firmware(Analysis, Option<StackReport>, Option<AnalysisOptions>),
     Build(firmware_analysis_core::build::BuildFolder),
     Text(PathBuf, String),
     Baseline(Comparison),
     Stack(StackReport),
-    Config(AnalysisOptions, Option<Analysis>),
+    Config(AnalysisOptions, Option<Analysis>, String),
 }
 type JobResult = Result<Loaded, String>;
 struct Explorer {
@@ -84,6 +93,14 @@ struct Explorer {
     visible_rows: usize,
     kind_filter: String,
     comparison_symbols: bool,
+    overview_metric: overview::Metric,
+    contributor_ram: bool,
+    region_cache: Vec<firmware_analysis_core::regions::RegionUsage>,
+    region_cache_key: usize,
+    top_files: [Vec<usize>; 2],
+    top_symbols: [Vec<usize>; 2],
+    layout_source: String,
+    pending_restore: Option<(PathBuf, Option<AnalysisOptions>, String)>,
 }
 impl Default for Explorer {
     fn default() -> Self {
@@ -112,6 +129,14 @@ impl Default for Explorer {
             visible_rows: 0,
             kind_filter: "All".into(),
             comparison_symbols: false,
+            overview_metric: overview::Metric::Flash,
+            contributor_ram: false,
+            region_cache: Vec::new(),
+            region_cache_key: 0,
+            top_files: Default::default(),
+            top_symbols: Default::default(),
+            layout_source: String::new(),
+            pending_restore: None,
         }
     }
 }
@@ -167,6 +192,10 @@ impl Explorer {
     fn configure(&mut self, path: Option<PathBuf>) {
         let current_path = self.analysis.as_ref().map(|a| a.path.clone());
         self.job(move || {
+            let source = path
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "ELF inference".into());
             let options = match path {
                 Some(path) => {
                     serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
@@ -179,7 +208,7 @@ impl Explorer {
                 .map(|p| analyze_path(p, &options))
                 .transpose()
                 .map_err(|e| e.to_string())?;
-            Ok(Loaded::Config(options, analysis))
+            Ok(Loaded::Config(options, analysis, source))
         });
     }
     fn pick_baseline(&mut self) {
@@ -223,7 +252,17 @@ impl Explorer {
         match self.receiver.as_ref().map(|r| r.try_recv()) {
             Some(Ok(result)) => {
                 self.receiver = None;
+                self.region_cache_key = 0;
+                let result = result.map(|loaded| match loaded {
+                    Loaded::Refresh(result) => {
+                        let (build, a, stack, layout) = *result;
+                        self.build = Some(Arc::new(build));
+                        Loaded::Firmware(a, stack, layout)
+                    }
+                    other => other,
+                });
                 match result {
+                    Ok(Loaded::Refresh(_)) => unreachable!(),
                     Ok(Loaded::Build(build)) => {
                         self.build = Some(Arc::new(build));
                         self.analysis = None;
@@ -240,11 +279,26 @@ impl Explorer {
                         self.artifact_search.clear();
                         self.search.clear();
                         self.visible_rows = 0;
+                        if let Some((path, layout, source)) = self.pending_restore.take() {
+                            self.layout_source = source;
+                            self.open_with_layout(path, layout);
+                        }
                     }
                     Ok(Loaded::Text(path, text)) => {
                         self.preview = Some((path, text));
                     }
                     Ok(Loaded::Firmware(a, stack, layout)) => {
+                        if layout.is_none() {
+                            self.layout_source = if a.options.regions.is_empty() {
+                                "ELF inference".into()
+                            } else {
+                                self.build
+                                    .as_ref()
+                                    .and_then(|b| b.matching_map(std::path::Path::new(&a.path)))
+                                    .map(|p| p.display().to_string())
+                                    .unwrap_or_else(|| "Matching map".into())
+                            };
+                        }
                         self.layout_override = layout;
                         self.options = a.options.clone();
                         self.preview = None;
@@ -267,7 +321,8 @@ impl Explorer {
                         self.stack = Some(s);
                         self.change_view(View::Stack);
                     }
-                    Ok(Loaded::Config(options, analysis)) => {
+                    Ok(Loaded::Config(options, analysis, source)) => {
+                        self.layout_source = source;
                         self.details = None;
                         self.selected_region = None;
                         self.overview_section = None;
@@ -290,6 +345,11 @@ impl Explorer {
     }
 }
 impl eframe::App for Explorer {
+    fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
+        if let Err(error) = self.save_preferences() {
+            eprintln!("Could not save workspace preferences: {error}");
+        }
+    }
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         self.poll();
         if self.receiver.is_some() {
@@ -313,6 +373,8 @@ fn main() -> eframe::Result {
             let mut app = Explorer::default();
             if let Some(path) = std::env::args_os().nth(1) {
                 app.scan_build(path.into());
+            } else {
+                app.restore_preferences();
             }
             Ok(Box::new(app))
         }),

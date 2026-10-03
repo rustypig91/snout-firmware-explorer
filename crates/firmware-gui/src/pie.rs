@@ -1,7 +1,6 @@
 use super::Explorer;
 use eframe::egui;
 use firmware_analysis_core::{format_bytes as bytes, Analysis};
-use std::f32::consts::{FRAC_PI_2, TAU};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum UnitKey {
@@ -42,7 +41,16 @@ struct Slice {
     tip: String,
 }
 
+#[cfg(test)]
 fn slices(a: &Analysis, section: Option<usize>, unit: Option<&UnitKey>) -> Vec<Slice> {
+    metric_slices(a, section, unit, super::overview::Metric::All)
+}
+fn metric_slices(
+    a: &Analysis,
+    section: Option<usize>,
+    unit: Option<&UnitKey>,
+    metric: super::overview::Metric,
+) -> Vec<Slice> {
     let mut slices = Vec::new();
     if let Some(section) = section.and_then(|index| a.sections.iter().find(|s| s.index == index)) {
         let symbols: Vec<_> = a
@@ -50,14 +58,14 @@ fn slices(a: &Analysis, section: Option<usize>, unit: Option<&UnitKey>) -> Vec<S
             .iter()
             .filter(|s| s.section_index == section.index)
             .collect();
-        let remaining = section
-            .size
-            .saturating_sub(symbols.iter().map(|s| s.usage.flash.max(s.usage.ram)).sum());
+        let remaining = metric
+            .section_size(section)
+            .saturating_sub(symbols.iter().map(|s| metric.value(s.usage)).sum());
         if let Some(unit) = unit {
             for s in symbols.iter().filter(|s| unit_key(s) == *unit) {
                 slices.push(Slice {
                     name: s.demangled_name.clone(),
-                    size: s.usage.flash.max(s.usage.ram),
+                    size: metric.value(s.usage),
                     target: None,
                     tip: format!(
                         "{} ({})\nAddress: {:#x}\nELF size: {}\n{}",
@@ -81,7 +89,7 @@ fn slices(a: &Analysis, section: Option<usize>, unit: Option<&UnitKey>) -> Vec<S
         } else {
             let mut units = std::collections::BTreeMap::<UnitKey, u64>::new();
             for s in symbols {
-                *units.entry(unit_key(s)).or_default() += s.usage.flash.max(s.usage.ram);
+                *units.entry(unit_key(s)).or_default() += metric.value(s.usage);
             }
             if remaining > 0 {
                 *units.entry(UnitKey::Other).or_default() += remaining;
@@ -102,10 +110,13 @@ fn slices(a: &Analysis, section: Option<usize>, unit: Option<&UnitKey>) -> Vec<S
         slices = a
             .sections
             .iter()
-            .filter(|s| s.allocated)
+            .filter(|s| {
+                s.allocated
+                    && (metric == super::overview::Metric::All || metric.section_size(s) > 0)
+            })
             .map(|s| Slice {
                 name: s.name.clone(),
-                size: s.size,
+                size: metric.section_size(s),
                 target: Some(Target::Section(s.index)),
                 tip: format!(
                     "Flash: {} / RAM: {}\n{}",
@@ -120,168 +131,86 @@ fn slices(a: &Analysis, section: Option<usize>, unit: Option<&UnitKey>) -> Vec<S
     slices
 }
 
-fn color(index: usize) -> egui::Color32 {
-    egui::ecolor::Hsva::new((index as f32 * 0.618_034) % 1.0, 0.78, 0.70, 1.0).into()
+pub(super) fn color(name: &str) -> egui::Color32 {
+    let hash = name.bytes().fold(2166136261u32, |h, b| {
+        (h ^ u32::from(b)).wrapping_mul(16777619)
+    });
+    egui::ecolor::Hsva::new((hash % 360) as f32 / 360.0, 0.55, 0.85, 1.0).into()
 }
-
 impl Explorer {
     pub(super) fn overview_back(&mut self) {
         if self.overview_unit.take().is_none() {
             self.overview_section = None;
         }
     }
-
     pub(super) fn overview_pie(&mut self, ui: &mut egui::Ui, a: &Analysis) {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if self.overview_section.is_some() && ui.button("Back").clicked() {
                 self.overview_back();
             }
-            let section = self
+            if ui.link("Sections").clicked() {
+                self.overview_section = None;
+                self.overview_unit = None;
+            }
+            if let Some(section) = self
                 .overview_section
-                .and_then(|index| a.sections.iter().find(|s| s.index == index));
-            ui.strong(section.map_or("Allocated sections", |s| s.name.as_str()));
+                .and_then(|i| a.sections.iter().find(|s| s.index == i))
+            {
+                ui.label(format!("/ {}", section.name));
+            }
             if let Some(unit) = &self.overview_unit {
-                ui.label(" / ");
-                ui.strong(unit.label());
+                ui.label(format!("/ {}", unit.label()));
             }
         });
-        ui.weak(if self.overview_unit.is_some() {
-            "Functions and data symbols by unique bytes. Aliases and zero-sized labels remain in the list. Function arguments have no separate section sizes."
-        } else if self.overview_section.is_some() {
-            "Compilation units by unique bytes in this section. Click to explore; mouse Back moves up one level."
-        } else {
-            "Section sizes, counted once. Click a slice or its legend to explore its contents."
-        });
-        let items = slices(a, self.overview_section, self.overview_unit.as_ref());
+        let items = metric_slices(
+            a,
+            self.overview_section,
+            self.overview_unit.as_ref(),
+            self.overview_metric,
+        );
         self.visible_rows = items.len();
         let total: u64 = items.iter().map(|s| s.size).sum();
-        if total == 0 {
-            ui.label("No sized contents available.");
-        }
+        ui.label(format!(
+            "{}: {}",
+            self.overview_metric.label(),
+            bytes(total)
+        ));
+        ui.small(
+            "Select a row to explore. Aliases share unique bytes; zero-sized labels remain listed.",
+        );
         let mut selected = None;
-        egui::ScrollArea::vertical()
-            .id_salt("overview_pie")
-            .show(ui, |ui| {
-                ui.horizontal_top(|ui| {
-                    let side = (ui.available_width() * 0.45).min(360.0);
-                    let (rect, response) =
-                        ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
-                    let center = rect.center();
-                    let radius = side * 0.46;
-                    let project = |theta: f32| {
-                        center + egui::vec2(theta.cos() * radius, theta.sin() * radius)
-                    };
-                    let pointer = response.hover_pos().map(|p| p - center);
-                    let mut angle = 0.0;
-                    let mut rim = Vec::new();
-                    let mut dividers = Vec::new();
-                    let mut hovered_slice = None;
-                    let mut slice_meshes = Vec::new();
-                    for (index, item) in items.iter().enumerate().filter(|(_, s)| s.size > 0) {
-                        let sweep = item.size as f32 / total as f32 * TAU;
-                        let hovered = pointer.is_some_and(|p| {
-                            let theta = (p.y.atan2(p.x) + FRAC_PI_2).rem_euclid(TAU);
-                            p.length() <= radius && theta >= angle && theta < angle + sweep
-                        });
-                        let steps = ((sweep / TAU * 180.0).ceil() as usize).max(1);
-                        let mut mesh = egui::Mesh::default();
-                        let fill = color(index);
-                        mesh.colored_vertex(center, fill);
-                        dividers.push(project(angle - FRAC_PI_2));
-                        for step in 0..=steps {
-                            let theta = angle + sweep * step as f32 / steps as f32 - FRAC_PI_2;
-                            let point = project(theta);
-                            mesh.colored_vertex(point, fill);
-                            if step < steps {
-                                rim.push(point);
-                            }
-                        }
-                        for step in 0..steps {
-                            mesh.add_triangle(0, step as u32 + 1, step as u32 + 2);
-                        }
-                        // Reserve the fill's paint order, then resolve legend hover below.
-                        let shape = ui.painter().add(egui::Shape::Noop);
-                        slice_meshes.push((index, shape, mesh));
-                        if hovered {
-                            hovered_slice = Some(index);
-                            response.clone().on_hover_text(format!(
-                                "{}: {} ({:.2}%)\n{}",
-                                item.name,
-                                bytes(item.size),
-                                item.size as f64 / total as f64 * 100.0,
-                                item.tip
-                            ));
-                            if item.target.is_some() {
-                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                            }
-                            if response.clicked() {
-                                selected = item.target.clone();
-                            }
-                        }
-                        angle += sweep;
-                    }
-                    // Separate radial segments avoid acute stroke joins at the center.
-                    // Paint each boundary once, after all fills, so it stays visible.
-                    let stroke = egui::Stroke::new(1.0_f32, egui::Color32::BLACK);
-                    if dividers.len() > 1 {
-                        for end in dividers {
-                            ui.painter().line_segment([center, end], stroke);
-                        }
-                    }
-                    if !rim.is_empty() {
-                        ui.painter().add(egui::Shape::closed_line(rim, stroke));
-                    }
-                    let mut hovered_legend = None;
-                    ui.vertical(|ui| {
-                        ui.label(format!("Total: {}", bytes(total)));
-                        for (index, item) in items.iter().enumerate() {
-                            ui.horizontal(|ui| {
-                                let swatch = ui.colored_label(color(index), "●");
-                                let label = format!(
-                                    "{} — {} ({:.2}%)",
-                                    item.name,
-                                    bytes(item.size),
-                                    item.size as f64 / total.max(1) as f64 * 100.0
-                                );
-                                let label = egui::RichText::new(label);
-                                let label = if hovered_slice == Some(index) {
-                                    label.underline()
-                                } else {
-                                    label
-                                };
-                                let entry = if item.target.is_some() {
-                                    ui.link(label)
-                                } else {
-                                    ui.label(label)
-                                }
-                                .on_hover_text(&item.tip);
-                                if entry.clicked() {
-                                    selected = item.target.clone();
-                                }
-                                if entry.hovered() || swatch.hovered() {
-                                    hovered_legend = Some(index);
-                                }
-                            });
-                        }
-                    });
-                    // Resolve both directions in this frame without storing stale hover state.
-                    let highlighted = hovered_slice.or(hovered_legend);
-                    for (index, shape, mut mesh) in slice_meshes {
-                        if highlighted == Some(index) {
-                            let base = color(index);
-                            let fill = egui::Color32::from_rgb(
-                                base.r().saturating_add(32),
-                                base.g().saturating_add(32),
-                                base.b().saturating_add(32),
-                            );
-                            for vertex in &mut mesh.vertices {
-                                vertex.color = fill;
-                            }
-                        }
-                        ui.painter().set(shape, egui::Shape::mesh(mesh));
-                    }
-                });
-            });
+        for item in &items {
+            let fraction = if total == 0 {
+                0.0
+            } else {
+                item.size as f32 / total as f32
+            };
+            let label = format!(
+                "{} - {} ({:.1}%)",
+                item.name,
+                bytes(item.size),
+                fraction * 100.0
+            );
+            if ui
+                .add(
+                    egui::Button::new(label)
+                        .wrap()
+                        .min_size(egui::vec2(ui.available_width(), 24.0)),
+                )
+                .on_hover_text(&item.tip)
+                .clicked()
+            {
+                selected = item.target.clone();
+            }
+            ui.add(
+                egui::ProgressBar::new(fraction)
+                    .fill(color(&item.name))
+                    .desired_height(5.0),
+            );
+        }
+        if items.is_empty() {
+            ui.label("No contents in this memory space.");
+        }
         if let Some(target) = selected {
             match target {
                 Target::Section(section) => {
@@ -330,6 +259,50 @@ mod tests {
                         .filter(|s| s.section_index == section.index)
                         .count()
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn memory_modes_reconcile_through_every_drilldown() {
+        use super::super::overview::Metric;
+        for fixture in [
+            "cortex-m.elf",
+            "cortex-m-grown.elf",
+            "cortex-m-stripped.elf",
+        ] {
+            let a = firmware_analysis_core::analyze_path(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../fixtures")
+                    .join(fixture),
+                &Default::default(),
+            )
+            .unwrap();
+            for metric in [Metric::Flash, Metric::Ram] {
+                let sections = metric_slices(&a, None, None, metric);
+                assert_eq!(
+                    sections.iter().map(|s| s.size).sum::<u64>(),
+                    metric.value(a.totals)
+                );
+                for section in sections {
+                    let Some(Target::Section(index)) = section.target else {
+                        panic!("section");
+                    };
+                    let units = metric_slices(&a, Some(index), None, metric);
+                    assert_eq!(units.iter().map(|s| s.size).sum::<u64>(), section.size);
+                    for unit in units {
+                        let Some(Target::Unit(key)) = unit.target else {
+                            panic!("unit");
+                        };
+                        assert_eq!(
+                            metric_slices(&a, Some(index), Some(&key), metric)
+                                .iter()
+                                .map(|s| s.size)
+                                .sum::<u64>(),
+                            unit.size
+                        );
+                    }
+                }
             }
         }
     }

@@ -5,8 +5,8 @@ use firmware_analysis_core::{format_bytes as bytes, Analysis, FileTree};
 
 pub const ACCENT: egui::Color32 = egui::Color32::from_rgb(113, 185, 219);
 pub(super) const TEXT_SELECTION: egui::Color32 = egui::Color32::from_rgb(48, 105, 163);
-const FLASH_HELP: &str = "Allocated bytes stored in the load image. Initialized RAM data also needs initial values in Flash. Gaps and programmer-specific overhead are excluded.";
-const RAM_HELP: &str = "Static memory required while running. Includes initialized data, zero-filled storage and explicit reservations. Additional heap and stack demand is not automatically known.";
+pub(super) const FLASH_HELP: &str = "Allocated bytes stored in the load image. Initialized RAM data also needs initial values in Flash. Gaps and programmer-specific overhead are excluded.";
+pub(super) const RAM_HELP: &str = "Static memory required while running. Includes initialized data, zero-filled storage and explicit reservations. Additional heap and stack demand is not automatically known.";
 struct Row {
     cells: Vec<String>,
     values: Vec<Option<i128>>,
@@ -271,46 +271,6 @@ impl Explorer {
             });
         clicked
     }
-    pub(super) fn overview(&mut self, ui: &mut egui::Ui, a: &Analysis) {
-        ui.horizontal(|ui| {
-            metric(ui, "Flash payload", a.totals.flash, FLASH_HELP);
-            ui.separator();
-            metric(ui, "Static RAM", a.totals.ram, RAM_HELP);
-            ui.separator();
-            ui.weak(format!("ELF {}", bytes(a.metadata.file_size)))
-                .on_hover_text(
-                    "File size includes debug information; it is not the programmed image size.",
-                );
-            if let Some(c) = &self.comparison {
-                ui.separator();
-                ui.label(format!(
-                    "Change: Flash {:+} B / RAM {:+} B",
-                    c.flash_delta, c.ram_delta
-                ));
-            }
-        });
-        for region in &a.options.regions {
-            let usage = firmware_analysis_core::regions::region_usage(a, region);
-            ui.add(
-                egui::ProgressBar::new((usage.used as f64 / region.size.max(1) as f64) as f32)
-                    .desired_height(14.0)
-                    .text(format!(
-                        "{}: {} used / {} free / {} total",
-                        region.name,
-                        bytes(usage.used),
-                        bytes(usage.free),
-                        bytes(region.size)
-                    )),
-            );
-        }
-        ui.horizontal(|ui| {
-            ui.weak(if self.options.regions.is_empty() { "Inferred memory types / capacity unknown" } else { "Configured memory regions / unmatched ranges inferred" }).on_hover_text("ELF attributes describe loading and permissions, not physical memory technology. Configure regions using Layout.");
-            ui.separator();
-            ui.weak(format!("Unattributed: {} Flash / {} RAM", bytes(a.unattributed.flash), bytes(a.unattributed.ram))).on_hover_text("Unknown file owners, padding and reservations. File totals still reconcile with the overview.");
-        });
-        ui.separator();
-        self.overview_pie(ui, a);
-    }
     pub(super) fn directory_tree(&mut self, ui: &mut egui::Ui, a: &Analysis) {
         let mut selected = None;
         egui::ScrollArea::both().show(ui, |ui| {
@@ -475,6 +435,7 @@ impl Explorer {
         );
     }
     pub(super) fn memory_map(&mut self, ui: &mut egui::Ui, a: &Analysis) {
+        self.ensure_region_cache(a);
         if a.options.regions.is_empty() {
             ui.label("Region capacity and free space are unknown. Use Layout → Load memory regions to load a target layout JSON.");
         } else {
@@ -489,7 +450,7 @@ impl Explorer {
             ui.selectable_value(&mut self.selected_region, None, "All address ranges");
             egui::ScrollArea::vertical().id_salt("region_summary").max_height(180.0).show(ui, |ui| {
                 for (index, region) in a.options.regions.iter().enumerate() {
-                    let usage = firmware_analysis_core::regions::region_usage(a, region);
+                    let usage = &self.region_cache[index];
                     ui.selectable_value(&mut self.selected_region, Some(index), format!(
                         "{} ({:?})  {:#010x}–{:#010x}  |  {} used / {} free / {} total  ({:.1}%)",
                         region.name, region.kind, region.start, region.start.saturating_add(region.size),
@@ -505,7 +466,7 @@ impl Explorer {
             }
             if let Some(index) = self.selected_region {
                 let region = &a.options.regions[index];
-                let usage = firmware_analysis_core::regions::region_usage(a, region);
+                let usage = &self.region_cache[index];
                 ui.label(format!("Symbols in {}", region.name));
                 ui.small("Usage includes section padding and reservations. Aliases and zero-sized labels are listed; symbol sizes do not sum to region usage. Boundary-crossing ranges count only bytes inside the region.");
                 if usage.symbols.is_empty() {
@@ -783,7 +744,7 @@ fn sort_header(ui: &mut egui::Ui, title: &str, descending: Option<bool>) -> egui
     }
     response
 }
-fn metric(ui: &mut egui::Ui, title: &str, value: u64, help: &str) {
+pub(super) fn metric(ui: &mut egui::Ui, title: &str, value: u64, help: &str) {
     ui.label(title).on_hover_text(help);
     ui.label(
         RichText::new(bytes(value))
