@@ -164,10 +164,50 @@ impl Explorer {
             .show(ui, |ui| {
                 let side = ui.available_width().min(360.0);
                 let (rect, response) =
-                    ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
-                let center = rect.center();
+                    ui.allocate_exact_size(egui::vec2(side, side * 0.78), egui::Sense::click());
+                let center = rect.center() - egui::vec2(0.0, side * 0.045);
                 let radius = side * 0.46;
-                let pointer = response.hover_pos().map(|p| p - center);
+                let tilt = 0.62;
+                let depth = side * 0.075;
+                let project = |theta: f32| {
+                    center + egui::vec2(theta.cos() * radius, theta.sin() * radius * tilt)
+                };
+                // Fade the shadow towards its edge under the extruded base.
+                if total > 0 {
+                    let mut shadow = egui::Mesh::default();
+                    let origin = center + egui::vec2(0.0, depth + side * 0.015);
+                    shadow.colored_vertex(origin, egui::Color32::from_black_alpha(65));
+                    for step in 0..=120 {
+                        let theta = TAU * step as f32 / 120.0;
+                        shadow.colored_vertex(
+                            origin
+                                + egui::vec2(
+                                    theta.cos() * radius * 1.08,
+                                    theta.sin() * radius * tilt * 1.12,
+                                ),
+                            egui::Color32::TRANSPARENT,
+                        );
+                    }
+                    for step in 0..120 {
+                        shadow.add_triangle(0, step + 1, step + 2);
+                    }
+                    ui.painter().add(egui::Shape::mesh(shadow));
+                }
+                let pointer = response.hover_pos().map(|p| {
+                    let p = p - center;
+                    let top = egui::vec2(p.x, p.y / tilt);
+                    if top.length() <= radius {
+                        top
+                    } else {
+                        // The visible front wall belongs to the same slice as its rim.
+                        let rim_y = (radius * radius - p.x * p.x).max(0.0).sqrt() * tilt;
+                        if p.x.abs() <= radius && p.y >= rim_y && p.y <= rim_y + depth {
+                            egui::vec2(p.x, rim_y / tilt) * 0.9999
+                        } else {
+                            top
+                        }
+                    }
+                });
                 let mut angle = 0.0;
                 for (index, item) in items.iter().enumerate().filter(|(_, s)| s.size > 0) {
                     let sweep = item.size as f32 / total as f32 * TAU;
@@ -182,12 +222,36 @@ impl Explorer {
                     } else {
                         color(index)
                     };
+                    // Only the front half of the cylindrical wall is visible.
+                    let front_start = (angle - FRAC_PI_2).max(0.0);
+                    let front_end = (angle + sweep - FRAC_PI_2).min(std::f32::consts::PI);
+                    if front_end > front_start {
+                        let wall_steps = ((front_end - front_start) / TAU * 180.0).ceil() as usize;
+                        let mut wall = egui::Mesh::default();
+                        for step in 0..=wall_steps {
+                            let theta = front_start
+                                + (front_end - front_start) * step as f32 / wall_steps as f32;
+                            let rim = project(theta);
+                            let shade = 0.62 + 0.12 * theta.cos();
+                            wall.colored_vertex(rim, fill.gamma_multiply(shade));
+                            wall.colored_vertex(
+                                rim + egui::vec2(0.0, depth),
+                                fill.gamma_multiply(shade * 0.72),
+                            );
+                        }
+                        for step in 0..wall_steps as u32 {
+                            let v = step * 2;
+                            wall.add_triangle(v, v + 1, v + 2);
+                            wall.add_triangle(v + 1, v + 3, v + 2);
+                        }
+                        ui.painter().add(egui::Shape::mesh(wall));
+                    }
                     mesh.colored_vertex(center, fill);
                     for step in 0..=steps {
                         let theta = angle + sweep * step as f32 / steps as f32 - FRAC_PI_2;
                         mesh.colored_vertex(
-                            center + egui::vec2(theta.cos(), theta.sin()) * radius,
-                            fill,
+                            project(theta),
+                            fill.gamma_multiply(0.94 - 0.06 * theta.sin()),
                         );
                     }
                     for step in 0..steps {
