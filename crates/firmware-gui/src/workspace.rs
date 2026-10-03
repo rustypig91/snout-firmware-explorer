@@ -73,17 +73,10 @@ impl Explorer {
             .default_width(260.0)
             .width_range(180.0..=500.0)
             .show(ctx, |ui| {
-                ui.strong("BUILD FILES");
-                ui.label(build.root.display().to_string());
-                if ui
-                    .add_enabled(self.receiver.is_none(), egui::Button::new("Rescan folder"))
-                    .clicked()
-                {
-                    self.scan_build(build.root.clone());
-                }
                 ui.add(
                     egui::TextEdit::singleline(&mut self.artifact_search)
-                        .hint_text("Find build file..."),
+                        .hint_text("Find file...")
+                        .desired_width(f32::INFINITY),
                 );
                 ui.small(format!("{} compatible files", build.artifacts.len()));
                 if !build.warnings.is_empty() {
@@ -147,7 +140,10 @@ impl Explorer {
                                 if ui
                                     .add_enabled(
                                         self.receiver.is_none(),
-                                        egui::Button::new(&label).selected(active).wrap(),
+                                        egui::Button::new(&label)
+                                            .frame(false)
+                                            .selected(active)
+                                            .wrap(),
                                     )
                                     .on_hover_text(artifact.path.display().to_string())
                                     .clicked()

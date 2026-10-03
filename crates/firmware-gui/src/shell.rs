@@ -74,70 +74,23 @@ impl Explorer {
         {
             self.overview_back();
         }
-        egui::TopBottomPanel::top("workbench_header").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Rusty's Snout").strong());
-                ui.separator();
-                let name = self
-                    .analysis
-                    .as_ref()
-                    .and_then(|a| std::path::Path::new(&a.path).file_name())
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "No firmware open".into());
-                ui.add(
-                    egui::Label::new(egui::RichText::new(name).color(super::views::ACCENT))
-                        .truncate(),
-                )
-                .on_hover_text(
-                    self.analysis
-                        .as_ref()
-                        .map(|a| a.path.as_str())
-                        .unwrap_or("Select a build folder"),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add_enabled_ui(self.receiver.is_none(), |ui| {
-                        ui.menu_button("Layout", |ui| {
-                            ui.label(format!(
-                                "{} memory regions configured",
-                                self.options.regions.len()
-                            ));
-                            if ui.button("Load memory regions...").clicked() {
-                                if let Some(path) = rfd::FileDialog::new()
-                                    .add_filter("JSON", &["json"])
-                                    .pick_file()
-                                {
-                                    self.configure(Some(path));
-                                }
-                                ui.close_menu();
-                            }
-                            if ui.button("Discover layout from matching map").clicked() {
-                                self.discover_layout();
-                                ui.close_menu();
-                            }
-                            if ui.button("Use ELF inference").clicked() {
-                                self.configure(None);
-                                ui.close_menu();
-                            }
-                        });
-                        if ui
-                            .add_enabled(self.analysis.is_some(), egui::Button::new("Compare..."))
-                            .on_hover_text("Select an older build; deltas show current minus older")
-                            .clicked()
-                        {
-                            self.pick_baseline();
-                        }
-                        if ui
-                            .button("Open build folder...")
-                            .on_hover_text(
-                                "Scan a build folder (Ctrl+O), or drop a folder into the window",
-                            )
-                            .clicked()
-                        {
-                            self.pick_build();
-                        }
-                    });
-                });
-            });
+        let title = self
+            .build
+            .as_ref()
+            .map(|build| {
+                let path = build.root.display().to_string();
+                let path = if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+                    format!(r"\\{unc}")
+                } else {
+                    path.strip_prefix(r"\\?\").unwrap_or(&path).to_owned()
+                };
+                format!("{path} - Rusty's Snout - Firmware Explorer")
+            })
+            .unwrap_or_else(|| "Rusty's Snout - Firmware Explorer".into());
+        if ctx.input(|i| i.viewport().title.as_deref() != Some(title.as_str())) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+        }
+        egui::TopBottomPanel::top("workbench_tabs").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 for view in View::ALL {
                     let active = self.view == view;
@@ -157,6 +110,65 @@ impl Explorer {
                         self.change_view(view);
                     }
                 }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_enabled_ui(self.receiver.is_none(), |ui| {
+                        ui.menu_button("Menu", |ui| {
+                            if ui.button("Open build folder...").clicked() {
+                                ui.close_menu();
+                                self.pick_build();
+                            }
+                            if ui
+                                .add_enabled(
+                                    self.build.is_some(),
+                                    egui::Button::new("Rescan folder"),
+                                )
+                                .clicked()
+                            {
+                                ui.close_menu();
+                                if let Some(build) = &self.build {
+                                    self.scan_build(build.root.clone());
+                                }
+                            }
+                            if ui
+                                .add_enabled(
+                                    self.analysis.is_some(),
+                                    egui::Button::new("Compare..."),
+                                )
+                                .on_hover_text(
+                                    "Select an older build; deltas show current minus older",
+                                )
+                                .clicked()
+                            {
+                                ui.close_menu();
+                                self.pick_baseline();
+                            }
+                            ui.separator();
+                            ui.menu_button("Layout", |ui| {
+                                ui.label(format!(
+                                    "{} memory regions configured",
+                                    self.options.regions.len()
+                                ));
+                                if ui.button("Load memory regions...").clicked() {
+                                    if let Some(path) = rfd::FileDialog::new()
+                                        .add_filter("JSON", &["json"])
+                                        .pick_file()
+                                    {
+                                        self.configure(Some(path));
+                                    }
+                                    ui.close_menu();
+                                }
+                                if ui.button("Discover layout from matching map").clicked() {
+                                    self.discover_layout();
+                                    ui.close_menu();
+                                }
+                                if ui.button("Use ELF inference").clicked() {
+                                    self.configure(None);
+                                    ui.close_menu();
+                                }
+                            });
+                        });
+                    });
+                });
             });
         });
         egui::TopBottomPanel::bottom("workbench_status").show(ctx, |ui| {
@@ -264,7 +276,7 @@ impl Explorer {
             if self.artifact_preview(ui) { return; }
             let Some(a) = self.analysis.clone() else {
                 ui.add_space(24.0); ui.heading("Firmware Explorer");
-                ui.label(if self.build.is_some() { "Select a firmware image or supporting file in Build files." } else { "Select a build folder to discover firmware, maps, linker scripts and stack reports." });
+                ui.label(if self.build.is_some() { "Select a firmware image or supporting file in the left pane." } else { "Select a build folder to discover firmware, maps, linker scripts and stack reports." });
                 ui.add_space(8.0);
                 if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Open build folder...")).clicked() { self.pick_build(); }
                 ui.collapsing("Which files are supported?", |ui| { ui.label("The folder and its subfolders are scanned for linked ELF images (including .elf, .axf and .out), .map, .su, .ld/.lds and memory-layout JSON. Select firmware to analyze it; supporting files can be previewed. A unique same-name GNU linker map supplies memory capacities automatically. HEX and BIN lack the required metadata."); });

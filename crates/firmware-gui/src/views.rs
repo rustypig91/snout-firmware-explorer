@@ -629,9 +629,7 @@ impl Explorer {
     pub(super) fn compare_view(&mut self, ui: &mut egui::Ui) {
         let Some(c) = &self.comparison else {
             self.visible_rows = 0;
-            ui.weak(
-                "Use Compare in the header to select an older build. Current minus older is shown.",
-            );
+            ui.weak("Use Menu > Compare to select an older build. Current minus older is shown.");
             return;
         };
         ui.horizontal(|ui| {

@@ -104,10 +104,14 @@ fn folder_workflow_selects_firmware_and_loads_stack_automatically() {
         },
         |ctx| app.show(ctx),
     );
+    assert!(output.viewport_output[&egui::ViewportId::ROOT]
+        .commands
+        .iter()
+        .any(|command| matches!(command, egui::ViewportCommand::Title(title) if title.ends_with("fixtures - Rusty's Snout - Firmware Explorer"))));
     assert!(output
         .shapes
         .iter()
-        .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == "BUILD FILES")));
+        .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == "Menu")));
     app.scan_build(build.root.join("cortex-m.elf"));
     finish_job(&mut app);
     assert!(app.error.as_ref().unwrap().contains("folder"));

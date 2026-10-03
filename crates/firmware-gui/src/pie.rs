@@ -121,7 +121,7 @@ fn slices(a: &Analysis, section: Option<usize>, unit: Option<&UnitKey>) -> Vec<S
 }
 
 fn color(index: usize) -> egui::Color32 {
-    egui::ecolor::Hsva::new((index as f32 * 0.618_034) % 1.0, 0.55, 0.85, 1.0).into()
+    egui::ecolor::Hsva::new((index as f32 * 0.618_034) % 1.0, 0.78, 0.70, 1.0).into()
 }
 
 impl Explorer {
@@ -162,138 +162,125 @@ impl Explorer {
         egui::ScrollArea::vertical()
             .id_salt("overview_pie")
             .show(ui, |ui| {
-                let side = ui.available_width().min(360.0);
-                let (rect, response) =
-                    ui.allocate_exact_size(egui::vec2(side, side * 0.78), egui::Sense::click());
-                let center = rect.center() - egui::vec2(0.0, side * 0.045);
-                let radius = side * 0.46;
-                let tilt = 0.62;
-                let depth = side * 0.075;
-                let project = |theta: f32| {
-                    center + egui::vec2(theta.cos() * radius, theta.sin() * radius * tilt)
-                };
-                // Fade the shadow towards its edge under the extruded base.
-                if total > 0 {
-                    let mut shadow = egui::Mesh::default();
-                    let origin = center + egui::vec2(0.0, depth + side * 0.015);
-                    shadow.colored_vertex(origin, egui::Color32::from_black_alpha(65));
-                    for step in 0..=120 {
-                        let theta = TAU * step as f32 / 120.0;
-                        shadow.colored_vertex(
-                            origin
-                                + egui::vec2(
-                                    theta.cos() * radius * 1.08,
-                                    theta.sin() * radius * tilt * 1.12,
-                                ),
-                            egui::Color32::TRANSPARENT,
-                        );
-                    }
-                    for step in 0..120 {
-                        shadow.add_triangle(0, step + 1, step + 2);
-                    }
-                    ui.painter().add(egui::Shape::mesh(shadow));
-                }
-                let pointer = response.hover_pos().map(|p| {
-                    let p = p - center;
-                    let top = egui::vec2(p.x, p.y / tilt);
-                    if top.length() <= radius {
-                        top
-                    } else {
-                        // The visible front wall belongs to the same slice as its rim.
-                        let rim_y = (radius * radius - p.x * p.x).max(0.0).sqrt() * tilt;
-                        if p.x.abs() <= radius && p.y >= rim_y && p.y <= rim_y + depth {
-                            egui::vec2(p.x, rim_y / tilt) * 0.9999
-                        } else {
-                            top
-                        }
-                    }
-                });
-                let mut angle = 0.0;
-                for (index, item) in items.iter().enumerate().filter(|(_, s)| s.size > 0) {
-                    let sweep = item.size as f32 / total as f32 * TAU;
-                    let hovered = pointer.is_some_and(|p| {
-                        let theta = (p.y.atan2(p.x) + FRAC_PI_2).rem_euclid(TAU);
-                        p.length() <= radius && theta >= angle && theta < angle + sweep
-                    });
-                    let steps = ((sweep / TAU * 180.0).ceil() as usize).max(1);
-                    let mut mesh = egui::Mesh::default();
-                    let fill = if hovered {
-                        color(index).gamma_multiply(1.2)
-                    } else {
-                        color(index)
+                ui.horizontal_top(|ui| {
+                    let side = (ui.available_width() * 0.45).min(360.0);
+                    let (rect, response) =
+                        ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
+                    let center = rect.center();
+                    let radius = side * 0.46;
+                    let project = |theta: f32| {
+                        center + egui::vec2(theta.cos() * radius, theta.sin() * radius)
                     };
-                    // Only the front half of the cylindrical wall is visible.
-                    let front_start = (angle - FRAC_PI_2).max(0.0);
-                    let front_end = (angle + sweep - FRAC_PI_2).min(std::f32::consts::PI);
-                    if front_end > front_start {
-                        let wall_steps = ((front_end - front_start) / TAU * 180.0).ceil() as usize;
-                        let mut wall = egui::Mesh::default();
-                        for step in 0..=wall_steps {
-                            let theta = front_start
-                                + (front_end - front_start) * step as f32 / wall_steps as f32;
-                            let rim = project(theta);
-                            let shade = 0.62 + 0.12 * theta.cos();
-                            wall.colored_vertex(rim, fill.gamma_multiply(shade));
-                            wall.colored_vertex(
-                                rim + egui::vec2(0.0, depth),
-                                fill.gamma_multiply(shade * 0.72),
-                            );
+                    let pointer = response.hover_pos().map(|p| p - center);
+                    let mut angle = 0.0;
+                    let mut rim = Vec::new();
+                    let mut dividers = Vec::new();
+                    let mut hovered_slice = None;
+                    let mut slice_meshes = Vec::new();
+                    for (index, item) in items.iter().enumerate().filter(|(_, s)| s.size > 0) {
+                        let sweep = item.size as f32 / total as f32 * TAU;
+                        let hovered = pointer.is_some_and(|p| {
+                            let theta = (p.y.atan2(p.x) + FRAC_PI_2).rem_euclid(TAU);
+                            p.length() <= radius && theta >= angle && theta < angle + sweep
+                        });
+                        let steps = ((sweep / TAU * 180.0).ceil() as usize).max(1);
+                        let mut mesh = egui::Mesh::default();
+                        let fill = color(index);
+                        mesh.colored_vertex(center, fill);
+                        dividers.push(project(angle - FRAC_PI_2));
+                        for step in 0..=steps {
+                            let theta = angle + sweep * step as f32 / steps as f32 - FRAC_PI_2;
+                            let point = project(theta);
+                            mesh.colored_vertex(point, fill);
+                            if step < steps {
+                                rim.push(point);
+                            }
                         }
-                        for step in 0..wall_steps as u32 {
-                            let v = step * 2;
-                            wall.add_triangle(v, v + 1, v + 2);
-                            wall.add_triangle(v + 1, v + 3, v + 2);
+                        for step in 0..steps {
+                            mesh.add_triangle(0, step as u32 + 1, step as u32 + 2);
                         }
-                        ui.painter().add(egui::Shape::mesh(wall));
-                    }
-                    mesh.colored_vertex(center, fill);
-                    for step in 0..=steps {
-                        let theta = angle + sweep * step as f32 / steps as f32 - FRAC_PI_2;
-                        mesh.colored_vertex(
-                            project(theta),
-                            fill.gamma_multiply(0.94 - 0.06 * theta.sin()),
-                        );
-                    }
-                    for step in 0..steps {
-                        mesh.add_triangle(0, step as u32 + 1, step as u32 + 2);
-                    }
-                    ui.painter().add(egui::Shape::mesh(mesh));
-                    if hovered {
-                        response.clone().on_hover_text(format!(
-                            "{}: {} ({:.2}%)\n{}",
-                            item.name,
-                            bytes(item.size),
-                            item.size as f64 / total as f64 * 100.0,
-                            item.tip
-                        ));
-                        if item.target.is_some() {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                        }
-                        if response.clicked() {
-                            selected = item.target.clone();
-                        }
-                    }
-                    angle += sweep;
-                }
-                ui.label(format!("Total: {}", bytes(total)));
-                for (index, item) in items.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.colored_label(color(index), "●");
-                        let label = format!(
-                            "{} — {} ({:.2}%)",
-                            item.name,
-                            bytes(item.size),
-                            item.size as f64 / total.max(1) as f64 * 100.0
-                        );
-                        if item.target.is_some() {
-                            if ui.link(label).on_hover_text(&item.tip).clicked() {
+                        // Reserve the fill's paint order, then resolve legend hover below.
+                        let shape = ui.painter().add(egui::Shape::Noop);
+                        slice_meshes.push((index, shape, mesh));
+                        if hovered {
+                            hovered_slice = Some(index);
+                            response.clone().on_hover_text(format!(
+                                "{}: {} ({:.2}%)\n{}",
+                                item.name,
+                                bytes(item.size),
+                                item.size as f64 / total as f64 * 100.0,
+                                item.tip
+                            ));
+                            if item.target.is_some() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+                            if response.clicked() {
                                 selected = item.target.clone();
                             }
-                        } else {
-                            ui.label(label).on_hover_text(&item.tip);
+                        }
+                        angle += sweep;
+                    }
+                    // Separate radial segments avoid acute stroke joins at the center.
+                    // Paint each boundary once, after all fills, so it stays visible.
+                    let stroke = egui::Stroke::new(1.0_f32, egui::Color32::BLACK);
+                    if dividers.len() > 1 {
+                        for end in dividers {
+                            ui.painter().line_segment([center, end], stroke);
+                        }
+                    }
+                    if !rim.is_empty() {
+                        ui.painter().add(egui::Shape::closed_line(rim, stroke));
+                    }
+                    let mut hovered_legend = None;
+                    ui.vertical(|ui| {
+                        ui.label(format!("Total: {}", bytes(total)));
+                        for (index, item) in items.iter().enumerate() {
+                            ui.horizontal(|ui| {
+                                let swatch = ui.colored_label(color(index), "●");
+                                let label = format!(
+                                    "{} — {} ({:.2}%)",
+                                    item.name,
+                                    bytes(item.size),
+                                    item.size as f64 / total.max(1) as f64 * 100.0
+                                );
+                                let label = egui::RichText::new(label);
+                                let label = if hovered_slice == Some(index) {
+                                    label.underline()
+                                } else {
+                                    label
+                                };
+                                let entry = if item.target.is_some() {
+                                    ui.link(label)
+                                } else {
+                                    ui.label(label)
+                                }
+                                .on_hover_text(&item.tip);
+                                if entry.clicked() {
+                                    selected = item.target.clone();
+                                }
+                                if entry.hovered() || swatch.hovered() {
+                                    hovered_legend = Some(index);
+                                }
+                            });
                         }
                     });
-                }
+                    // Resolve both directions in this frame without storing stale hover state.
+                    let highlighted = hovered_slice.or(hovered_legend);
+                    for (index, shape, mut mesh) in slice_meshes {
+                        if highlighted == Some(index) {
+                            let base = color(index);
+                            let fill = egui::Color32::from_rgb(
+                                base.r().saturating_add(32),
+                                base.g().saturating_add(32),
+                                base.b().saturating_add(32),
+                            );
+                            for vertex in &mut mesh.vertices {
+                                vertex.color = fill;
+                            }
+                        }
+                        ui.painter().set(shape, egui::Shape::mesh(mesh));
+                    }
+                });
             });
         if let Some(target) = selected {
             match target {
