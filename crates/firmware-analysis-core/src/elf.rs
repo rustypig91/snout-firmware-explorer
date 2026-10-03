@@ -243,6 +243,7 @@ pub fn analyze_bytes(
         (s.name.starts_with(".debug") && s.flags & u64::from(SHF_COMPRESSED) != 0)
             || s.name.starts_with(".zdebug")
     });
+    let mut source_index = crate::dwarf::SourceIndex::default();
     let dwarf_context = if has_dwarf && !compressed {
         let dwarf = gimli::Dwarf::load(|id| -> Result<_, gimli::Error> {
             let data = elf
@@ -252,6 +253,13 @@ pub fn analyze_bytes(
                 .and_then(|s| bytes.get(s.sh_offset as usize..(s.sh_offset + s.sh_size) as usize))
                 .unwrap_or(&[]);
             Ok(gimli::EndianSlice::new(data, endian))
+        });
+        let dwarf = dwarf.map(|dwarf| {
+            match crate::dwarf::SourceIndex::read(&dwarf, elf.header.e_machine == header::EM_ARM) {
+                Ok(index) => source_index = index,
+                Err(e) => warnings.push(format!("DWARF source ownership unavailable: {e}")),
+            }
+            dwarf
         });
         match dwarf.and_then(addr2line::Context::from_dwarf) {
             Ok(context) => Some(context),
@@ -274,8 +282,11 @@ pub fn analyze_bytes(
     }
     let mut symbols = Vec::new();
     let mut compilation_unit = None;
+    let mut group = 0usize;
+    let mut groups = Vec::new();
     for raw in elf.syms.iter() {
         if raw.st_type() == sym::STT_FILE {
+            group += 1;
             compilation_unit = elf.strtab.get_at(raw.st_name).map(str::to_owned);
             continue;
         }
@@ -348,6 +359,13 @@ pub fn analyze_bytes(
                     .map(|s| format!("{s:#}"))
             })
             .unwrap_or_else(|| name.into());
+        groups.push(
+            if raw.st_bind() == sym::STB_LOCAL && compilation_unit.is_some() {
+                Some(group)
+            } else {
+                None
+            },
+        );
         symbols.push(Symbol {
             name: name.into(),
             demangled_name,
@@ -370,6 +388,27 @@ pub fn analyze_bytes(
             attribution,
             usage: Usage::default(),
         });
+    }
+    source_index.apply(&mut symbols, &groups);
+    // Repeated STT_FILE labels do not establish a shared source identity.
+    // Keep unresolved occurrences distinct, including in the GUI's file filter.
+    let mut label_counts = std::collections::BTreeMap::new();
+    for raw in elf.syms.iter().filter(|s| s.st_type() == sym::STT_FILE) {
+        if let Some(label) = elf.strtab.get_at(raw.st_name) {
+            *label_counts.entry(label).or_insert(0usize) += 1;
+        }
+    }
+    for (symbol, group) in symbols.iter_mut().zip(&groups) {
+        if symbol.source_file.is_none() {
+            if let (Some(label), Some(group)) = (&symbol.compilation_unit, group) {
+                if label_counts
+                    .get(label.as_str())
+                    .is_some_and(|count| *count > 1)
+                {
+                    symbol.compilation_unit = Some(format!("{label} [ELF unit {group}]"));
+                }
+            }
+        }
     }
     if symbols.is_empty() {
         warnings.push("No defined symbols found; the ELF may be stripped. Section accounting remains available.".into());

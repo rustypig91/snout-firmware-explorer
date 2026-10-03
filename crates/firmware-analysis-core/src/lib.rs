@@ -1,8 +1,11 @@
 //! Reusable firmware analysis, with no frontend or GUI dependencies.
 mod aggregate;
+pub mod build;
 pub mod compare;
+mod dwarf;
 mod elf;
 mod model;
+pub mod regions;
 pub mod stack;
 
 pub use elf::{analyze_bytes, analyze_path, validate_options};

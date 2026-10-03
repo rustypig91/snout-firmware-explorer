@@ -8,10 +8,17 @@ Install a current stable Rust toolchain. Windows builds need the Visual Studio C
 
 ```sh
 cargo build --workspace --locked
-cargo run -p firmware-gui -- fixtures/cortex-m.elf
+cargo run -p firmware-gui -- fixtures
 ```
 
-Open your own `.elf`, `.axf`, or ELF-format `.out` file using the toolbar, Ctrl+O or drag-and-drop. Compact tabs switch between Overview, Files, Symbols, Sections, Memory map, Stack and Compare. Tables support search and sorting, with right-aligned numeric columns. Click a row for a resizable bottom inspector, or a file name to inspect its symbols. Enable Directories for an optional tree sidebar. The footer shows memory totals, row counts and expandable analysis notes; Escape collapses the inspector. Hover headings for short explanations. File-dialog choices are local; the application does not upload firmware.
+Select **Open build folder**, press Ctrl+O, or drag a folder into the window. The application recursively scans for linked ELF images (including `.elf`, `.axf`, `.out` and extensionless images), linker maps (`.map`), stack reports (`.su`), linker scripts (`.ld`/`.lds`), and valid memory-layout JSON files. The **Build files** sidebar lists the discovered artifacts with relative paths and a search field. Select a firmware image to analyze it, or a supporting file to preview it. Rescan the folder after rebuilding.
+
+Selecting firmware automatically imports memory-region capacities from a unique matching GNU ld map (`app.map` or `app.elf.map` for `app.elf`), preferring a sibling file. Ambiguous or unsupported maps leave capacity unknown and produce analysis notes. Map matching is filename-based, not proof that artifacts came from the same build. You can select another map and choose **Use memory regions from this map**, or apply a memory-layout JSON. Linker scripts are previewed; their expressions and includes are not evaluated. Memory roles are inferred from map region names and attributes. See the [GNU linker documentation](https://sourceware.org/binutils/docs/ld/Options.html) for generating a link map.
+
+All discovered `.su` reports load automatically when firmware is selected. Reports can span several targets or configurations if the selected folder does; the Stack view preserves report paths and exact-name match information. Select an individual `.su` file to inspect only that report, or use **Load all build reports** to restore the complete set. No build ownership or call-chain totals are invented.
+
+Compact tabs switch between Overview, Files, Symbols, Sections, Memory map, Stack and Compare. Tables support search and sorting, with right-aligned numeric columns. Click a row to expand its details directly underneath; click it again to collapse. Expanded file rows include a button to inspect their symbols. Enable Directories for an optional source tree sidebar. The footer shows memory totals, row counts and expandable analysis notes; Escape collapses the expanded row and notes. Firmware stays local. The CLI continues to accept individual ELF paths.
+
 
 ```sh
 cargo run -p firmware-cli -- analyze fixtures/cortex-m.elf
@@ -70,7 +77,7 @@ The CLI's `analyze`, `files` and `symbols` JSON modes return the same complete r
 
 Classification uses allocation/write flags, section type, and matching `PT_LOAD` mappings, **not section-name lists**. For file-backed sections, the load address is `p_paddr + (sh_offset - p_offset)` after checking both file and virtual containment and their relative offsets. ARM function addresses are normalized for the Thumb bit during attribution; the raw value is retained. `SHT_NOBITS` means no file payload; it does not prove how startup initializes that memory.
 
-ELF metadata does not conclusively identify physical memory technology. Writable, copied, and no-payload allocated sections are inferred as RAM under the bare-metal model. An optional JSON memory layout overrides matching load/runtime ranges. See `examples/cortex-m-memory.json`; addresses are decimal JSON integers. A region must contain the entire range. Uncovered ranges produce warnings and retain inferred classification. Capacity bars cover fully contained sections; they are not a placement or free-space allocator.
+ELF metadata does not conclusively identify physical memory technology. Writable, copied, and no-payload allocated sections are inferred as RAM under the bare-metal model. An optional JSON memory layout overrides matching load/runtime ranges. See `examples/cortex-m-memory.json`; addresses are decimal JSON integers. A region must contain the entire range. Uncovered ranges produce warnings and retain inferred classification. In Memory map, each configured region shows its address bounds, capacity, used/free bytes and percentage used. Select a region to browse and search its symbols, including initial load images of data or code copied to RAM. Load a layout through Layout > Load memory regions (for example `examples/cortex-m-memory.json`). Occupancy counts the union of allocated load and runtime section ranges intersecting each physical region, including padding and reservations, without counting the same addresses twice. Boundary-crossing sections count only their intersection; analysis notes still flag incomplete coverage. Free space means capacity minus static ELF occupancy, not guaranteed runtime headroom or a contiguous allocation. Without a layout, capacity and free space remain unknown. Stripped files retain section usage but may have no symbols.
 
 ### Attribution and uncertainty
 
@@ -96,8 +103,8 @@ Windows tests and builds were run locally. CI is configured for Windows and Linu
 
 This is the first implementation milestone, not a claim of universal firmware support.
 
-1. **Attribution:** add DWARF variable DIE attribution and GNU linker MAP input for reliable object/archive ownership. Currently global variables without a local compilation-unit label remain unattributed. Compressed and split/external DWARF are not supported.
-2. **Memory layouts:** add saved target profiles, explicit unknown memory roles, overlay policies and segment-only fallback. Relocatable objects, overlapping allocated/load ranges, TLS and sectionless ELFs currently return clear unsupported errors. HEX/BIN/MAP-only input is not parsed. Dynamic-symbol-only attribution is not yet implemented.
+1. **Attribution:** add DWARF variable DIE attribution and GNU linker MAP object/archive ownership. Map import currently reads region capacities only. Currently global variables without a local compilation-unit label remain unattributed. Compressed and split/external DWARF are not supported.
+2. **Memory layouts:** add saved target profiles, explicit unknown memory roles, overlay policies and segment-only fallback. Relocatable objects, overlapping allocated/load ranges, TLS and sectionless ELFs currently return clear unsupported errors. HEX/BIN analysis and standalone MAP symbol/section analysis are not supported. Dynamic-symbol-only attribution is not yet implemented.
 3. **Comparisons:** normalize source roots across build machines, improve duplicate/renamed symbol matching and introduce simple CI budgets. Matching currently uses file label, section and mangled symbol name, with duplicate identities aggregated. Differences in attribution or debug availability can affect per-file/symbol deltas.
 4. **Stack:** import evidenced call graphs and represent recursion, indirect calls, assembly, interrupts and missing data before estimating call chains. The model reserves these uncertainty categories. CFA/disassembly, RTOS task stacks and runtime high-water marks are later inputs.
 5. **Desktop delivery:** validate on representative user firmware and Linux desktops, refine large-report performance, add installers, accessibility/keyboard review and preferences. Source tables currently rebuild their display rows each frame, although visible rows are virtualized. No session persistence or export dialog is included yet; use CLI JSON for export.

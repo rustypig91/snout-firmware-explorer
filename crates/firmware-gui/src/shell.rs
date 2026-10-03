@@ -1,5 +1,6 @@
 use super::{egui, Explorer, View};
 use firmware_analysis_core::format_bytes as bytes;
+use std::path::PathBuf;
 
 pub(super) fn configure_style(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
@@ -57,16 +58,16 @@ impl Explorer {
     pub(super) fn show(&mut self, ctx: &egui::Context) {
         if let Some(path) = ctx.input(|i| i.raw.dropped_files.iter().find_map(|f| f.path.clone())) {
             if self.receiver.is_none() {
-                self.open(path);
+                self.scan_build(path);
             }
         }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::O))
             && self.receiver.is_none()
         {
-            self.pick_elf(false);
+            self.pick_build();
         }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
-            self.show_details = false;
+            self.details = None;
             self.show_notes = false;
         }
         egui::TopBottomPanel::top("workbench_header").show(ctx, |ui| {
@@ -87,7 +88,7 @@ impl Explorer {
                     self.analysis
                         .as_ref()
                         .map(|a| a.path.as_str())
-                        .unwrap_or("Open a linked ELF file"),
+                        .unwrap_or("Select a build folder"),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_enabled_ui(self.receiver.is_none(), |ui| {
@@ -105,29 +106,33 @@ impl Explorer {
                                 }
                                 ui.close_menu();
                             }
+                            if ui.button("Discover layout from matching map").clicked() {
+                                self.layout_override = None;
+                                if let Some(a) = &self.analysis {
+                                    self.open(PathBuf::from(&a.path));
+                                }
+                                ui.close_menu();
+                            }
                             if ui.button("Use ELF inference").clicked() {
                                 self.configure(None);
                                 ui.close_menu();
                             }
                         });
                         if ui
-                            .add_enabled(
-                                self.analysis.is_some(),
-                                egui::Button::new("Compare...").frame(false),
-                            )
+                            .add_enabled(self.analysis.is_some(), egui::Button::new("Compare..."))
                             .on_hover_text("Select an older build; deltas show current minus older")
                             .clicked()
                         {
-                            self.pick_elf(true);
+                            self.pick_baseline();
                         }
                         if ui
-                            .button("Open...")
+                            .button("Open build folder...")
                             .on_hover_text(
-                                "Open ELF firmware (Ctrl+O), or drop a file into the window",
+                                "Scan a build folder (Ctrl+O), or drop a folder into the window",
                             )
                             .clicked()
                         {
-                            self.pick_elf(false);
+                            self.pick_build();
                         }
                     });
                 });
@@ -173,7 +178,7 @@ impl Explorer {
                     ui.separator();
                     ui.small(format!("{} rows", self.visible_rows));
                 } else {
-                    ui.small("Ready / Drop an ELF file to begin");
+                    ui.small("Ready / Select or drop a build folder to begin");
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if let Some(a) = &self.analysis {
@@ -186,13 +191,6 @@ impl Explorer {
                         {
                             self.show_notes = !self.show_notes;
                         }
-                        if ui
-                            .selectable_label(self.show_details, "Details")
-                            .on_hover_text("Inspect the selected row. Escape collapses the pane.")
-                            .clicked()
-                        {
-                            self.show_details = !self.show_details;
-                        }
                     }
                     if self.receiver.is_some() {
                         ui.spinner();
@@ -203,33 +201,44 @@ impl Explorer {
                 });
             });
         });
-        if self.show_details || self.show_notes {
-            egui::TopBottomPanel::bottom("inspector").resizable(true).default_height(155.0).min_height(65.0).max_height(300.0).show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    if ui.selectable_label(!self.show_notes, "Details").clicked() { self.show_notes = false; self.show_details = true; }
-                    if ui.selectable_label(self.show_notes, "Analysis notes").clicked() { self.show_notes = true; }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { if ui.small_button("Hide").clicked() { self.show_notes = false; self.show_details = false; } });
-                });
-                ui.separator();
-                egui::ScrollArea::both().id_salt("inspector_content").show(ui, |ui| {
-                    if self.show_notes {
-                        if let Some(a) = &self.analysis { for note in &a.warnings { ui.label(note); } }
-                        if self.view == View::Stack { if let Some(s) = &self.stack { for note in &s.warnings { ui.label(note); } } }
-                        if self.view == View::Compare { if let Some(c) = &self.comparison { for note in &c.warnings { ui.label(note); } } }
-                    } else if let Some((title, content)) = &self.details {
-                        ui.strong(title); ui.add(egui::Label::new(content).selectable(true));
-                    } else {
-                        ui.weak("Select a row to inspect addresses, source locations and analysis evidence.");
-                        if let Some(a) = &self.analysis {
-                            ui.label(&a.path);
-                            ui.label(format!("{} / machine {} / {}-bit / {} endian", a.metadata.architecture, a.metadata.machine, a.metadata.bitness, a.metadata.endianness));
-                            ui.monospace(format!("Entry: {:#x} / ELF file: {} bytes", a.metadata.entry_point, a.metadata.file_size));
-                            ui.label(if a.metadata.has_dwarf { "DWARF debug information present" } else { "No DWARF debug information" });
+        if self.show_notes {
+            egui::TopBottomPanel::bottom("analysis_notes")
+                .resizable(true)
+                .default_height(155.0)
+                .min_height(65.0)
+                .max_height(300.0)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.strong("Analysis notes");
+                        if ui.small_button("Hide").clicked() {
+                            self.show_notes = false;
                         }
-                    }
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        if let Some(a) = &self.analysis {
+                            for note in &a.warnings {
+                                ui.label(note);
+                            }
+                        }
+                        if self.view == View::Stack {
+                            if let Some(s) = &self.stack {
+                                for note in &s.warnings {
+                                    ui.label(note);
+                                }
+                            }
+                        }
+                        if self.view == View::Compare {
+                            if let Some(c) = &self.comparison {
+                                for note in &c.warnings {
+                                    ui.label(note);
+                                }
+                            }
+                        }
+                    });
                 });
-            });
         }
+        self.build_browser(ctx);
         if self.tree && matches!(self.view, View::Files | View::Symbols) {
             if let Some(a) = self.analysis.clone() {
                 egui::SidePanel::left("file_tree")
@@ -251,12 +260,13 @@ impl Explorer {
             if let Some(error) = self.error.clone() {
                 ui.horizontal_wrapped(|ui| { ui.colored_label(egui::Color32::LIGHT_RED, error); if ui.small_button("Dismiss").clicked() { self.error = None; } }); ui.separator();
             }
+            if self.artifact_preview(ui) { return; }
             let Some(a) = self.analysis.clone() else {
                 ui.add_space(24.0); ui.heading("Firmware Explorer");
-                ui.label("Open a linked ELF to inspect memory, symbols and build changes.");
+                ui.label(if self.build.is_some() { "Select a firmware image or supporting file in Build files." } else { "Select a build folder to discover firmware, maps, linker scripts and stack reports." });
                 ui.add_space(8.0);
-                if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Open firmware...")).clicked() { self.pick_elf(false); }
-                ui.collapsing("Which file should I open?", |ui| { ui.label("Look for .elf, .axf or .out in your build directory. Enable -g for better source attribution. HEX and BIN files do not contain the required metadata."); });
+                if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Open build folder...")).clicked() { self.pick_build(); }
+                ui.collapsing("Which files are supported?", |ui| { ui.label("The folder and its subfolders are scanned for linked ELF images (including .elf, .axf and .out), .map, .su, .ld/.lds and memory-layout JSON. Select firmware to analyze it; supporting files can be previewed. A unique same-name GNU linker map supplies memory capacities automatically. HEX and BIN lack the required metadata."); });
                 return;
             };
             if self.view != View::Overview {
@@ -272,7 +282,7 @@ impl Explorer {
                     }
                     if self.view == View::Stack {
                         ui.add_enabled_ui(self.receiver.is_none(), |ui| {
-                            if ui.button("Scan ELF folder").on_hover_text("Find .su files beside the loaded ELF and recursively in its subfolders. Use reports from the same build.").clicked() { self.scan_elf_folder(); }
+                            if ui.button("Load all build reports").on_hover_text("Load all discovered .su files in the selected build folder. Reports may belong to different targets; check their paths.").clicked() { self.load_build_stack(); }
                             if ui.button("Open .su...").clicked() { self.pick_stack(false); }
                             if ui.button("Scan folder...").clicked() { self.pick_stack(true); }
                         });

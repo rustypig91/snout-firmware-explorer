@@ -4,6 +4,7 @@ use egui_extras::{Column, TableBuilder};
 use firmware_analysis_core::{format_bytes as bytes, Analysis, FileTree};
 
 pub const ACCENT: egui::Color32 = egui::Color32::from_rgb(113, 185, 219);
+pub(super) const TEXT_SELECTION: egui::Color32 = egui::Color32::from_rgb(48, 105, 163);
 const FLASH_HELP: &str = "Allocated bytes stored in the load image. Initialized RAM data also needs initial values in Flash. Gaps and programmer-specific overhead are excluded.";
 const RAM_HELP: &str = "Static memory required while running. Includes initialized data, zero-filled storage and explicit reservations. Additional heap and stack demand is not automatically known.";
 struct Row {
@@ -48,6 +49,37 @@ impl Explorer {
             }
         });
         self.visible_rows = rows.len();
+        let editing_text = ui
+            .memory(|m| m.focused())
+            .is_some_and(|id| egui::TextEdit::load_state(ui.ctx(), id).is_some());
+        let navigate = if !editing_text && !ui.memory(|m| m.any_popup_open()) {
+            ui.input_mut(|input| {
+                if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+                    Some(true)
+                } else if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+                    Some(false)
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        };
+        let mut scroll_to = None;
+        if let Some(down) = navigate.filter(|_| !rows.is_empty()) {
+            let current = rows.iter().position(|item| {
+                self.details
+                    .as_ref()
+                    .is_some_and(|(name, tip)| name == &item.cells[0] && tip == &item.tip)
+            });
+            let next = match current {
+                None => 0,
+                Some(index) if down => (index + 1).min(rows.len() - 1),
+                Some(index) => index.saturating_sub(1),
+            };
+            self.details = Some((rows[next].cells[0].clone(), rows[next].tip.clone()));
+            scroll_to = Some(next);
+        }
         let mut clicked = None;
         let height = ui.available_height();
         egui::ScrollArea::horizontal()
@@ -57,11 +89,16 @@ impl Explorer {
                     (250.0 + (headers.len() - 2) as f32 * 96.0 + 100.0).max(ui.available_width()),
                 );
                 ui.set_min_height(height);
+                let table_clip = ui.clip_rect();
+                let mut expanded_detail = None;
                 let mut table = TableBuilder::new(ui)
                     .striped(false)
                     .sense(egui::Sense::click())
                     .resizable(true)
-                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
+                    .cell_layout(egui::Layout::top_down(egui::Align::Min));
+                if let Some(index) = scroll_to {
+                    table = table.scroll_to_row(index, None);
+                }
                 for (index, _) in headers.iter().enumerate() {
                     table = table.column(if index == headers.len() - 1 {
                         Column::remainder().at_least(100.0).clip(true)
@@ -93,55 +130,144 @@ impl Explorer {
                             });
                         }
                     })
-                    .body(|body| {
-                        body.rows(23.0, rows.len(), |mut row| {
+                    .body(|mut body| {
+                        let width = body.widths().iter().sum::<f32>()
+                            + (headers.len() - 1) as f32 * body.ui_mut().spacing().item_spacing.x;
+                        let expanded = rows.iter().position(|item| {
+                            self.details.as_ref().is_some_and(|(name, tip)| {
+                                name == &item.cells[0] && tip == &item.tip
+                            })
+                        });
+                        let detail_text = expanded.map(|index| {
+                            let ui = body.ui_mut();
+                            ui.painter().layout(
+                                rows[index].tip.clone(),
+                                egui::TextStyle::Body.resolve(ui.style()),
+                                ui.visuals().text_color(),
+                                (width - 24.0).max(100.0),
+                            )
+                        });
+                        let heights = (0..rows.len()).map(|i| {
+                            if Some(i) == expanded {
+                                23.0 + detail_text.as_ref().map_or(0.0, |t| t.size().y)
+                                    + 20.0
+                                    + if rows[i].action.is_some() { 28.0 } else { 0.0 }
+                            } else {
+                                23.0
+                            }
+                        });
+                        body.heterogeneous_rows(heights, |mut row| {
                             let item = &rows[row.index()];
-                            row.set_selected(
-                                self.details
-                                    .as_ref()
-                                    .is_some_and(|(_, detail)| detail == &item.tip),
-                            );
+                            let open = Some(row.index()) == expanded;
+                            row.set_selected(open);
+                            let mut line_clicked = false;
+                            let mut detail_ui = None;
                             for (index, cell) in item.cells.iter().enumerate() {
                                 row.col(|ui| {
+                                    if index == 0 && open {
+                                        let rect = egui::Rect::from_min_size(
+                                            ui.max_rect().min + egui::vec2(12.0, 29.0),
+                                            egui::vec2(width - 24.0, ui.max_rect().height() - 29.0),
+                                        );
+                                        let clip = egui::Rect::from_min_max(
+                                            egui::pos2(rect.left(), ui.clip_rect().top()),
+                                            egui::pos2(rect.right(), ui.clip_rect().bottom()),
+                                        );
+                                        let mut child = ui.new_child(
+                                            egui::UiBuilder::new()
+                                                .id_salt("row_details")
+                                                .max_rect(rect)
+                                                .layout(egui::Layout::top_down(egui::Align::Min)),
+                                        );
+                                        child.set_clip_rect(clip.intersect(rect));
+                                        let background = egui::Rect::from_min_size(
+                                            ui.max_rect().min + egui::vec2(0.0, 23.0),
+                                            egui::vec2(width, ui.max_rect().height() - 23.0),
+                                        );
+                                        let background_clip = egui::Rect::from_min_max(
+                                            egui::pos2(background.left(), ui.clip_rect().top()),
+                                            egui::pos2(background.right(), ui.clip_rect().bottom()),
+                                        )
+                                        .intersect(background)
+                                        .intersect(table_clip);
+                                        child
+                                            .set_clip_rect(child.clip_rect().intersect(table_clip));
+                                        detail_ui = Some((child, background, background_clip));
+                                    }
                                     let numeric = item.values[index].is_some();
-                                    ui.with_layout(
+                                    ui.allocate_ui_with_layout(
+                                        egui::vec2(ui.available_width(), 23.0),
                                         if numeric {
                                             egui::Layout::right_to_left(egui::Align::Center)
                                         } else {
                                             egui::Layout::left_to_right(egui::Align::Center)
                                         },
                                         |ui| {
-                                            let response = if index == 0 && item.action.is_some() {
-                                                ui.link(cell)
-                                            } else if numeric || index == 0 {
-                                                ui.add(
-                                                    egui::Label::new(
-                                                        RichText::new(cell).monospace(),
-                                                    )
-                                                    .truncate(),
-                                                )
+                                            let display = if self.view == View::Files && index == 0
+                                            {
+                                                path_tail(ui, cell)
                                             } else {
-                                                ui.add(egui::Label::new(cell).truncate())
+                                                cell.clone()
                                             };
-                                            if response.clicked() {
-                                                clicked = item.action.clone();
-                                                self.details =
-                                                    Some((item.cells[0].clone(), item.tip.clone()));
-                                                self.show_details = true;
-                                                self.show_notes = false;
-                                            }
+                                            let label = if numeric || index == 0 {
+                                                RichText::new(display).monospace()
+                                            } else {
+                                                RichText::new(display)
+                                            };
+                                            let response = ui.add(
+                                                egui::Label::new(label)
+                                                    .truncate()
+                                                    .selectable(false)
+                                                    .sense(egui::Sense::hover()),
+                                            );
+                                            line_clicked |= response.clicked();
                                             response.on_hover_text(cell);
                                         },
                                     );
                                 });
                             }
-                            if row.response().clicked() {
-                                self.details = Some((item.cells[0].clone(), item.tip.clone()));
-                                self.show_details = true;
-                                self.show_notes = false;
+                            let response = row.response();
+                            line_clicked |= response.clicked()
+                                && response
+                                    .interact_pointer_pos()
+                                    .is_some_and(|p| p.y <= response.rect.top() + 23.0);
+                            if line_clicked {
+                                self.details = if open {
+                                    None
+                                } else {
+                                    Some((item.cells[0].clone(), item.tip.clone()))
+                                };
+                            }
+                            if let Some((ui, background, clip)) = detail_ui {
+                                expanded_detail = Some((
+                                    ui,
+                                    background,
+                                    clip,
+                                    detail_text.clone(),
+                                    item.action.clone(),
+                                ));
                             }
                         });
                     });
+                // TableBuilder paints its full-height resize dividers after the body.
+                // Paint the spanning detail area last so those dividers cannot cross
+                // its text or capture selection gestures over the detail widgets.
+                if let Some((mut ui, background, clip, text, action)) = expanded_detail {
+                    ui.painter().with_clip_rect(clip).rect_filled(
+                        background,
+                        0.0,
+                        ui.visuals().selection.bg_fill,
+                    );
+                    ui.visuals_mut().selection.bg_fill = TEXT_SELECTION;
+                    if let Some(text) = text {
+                        ui.add(egui::Label::new(text).selectable(true));
+                    }
+                    if let Some(file) = action {
+                        if ui.small_button("Show symbols for this file").clicked() {
+                            clicked = Some(file);
+                        }
+                    }
+                }
             });
         clicked
     }
@@ -163,34 +289,16 @@ impl Explorer {
                 ));
             }
         });
-        for region in &self.options.regions {
-            let used: u64 = a
-                .sections
-                .iter()
-                .filter(|s| {
-                    let addr = match region.kind {
-                        firmware_analysis_core::MemoryKind::Flash => s.load_address,
-                        _ => Some(s.address),
-                    };
-                    addr.is_some_and(|addr| {
-                        addr >= region.start
-                            && addr
-                                .checked_add(s.size)
-                                .is_some_and(|end| end <= region.start.saturating_add(region.size))
-                    })
-                })
-                .map(|s| match region.kind {
-                    firmware_analysis_core::MemoryKind::Flash => s.usage.flash,
-                    _ => s.usage.ram,
-                })
-                .sum();
+        for region in &a.options.regions {
+            let usage = firmware_analysis_core::regions::region_usage(a, region);
             ui.add(
-                egui::ProgressBar::new((used as f64 / region.size.max(1) as f64) as f32)
+                egui::ProgressBar::new((usage.used as f64 / region.size.max(1) as f64) as f32)
                     .desired_height(14.0)
                     .text(format!(
-                        "{}: {} / {}",
+                        "{}: {} used / {} free / {} total",
                         region.name,
-                        bytes(used),
+                        bytes(usage.used),
+                        bytes(usage.free),
                         bytes(region.size)
                     )),
             );
@@ -230,8 +338,10 @@ impl Explorer {
                         (4, s.runtime_size.into()),
                     ],
                     format!(
-                        "{}\nFlash: {} B / RAM: {} B\nRun address: {:#x}\nLoad address: {:?}\n{}",
-                        s.name, s.usage.flash, s.usage.ram, s.address, s.load_address, s.evidence
+                        "Run address: {:#010x}\nLoad address: {}\n{}",
+                        s.address,
+                        load_address(s.load_address, s.load_size),
+                        s.evidence
                     ),
                 )
             })
@@ -286,10 +396,7 @@ impl Explorer {
                         (2, f.usage.ram.into()),
                         (3, f.symbol_count as i128),
                     ],
-                    format!(
-                        "{}\n{} Flash bytes; {} RAM bytes\n{}",
-                        f.path, f.usage.flash, f.usage.ram, f.attribution
-                    ),
+                    String::new(),
                 );
                 row.action = Some(f.path.clone());
                 row
@@ -314,10 +421,61 @@ impl Explorer {
         if let Some(file) = &self.selected_file {
             ui.weak(file);
         }
-        let rows = a.symbols.iter().filter(|s| self.kind_filter == "All" || s.kind == self.kind_filter).filter(|s| self.selected_file.as_ref().is_none_or(|file| {
-            let owner = s.source_file.as_ref().or(s.compilation_unit.as_ref()).map(|s| s.replace('\\', "/")).unwrap_or_else(|| "[unattributed]".into()); &owner == file
-        })).map(|s| Row::new(vec![s.demangled_name.clone(), bytes(s.size), bytes(s.usage.flash), bytes(s.usage.ram), s.kind.clone(), s.section.clone(), format!("{:#010x}", s.address)], &[(1,s.size.into()),(2,s.usage.flash.into()),(3,s.usage.ram.into()),(6,s.address.into())],
-            format!("{}\nELF size: {} B · Flash: {} B · RAM: {} B\nAddress: {:#x} · normalized: {:#x}\nSection: {} · weak: {}\nSource: {}:{}\nCompilation unit: {}\n{}", s.name, s.size, s.usage.flash, s.usage.ram, s.address, s.normalized_address, s.section, s.weak, s.source_file.as_deref().unwrap_or("Unknown"), s.source_line.map(|l| l.to_string()).unwrap_or_else(|| "?".into()), s.compilation_unit.as_deref().unwrap_or("Unknown"), s.attribution))).collect();
+        let rows = a
+            .symbols
+            .iter()
+            .filter(|s| self.kind_filter == "All" || s.kind == self.kind_filter)
+            .filter(|s| {
+                self.selected_file.as_ref().is_none_or(|file| {
+                    let owner = s
+                        .source_file
+                        .as_ref()
+                        .or(s.compilation_unit.as_ref())
+                        .map(|s| s.replace('\\', "/"))
+                        .unwrap_or_else(|| "[unattributed]".into());
+                    &owner == file
+                })
+            })
+            .map(|s| {
+                Row::new(
+                    vec![
+                        s.demangled_name.clone(),
+                        bytes(s.size),
+                        bytes(s.usage.flash),
+                        bytes(s.usage.ram),
+                        s.kind.clone(),
+                        s.section.clone(),
+                        format!("{:#010x}", s.address),
+                    ],
+                    &[
+                        (1, s.size.into()),
+                        (2, s.usage.flash.into()),
+                        (3, s.usage.ram.into()),
+                        (6, s.address.into()),
+                    ],
+                    format!(
+                        "{}{}Weak symbol: {}\nSource: {}:{}\nCompilation unit: {}\n{}",
+                        if s.name != s.demangled_name {
+                            format!("Linker name: {}\n", s.name)
+                        } else {
+                            String::new()
+                        },
+                        if s.address != s.normalized_address {
+                            format!("Normalized address: {:#010x}\n", s.normalized_address)
+                        } else {
+                            String::new()
+                        },
+                        s.weak,
+                        s.source_file.as_deref().unwrap_or("Unknown"),
+                        s.source_line
+                            .map(|l| l.to_string())
+                            .unwrap_or_else(|| "?".into()),
+                        s.compilation_unit.as_deref().unwrap_or("Unknown"),
+                        s.attribution
+                    ),
+                )
+            })
+            .collect();
         self.table(
             ui,
             &[
@@ -339,8 +497,8 @@ impl Explorer {
         );
     }
     pub(super) fn sections(&mut self, ui: &mut egui::Ui, a: &Analysis) {
-        let rows = a.sections.iter().map(|s| Row::new(vec![s.name.clone(), bytes(s.size), bytes(s.usage.flash), bytes(s.usage.ram), format!("{:#x}",s.address), s.load_address.map(|a| format!("{a:#x}")).unwrap_or_else(|| "Unknown".into()), classification(s.classification).into()], &[(1,s.size.into()),(2,s.usage.flash.into()),(3,s.usage.ram.into()),(4,s.address.into()),(5,s.load_address.unwrap_or(0).into())],
-            format!("{}\nSize: {} B · load: {} B · runtime: {} B\nAlignment: {} · flags: {:#x}\nAllocated: {} · writable: {} · executable: {}\n{}", s.name,s.size,s.load_size,s.runtime_size,s.alignment,s.flags,s.allocated,s.writable,s.executable,s.evidence))).collect();
+        let rows = a.sections.iter().map(|s| Row::new(vec![s.name.clone(), bytes(s.size), bytes(s.usage.flash), bytes(s.usage.ram), format!("{:#x}",s.address), load_address(s.load_address, s.load_size), classification(s.classification).into()], &[(1,s.size.into()),(2,s.usage.flash.into()),(3,s.usage.ram.into()),(4,s.address.into()),(5,s.load_address.unwrap_or(0).into())],
+            format!("Load size: {} B / runtime size: {} B\nAlignment: {} / flags: {:#x}\nAllocated: {} / writable: {} / executable: {}\n{}", s.load_size,s.runtime_size,s.alignment,s.flags,s.allocated,s.writable,s.executable,s.evidence))).collect();
         self.table(
             ui,
             &[
@@ -368,6 +526,89 @@ impl Explorer {
         );
     }
     pub(super) fn memory_map(&mut self, ui: &mut egui::Ui, a: &Analysis) {
+        if a.options.regions.is_empty() {
+            ui.label("Region capacity and free space are unknown. Use Layout → Load memory regions to load a target layout JSON.");
+        } else {
+            if self
+                .selected_region
+                .is_some_and(|i| i >= a.options.regions.len())
+            {
+                self.selected_region = None;
+            }
+            ui.small("Select a region to inspect its symbols. Free space excludes static ELF occupancy only; runtime heap and stack demand may use it.");
+            let previous = self.selected_region;
+            ui.selectable_value(&mut self.selected_region, None, "All address ranges");
+            egui::ScrollArea::vertical().id_salt("region_summary").max_height(180.0).show(ui, |ui| {
+                for (index, region) in a.options.regions.iter().enumerate() {
+                    let usage = firmware_analysis_core::regions::region_usage(a, region);
+                    ui.selectable_value(&mut self.selected_region, Some(index), format!(
+                        "{} ({:?})  {:#010x}–{:#010x}  |  {} used / {} free / {} total  ({:.1}%)",
+                        region.name, region.kind, region.start, region.start.saturating_add(region.size),
+                        bytes(usage.used), bytes(usage.free), bytes(region.size),
+                        usage.used as f64 * 100.0 / region.size.max(1) as f64));
+                }
+            });
+            if previous != self.selected_region {
+                self.details = None;
+                self.search.clear();
+                self.sort_column = 1;
+                self.descending = false;
+            }
+            if let Some(index) = self.selected_region {
+                let region = &a.options.regions[index];
+                let usage = firmware_analysis_core::regions::region_usage(a, region);
+                ui.label(format!("Symbols in {}", region.name));
+                ui.small("Usage includes section padding and reservations. Aliases and zero-sized labels are listed; symbol sizes do not sum to region usage. Boundary-crossing ranges count only bytes inside the region.");
+                if usage.symbols.is_empty() {
+                    ui.label("No symbols available in this region. Stripped firmware can still occupy space.");
+                }
+                let rows = usage
+                    .symbols
+                    .iter()
+                    .map(|entry| {
+                        let s = &a.symbols[entry.symbol_index];
+                        Row::new(
+                            vec![
+                                s.demangled_name.clone(),
+                                format!("{:#010x}", entry.address),
+                                bytes(s.size),
+                                s.section.clone(),
+                                entry.placement.into(),
+                                s.source_file
+                                    .as_ref()
+                                    .or(s.compilation_unit.as_ref())
+                                    .cloned()
+                                    .unwrap_or_else(|| "[unattributed]".into()),
+                            ],
+                            &[(1, entry.address.into()), (2, s.size.into())],
+                            format!(
+                                "Linker name: {}\nRuntime address: {:#010x}\nELF size: {} B\n{}",
+                                s.name, s.normalized_address, s.size, s.attribution
+                            ),
+                        )
+                    })
+                    .collect();
+                self.table(
+                    ui,
+                    &[
+                        ("Symbol", "Symbols intersecting the selected region"),
+                        (
+                            "Address",
+                            "Placement address in this region; Thumb bit normalized",
+                        ),
+                        ("ELF size", "Full declared symbol size; aliases may overlap"),
+                        ("Section", "Containing ELF section"),
+                        ("Placement", "Runtime storage or initial load image"),
+                        (
+                            "Source",
+                            "Source file or compilation-unit label when available",
+                        ),
+                    ],
+                    rows,
+                );
+                return;
+            }
+        }
         ui.small("Load and runtime are separate address spaces").on_hover_text("Do not add load and runtime ranges together; the same storage can appear in both views.");
         let rows = a
             .memory_map
@@ -386,7 +627,7 @@ impl Explorer {
                         (2, (r.address + r.size).into()),
                         (3, r.size.into()),
                     ],
-                    format!("{}\n{} bytes\n{}", r.name, r.size, r.evidence),
+                    r.evidence.clone(),
                 )
             })
             .collect();
@@ -407,9 +648,10 @@ impl Explorer {
         let Some(report) = &self.stack else {
             self.visible_rows = 0;
             ui.add_space(15.0);
-            ui.label("Build with -fstack-usage, then select a .su file or its build directory. Use reports from the same firmware build.");
+            ui.label("Build with -fstack-usage, then rescan the build folder and select firmware to load discovered reports automatically. Use reports from the same firmware build.");
             return;
         };
+        ui.small("Reports may span multiple targets. Expand a row for its report path; inspect analysis notes for matching limitations.");
         let rows = report
             .entries
             .iter()
@@ -470,9 +712,7 @@ impl Explorer {
                     ],
                     &[(1, c.flash_delta), (2, c.ram_delta)],
                     format!(
-                        "{}\n{}\nFlash: {} to {}\nRAM: {} to {}",
-                        c.identity,
-                        c.status,
+                        "Flash: {} to {}\nRAM: {} to {}",
                         bytes(c.old.flash),
                         bytes(c.new.flash),
                         bytes(c.old.ram),
@@ -494,6 +734,45 @@ impl Explorer {
             ],
             rows,
         );
+    }
+}
+/// Keep the end of a file path visible as its column is resized.
+fn path_tail(ui: &egui::Ui, path: &str) -> String {
+    let font = egui::TextStyle::Monospace.resolve(ui.style());
+    let width = ui.available_width();
+    let measure = |text: &str| {
+        ui.painter()
+            .layout_no_wrap(text.into(), font.clone(), ui.visuals().text_color())
+            .size()
+            .x
+    };
+    if measure(path) <= width {
+        return path.into();
+    }
+    // Search only UTF-8 boundaries, retaining the longest suffix that fits.
+    let boundaries: Vec<_> = path
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain(std::iter::once(path.len()))
+        .collect();
+    let mut low = 0;
+    let mut high = boundaries.len() - 1;
+    while low < high {
+        let middle = low + (high - low) / 2;
+        if measure(&format!("...{}", &path[boundaries[middle]..])) <= width {
+            high = middle;
+        } else {
+            low = middle + 1;
+        }
+    }
+    format!("...{}", &path[boundaries[low]..])
+}
+
+fn load_address(address: Option<u64>, load_size: u64) -> String {
+    match address {
+        Some(address) => format!("0x{address:08X}"),
+        None if load_size == 0 => "Not applicable (no load payload)".into(),
+        None => "Unknown (no matching load segment)".into(),
     }
 }
 fn classification(value: firmware_analysis_core::Classification) -> &'static str {

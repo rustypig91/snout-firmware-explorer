@@ -109,7 +109,8 @@ fn dwarf_functions_and_local_compilation_units_are_attributed_honestly() {
         .unwrap();
     assert!(local.compilation_unit.as_ref().unwrap().ends_with("diag.c"));
     let global = a.symbols.iter().find(|s| s.name == "initialized").unwrap();
-    assert!(global.source_file.is_none());
+    assert!(global.source_file.as_ref().unwrap().ends_with("main.c"));
+    assert_eq!(global.attribution, "DWARF variable definition");
     assert!(global.compilation_unit.is_none());
 }
 
@@ -131,6 +132,38 @@ fn all_aggregates_reconcile() {
     );
     assert!(a.symbols.iter().map(|s| s.usage.flash).sum::<u64>() <= a.totals.flash);
     assert!(a.unattributed.ram > 0);
+}
+
+#[test]
+fn dwarf_file_groups_merge_without_changing_memory_totals() {
+    let a = analyze(ELF);
+    assert_eq!(
+        a.files.len(),
+        3,
+        "Two source files plus unattributed storage"
+    );
+    for (name, flash, ram) in [("main.c", 164, 100), ("diag.c", 92, 4)] {
+        let files: Vec<_> = a.files.iter().filter(|f| f.path.ends_with(name)).collect();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].usage.flash, flash);
+        assert_eq!(files[0].usage.ram, ram);
+        assert!(files[0].path.contains("fixtures/src/"));
+    }
+    assert_eq!(a.totals.flash, 260);
+    assert_eq!(a.totals.ram, 232);
+    assert_eq!(a.unattributed.flash, 4);
+    assert_eq!(a.unattributed.ram, 128);
+    for name in [
+        "private_state",
+        "diagnostic_count",
+        "samples",
+        "baudrate_table",
+        "signature",
+    ] {
+        let symbol = a.symbols.iter().find(|s| s.name == name).unwrap();
+        assert!(symbol.source_file.is_some(), "{name}");
+        assert_eq!(symbol.attribution, "DWARF variable definition");
+    }
 }
 
 #[test]

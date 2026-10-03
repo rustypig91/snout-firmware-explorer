@@ -31,7 +31,7 @@ pub fn compare(old: &Analysis, new: &Analysis) -> Comparison {
     let files = |a: &Analysis| {
         let mut map = BTreeMap::new();
         for f in &a.files {
-            add(&mut map, format!("{} [{}]", f.path, f.attribution), f.usage);
+            add(&mut map, f.path.clone(), f.usage);
         }
         map
     };

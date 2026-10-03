@@ -13,7 +13,7 @@ pub(crate) fn attribute(
             &b.name,
         ))
     });
-    let mut files: BTreeMap<(String, String), FileUsage> = BTreeMap::new();
+    let mut files: BTreeMap<(String, bool), FileUsage> = BTreeMap::new();
     let mut owned = Usage::default();
     let mut overlaps = false;
     for section in sections {
@@ -37,13 +37,16 @@ pub(crate) fn attribute(
             if let Some(path) = path {
                 let path = path.replace('\\', "/");
                 let file = files
-                    .entry((path.clone(), symbol.attribution.clone()))
+                    .entry((path.clone(), symbol.source_file.is_some()))
                     .or_insert_with(|| FileUsage {
                         path,
                         attribution: symbol.attribution.clone(),
                         usage: Usage::default(),
                         symbol_count: 0,
                     });
+                if file.attribution != symbol.attribution {
+                    file.attribution = "Mixed source evidence (see symbols)".into();
+                }
                 file.usage.flash += symbol.usage.flash;
                 file.usage.ram += symbol.usage.ram;
                 file.symbol_count += 1;

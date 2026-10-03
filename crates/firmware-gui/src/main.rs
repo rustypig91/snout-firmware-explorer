@@ -3,6 +3,7 @@ mod shell;
 #[cfg(test)]
 mod tests;
 mod views;
+mod workspace;
 use eframe::egui;
 use firmware_analysis_core::{
     analyze_path,
@@ -49,7 +50,9 @@ impl View {
     }
 }
 enum Loaded {
-    Firmware(Analysis),
+    Firmware(Analysis, Option<StackReport>, Option<AnalysisOptions>),
+    Build(firmware_analysis_core::build::BuildFolder),
+    Text(PathBuf, String),
     Baseline(Comparison),
     Stack(StackReport),
     Config(AnalysisOptions, Option<Analysis>),
@@ -57,6 +60,10 @@ enum Loaded {
 type JobResult = Result<Loaded, String>;
 struct Explorer {
     analysis: Option<Arc<Analysis>>,
+    build: Option<Arc<firmware_analysis_core::build::BuildFolder>>,
+    artifact_search: String,
+    preview: Option<(PathBuf, String)>,
+    layout_override: Option<AnalysisOptions>,
     comparison: Option<Comparison>,
     stack: Option<StackReport>,
     options: AnalysisOptions,
@@ -64,12 +71,12 @@ struct Explorer {
     view: View,
     search: String,
     selected_file: Option<String>,
+    selected_region: Option<usize>,
     sort_column: usize,
     descending: bool,
     error: Option<String>,
     tree: bool,
     details: Option<(String, String)>,
-    show_details: bool,
     show_notes: bool,
     visible_rows: usize,
     kind_filter: String,
@@ -79,6 +86,10 @@ impl Default for Explorer {
     fn default() -> Self {
         Self {
             analysis: None,
+            build: None,
+            artifact_search: String::new(),
+            preview: None,
+            layout_override: None,
             comparison: None,
             stack: None,
             options: AnalysisOptions::default(),
@@ -86,12 +97,12 @@ impl Default for Explorer {
             view: View::Overview,
             search: String::new(),
             selected_file: None,
+            selected_region: None,
             sort_column: 1,
             descending: true,
             error: None,
             tree: false,
             details: None,
-            show_details: false,
             show_notes: false,
             visible_rows: 0,
             kind_filter: "All".into(),
@@ -112,11 +123,29 @@ impl Explorer {
         });
     }
     fn open(&mut self, path: PathBuf) {
-        let options = self.options.clone();
+        let Some(build) = self.build.clone() else {
+            return;
+        };
+        let layout = if self
+            .analysis
+            .as_ref()
+            .is_some_and(|a| std::path::Path::new(&a.path) != path)
+        {
+            None
+        } else {
+            self.layout_override.clone()
+        };
         self.job(move || {
-            analyze_path(path, &options)
-                .map(Loaded::Firmware)
-                .map_err(|e| e.to_string())
+            let mut analysis = firmware_analysis_core::build::analyze_build_firmware(&build, &path, layout.as_ref()).map_err(|e| e.to_string())?;
+            let reports = build.artifacts.iter().filter(|a| a.kind == firmware_analysis_core::build::ArtifactKind::StackUsage).map(|a| a.path.clone()).collect();
+            let stack = match firmware_analysis_core::stack::analyze_stack_files(&analysis, reports) {
+                Ok(mut report) => {
+                    report.warnings.push(format!("Reports discovered under {}. This folder may contain multiple targets or configurations; exact symbol-name matches do not prove build ownership.", build.root.display()));
+                    Some(report)
+                }
+                Err(e) => { analysis.warnings.push(format!("Stack reports could not be loaded: {e}")); None }
+            };
+            Ok(Loaded::Firmware(analysis, stack, layout))
         });
     }
     fn configure(&mut self, path: Option<PathBuf>) {
@@ -137,23 +166,19 @@ impl Explorer {
             Ok(Loaded::Config(options, analysis))
         });
     }
-    fn pick_elf(&mut self, baseline: bool) {
+    fn pick_baseline(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("ELF firmware", &["elf", "axf", "out"])
             .add_filter("All files", &["*"])
             .pick_file()
         {
-            if baseline {
-                if let Some(current) = self.analysis.clone() {
-                    let options = self.options.clone();
-                    self.job(move || {
-                        analyze_path(path, &options)
-                            .map(|old| Loaded::Baseline(compare(&old, &current)))
-                            .map_err(|e| e.to_string())
-                    });
-                }
-            } else {
-                self.open(path);
+            if let Some(current) = self.analysis.clone() {
+                let options = self.options.clone();
+                self.job(move || {
+                    analyze_path(path, &options)
+                        .map(|old| Loaded::Baseline(compare(&old, &current)))
+                        .map_err(|e| e.to_string())
+                });
             }
         }
     }
@@ -167,16 +192,6 @@ impl Explorer {
         };
         if let Some(path) = path {
             self.scan_stack(path);
-        }
-    }
-    fn scan_elf_folder(&mut self) {
-        if let Some(analysis) = &self.analysis {
-            let path = std::path::Path::new(&analysis.path);
-            let folder = path
-                .parent()
-                .filter(|p| !p.as_os_str().is_empty())
-                .unwrap_or_else(|| std::path::Path::new("."));
-            self.scan_stack(folder.to_owned());
         }
     }
     fn scan_stack(&mut self, path: PathBuf) {
@@ -193,11 +208,33 @@ impl Explorer {
             Some(Ok(result)) => {
                 self.receiver = None;
                 match result {
-                    Ok(Loaded::Firmware(a)) => {
-                        self.analysis = Some(Arc::new(a));
+                    Ok(Loaded::Build(build)) => {
+                        self.build = Some(Arc::new(build));
+                        self.analysis = None;
+                        self.preview = None;
+                        self.options = AnalysisOptions::default();
+                        self.layout_override = None;
                         self.comparison = None;
                         self.stack = None;
+                        self.details = None;
+                        self.selected_region = None;
                         self.selected_file = None;
+                        self.artifact_search.clear();
+                        self.search.clear();
+                        self.visible_rows = 0;
+                    }
+                    Ok(Loaded::Text(path, text)) => {
+                        self.preview = Some((path, text));
+                    }
+                    Ok(Loaded::Firmware(a, stack, layout)) => {
+                        self.layout_override = layout;
+                        self.options = a.options.clone();
+                        self.preview = None;
+                        self.analysis = Some(Arc::new(a));
+                        self.comparison = None;
+                        self.stack = stack;
+                        self.selected_file = None;
+                        self.selected_region = None;
                         self.search.clear();
                         self.details = None;
                         self.visible_rows = 0;
@@ -212,10 +249,12 @@ impl Explorer {
                     }
                     Ok(Loaded::Config(options, analysis)) => {
                         self.details = None;
+                        self.selected_region = None;
+                        self.layout_override = Some(options.clone());
                         self.options = options;
                         self.analysis = analysis.map(Arc::new);
+                        self.preview = None;
                         self.comparison = None;
-                        self.stack = None;
                     }
                     Err(error) => self.error = Some(error),
                 }
@@ -251,7 +290,7 @@ fn main() -> eframe::Result {
             shell::configure_style(&cc.egui_ctx);
             let mut app = Explorer::default();
             if let Some(path) = std::env::args_os().nth(1) {
-                app.open(path.into());
+                app.scan_build(path.into());
             }
             Ok(Box::new(app))
         }),
