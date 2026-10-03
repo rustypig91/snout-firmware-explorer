@@ -28,15 +28,19 @@ for variant, extra in [('cortex-m', 0), ('cortex-m-grown', 8)]:
         obj = build / f'{variant}-{source}.o'
         subprocess.run([compiler, *flags, f'-DEXTRA={extra}', '-c', f'fixtures/src/{source}.c', '-o', str(obj)], check=True)
         objects.append(str(obj))
-    output = root / f'{variant}.elf'
     if args.gcc:
-        command = [compiler, '-mcpu=cortex-m3', '-mthumb', '-nostdlib', '-Wl,--build-id=none', '-Wl,-T,fixtures/src/cortex-m.ld', *objects, '-o', str(output)]
+        command = [compiler, '-mcpu=cortex-m3', '-mthumb', '-nostdlib', '-Wl,--build-id=none', '-Wl,-T,fixtures/src/cortex-m.ld', *objects]
     else:
         linker = shutil.which('ld.lld') or str(Path(compiler).with_name('ld.lld.exe'))
-        command = [linker, '-T', 'fixtures/src/cortex-m.ld', '--build-id=none', *objects, '-o', str(output)]
-    subprocess.run(command, check=True)
+        command = [linker, '-T', 'fixtures/src/cortex-m.ld', '--build-id=none', *objects]
+    names = [variant, 'cortex-m-stripped'] if variant == 'cortex-m' else [variant]
+    for name in names:
+        mapfile = root / f'{name}.map'
+        map_flag = f'-Wl,-Map,{mapfile}' if args.gcc else f'-Map={mapfile}'
+        strip_flags = (['-Wl,--strip-all' if args.gcc else '--strip-all']
+                       if name == 'cortex-m-stripped' else [])
+        subprocess.run([*command, map_flag, *strip_flags, '-o', str(root / f'{name}.elf')], check=True)
     if variant == 'cortex-m':
-        subprocess.run([*command[:-1], str(root / 'cortex-m-stripped.elf'), '--strip-all' if not args.gcc else '-Wl,--strip-all'], check=True)
         for su in build.glob(f'{variant}-*.su'):
             shutil.copyfile(su, root / su.name)
-print('Generated ELF and compiler stack-usage fixtures.')
+print('Generated ELF, linker map, and compiler stack-usage fixtures.')

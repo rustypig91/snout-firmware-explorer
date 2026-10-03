@@ -4,6 +4,41 @@ use firmware_analysis_core::build::{
 use std::{fs, path::PathBuf};
 
 const MAP: &str = "Memory Configuration\n\nName             Origin             Length             Attributes\nFLASH            0x08000000         0x00040000         xr\nRAM              0x20000000         0x00010000         xrw\n*default*        0x00000000         0xffffffff\n\nLinker script and memory map\n";
+
+#[test]
+fn committed_fixtures_import_matching_map_capacities() {
+    let dir = Temp::new();
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+    for name in ["cortex-m", "cortex-m-grown", "cortex-m-stripped"] {
+        for extension in ["elf", "map"] {
+            let file = format!("{name}.{extension}");
+            fs::copy(fixtures.join(&file), dir.0.join(&file)).unwrap();
+        }
+    }
+    let build = scan_folder(&dir.0).unwrap();
+    for name in ["cortex-m", "cortex-m-grown", "cortex-m-stripped"] {
+        let firmware = build.root.join(format!("{name}.elf"));
+        assert_eq!(
+            build.matching_map(&firmware),
+            Some(build.root.join(format!("{name}.map")).as_path())
+        );
+        let report = analyze_build_firmware(&build, &firmware, None).unwrap();
+        let regions: Vec<_> = report
+            .options
+            .regions
+            .iter()
+            .map(|region| (region.name.as_str(), region.start, region.size))
+            .collect();
+        assert_eq!(
+            regions,
+            vec![
+                ("FLASH", 0x08000000, 256 * 1024),
+                ("RAM", 0x20000000, 64 * 1024)
+            ]
+        );
+    }
+}
+
 struct Temp(PathBuf);
 impl Temp {
     fn new() -> Self {
