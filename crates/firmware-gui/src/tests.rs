@@ -14,6 +14,46 @@ fn finish_job(app: &mut Explorer) {
 }
 
 #[test]
+fn map_rediscovery_commits_layout_only_after_successful_analysis() {
+    let mut app = Explorer::default();
+    app.scan_build(PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures"
+    )));
+    finish_job(&mut app);
+    let path = app.build.as_ref().unwrap().root.join("cortex-m.elf");
+    app.open(path.clone());
+    finish_job(&mut app);
+    app.configure(Some(PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/cortex-m-memory.json"
+    ))));
+    finish_job(&mut app);
+    assert!(app.error.is_none());
+    let expected = serde_json::to_value(&app.options).unwrap();
+    // Simulate firmware becoming unavailable during a rebuild.
+    Arc::make_mut(app.analysis.as_mut().unwrap()).path =
+        path.with_extension("missing").display().to_string();
+    app.discover_layout();
+    finish_job(&mut app);
+    assert!(app.error.is_some());
+    assert_eq!(
+        serde_json::to_value(&app.layout_override).unwrap(),
+        expected
+    );
+    assert_eq!(serde_json::to_value(&app.options).unwrap(), expected);
+    Arc::make_mut(app.analysis.as_mut().unwrap()).path = path.display().to_string();
+    app.discover_layout();
+    finish_job(&mut app);
+    assert!(app.error.is_none());
+    assert!(app.layout_override.is_none());
+    assert_eq!(
+        serde_json::to_value(&app.options).unwrap(),
+        serde_json::to_value(&app.analysis.as_ref().unwrap().options).unwrap()
+    );
+}
+
+#[test]
 fn folder_workflow_selects_firmware_and_loads_stack_automatically() {
     let mut app = Explorer::default();
     app.scan_build(PathBuf::from(concat!(

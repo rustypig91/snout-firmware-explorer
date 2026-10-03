@@ -101,6 +101,24 @@ mod tests {
     }
 
     #[test]
+    fn definition_does_not_inherit_a_line_from_another_source_file() {
+        let mut index = SourceIndex::default();
+        let mut owner = definition("function", 1, "/project/main.c");
+        owner.line = None;
+        index.definitions.insert((100, true), vec![owner]);
+        for (source, expected_line) in [("/project/header.h", None), ("/project/main.c", Some(42))]
+        {
+            let mut function = symbol("function", 100);
+            function.kind = "Function".into();
+            function.source_file = Some(source.into());
+            function.source_line = Some(42);
+            index.apply(std::slice::from_mut(&mut function), &[None]);
+            assert_eq!(function.source_file.as_deref(), Some("/project/main.c"));
+            assert_eq!(function.source_line, expected_line);
+        }
+    }
+
+    #[test]
     fn paths_are_resolved_independently_of_the_host_os() {
         assert_eq!(join("C:\\project", "src/main.c"), "C:/project/src/main.c");
         assert_eq!(join("/project", "./src/main.c"), "/project/src/main.c");
@@ -253,8 +271,14 @@ impl SourceIndex {
             }
             // Identical addresses can be aliases or folded code. Require one definition.
             if let [definition] = candidates.as_slice() {
+                // An address lookup may refer to a different file (for example,
+                // inlined code). Its line is only usable with that same file.
+                symbol.source_line = definition.line.or_else(|| {
+                    (symbol.source_file.as_deref() == Some(definition.source.as_str()))
+                        .then_some(symbol.source_line)
+                        .flatten()
+                });
                 symbol.source_file = Some(definition.source.clone());
-                symbol.source_line = definition.line.or(symbol.source_line);
                 symbol.attribution = if function {
                     "DWARF function definition"
                 } else {

@@ -81,7 +81,7 @@ ELF metadata does not conclusively identify physical memory technology. Writable
 
 ### Attribution and uncertainty
 
-- Function source paths and lines come from DWARF address lookup. This is the function's location, not byte-by-byte ownership of inlined code.
+- Function source paths and lines come from DWARF address lookup, refined by definitions matching the symbol name and address. Supported variable definitions also supply source ownership. This is symbol-level attribution, not byte-by-byte ownership of inlined code.
 - Local symbols can fall back to ELF `STT_FILE` compilation-unit labels. These are **not proven object-file paths**. Global symbols are not assigned to whichever file label happened to precede them.
 - File totals include an explicit **unattributed** bucket for unknown owners, padding, reservations and uncovered bytes. File/tree totals reconcile with the overview.
 - Symbol sizes remain the ELF values. Zero-sized labels do not acquire guessed sizes. Overlapping symbols/weak aliases share unique memory contributions, assigned once in section/address/name order. File attribution can consequently depend on which alias owns shared bytes.
@@ -103,7 +103,7 @@ Windows tests and builds were run locally. CI is configured for Windows and Linu
 
 This is the first implementation milestone, not a claim of universal firmware support.
 
-1. **Attribution:** add DWARF variable DIE attribution and GNU linker MAP object/archive ownership. Map import currently reads region capacities only. Currently global variables without a local compilation-unit label remain unattributed. Compressed and split/external DWARF are not supported.
+1. **Attribution:** extend DWARF definition support and add GNU linker MAP object/archive ownership. Map import currently reads region capacities only. Variable attribution supports direct address expressions; location lists, TLS, complex expressions and definitions requiring reference resolution remain unsupported. Global variables without a matching supported definition remain unattributed. Compressed and split/external DWARF are not supported.
 2. **Memory layouts:** add saved target profiles, explicit unknown memory roles, overlay policies and segment-only fallback. Relocatable objects, overlapping allocated/load ranges, TLS and sectionless ELFs currently return clear unsupported errors. HEX/BIN analysis and standalone MAP symbol/section analysis are not supported. Dynamic-symbol-only attribution is not yet implemented.
 3. **Comparisons:** normalize source roots across build machines, improve duplicate/renamed symbol matching and introduce simple CI budgets. Matching currently uses file label, section and mangled symbol name, with duplicate identities aggregated. Differences in attribution or debug availability can affect per-file/symbol deltas.
 4. **Stack:** import evidenced call graphs and represent recursion, indirect calls, assembly, interrupts and missing data before estimating call chains. The model reserves these uncertainty categories. CFA/disassembly, RTOS task stacks and runtime high-water marks are later inputs.

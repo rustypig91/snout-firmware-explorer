@@ -123,9 +123,6 @@ impl Explorer {
         });
     }
     fn open(&mut self, path: PathBuf) {
-        let Some(build) = self.build.clone() else {
-            return;
-        };
         let layout = if self
             .analysis
             .as_ref()
@@ -134,6 +131,20 @@ impl Explorer {
             None
         } else {
             self.layout_override.clone()
+        };
+        self.open_with_layout(path, layout);
+    }
+    fn discover_layout(&mut self) {
+        if let Some(a) = &self.analysis {
+            self.open_with_layout(PathBuf::from(&a.path), None);
+        } else {
+            self.layout_override = None;
+            self.options = AnalysisOptions::default();
+        }
+    }
+    fn open_with_layout(&mut self, path: PathBuf, layout: Option<AnalysisOptions>) {
+        let Some(build) = self.build.clone() else {
+            return;
         };
         self.job(move || {
             let mut analysis = firmware_analysis_core::build::analyze_build_firmware(&build, &path, layout.as_ref()).map_err(|e| e.to_string())?;

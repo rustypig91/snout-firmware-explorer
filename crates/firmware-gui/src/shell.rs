@@ -1,6 +1,5 @@
 use super::{egui, Explorer, View};
 use firmware_analysis_core::format_bytes as bytes;
-use std::path::PathBuf;
 
 pub(super) fn configure_style(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
@@ -107,10 +106,7 @@ impl Explorer {
                                 ui.close_menu();
                             }
                             if ui.button("Discover layout from matching map").clicked() {
-                                self.layout_override = None;
-                                if let Some(a) = &self.analysis {
-                                    self.open(PathBuf::from(&a.path));
-                                }
+                                self.discover_layout();
                                 ui.close_menu();
                             }
                             if ui.button("Use ELF inference").clicked() {

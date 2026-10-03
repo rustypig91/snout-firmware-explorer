@@ -254,12 +254,11 @@ pub fn analyze_bytes(
                 .unwrap_or(&[]);
             Ok(gimli::EndianSlice::new(data, endian))
         });
-        let dwarf = dwarf.map(|dwarf| {
-            match crate::dwarf::SourceIndex::read(&dwarf, elf.header.e_machine == header::EM_ARM) {
+        let dwarf = dwarf.inspect(|dwarf| {
+            match crate::dwarf::SourceIndex::read(dwarf, elf.header.e_machine == header::EM_ARM) {
                 Ok(index) => source_index = index,
                 Err(e) => warnings.push(format!("DWARF source ownership unavailable: {e}")),
             }
-            dwarf
         });
         match dwarf.and_then(addr2line::Context::from_dwarf) {
             Ok(context) => Some(context),
