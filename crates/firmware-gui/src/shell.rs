@@ -69,6 +69,11 @@ impl Explorer {
             self.details = None;
             self.show_notes = false;
         }
+        if self.view == View::Overview
+            && ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Extra1))
+        {
+            self.overview_back();
+        }
         egui::TopBottomPanel::top("workbench_header").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Rusty's Snout").strong());

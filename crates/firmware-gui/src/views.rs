@@ -309,58 +309,7 @@ impl Explorer {
             ui.weak(format!("Unattributed: {} Flash / {} RAM", bytes(a.unattributed.flash), bytes(a.unattributed.ram))).on_hover_text("Unknown file owners, padding and reservations. File totals still reconcile with the overview.");
         });
         ui.separator();
-        ui.horizontal(|ui| {
-            ui.strong("ALLOCATED SECTIONS");
-            if ui.small_button("Files").clicked() { self.change_view(View::Files); }
-            if ui.small_button("Symbols").clicked() { self.change_view(View::Symbols); }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label("?").on_hover_text("Initialized variables need RAM while running and initial values in Flash. No-payload storage such as BSS needs RAM only. Select a row to inspect its evidence.");
-            });
-        });
-        let rows = a
-            .sections
-            .iter()
-            .filter(|s| s.allocated)
-            .map(|s| {
-                Row::new(
-                    vec![
-                        s.name.clone(),
-                        bytes(s.usage.flash),
-                        bytes(s.usage.ram),
-                        bytes(s.load_size),
-                        bytes(s.runtime_size),
-                        classification(s.classification).into(),
-                    ],
-                    &[
-                        (1, s.usage.flash.into()),
-                        (2, s.usage.ram.into()),
-                        (3, s.load_size.into()),
-                        (4, s.runtime_size.into()),
-                    ],
-                    format!(
-                        "Run address: {:#010x}\nLoad address: {}\n{}",
-                        s.address,
-                        load_address(s.load_address, s.load_size),
-                        s.evidence
-                    ),
-                )
-            })
-            .collect();
-        self.table(
-            ui,
-            &[
-                ("Section", "Allocated sections; click a row for details"),
-                ("Flash", FLASH_HELP),
-                ("RAM", RAM_HELP),
-                ("Load", "Bytes stored in the image"),
-                ("Runtime", "Bytes present while executing"),
-                (
-                    "Role",
-                    "Memory role inferred from ELF attributes or configured regions",
-                ),
-            ],
-            rows,
-        );
+        self.overview_pie(ui, a);
     }
     pub(super) fn directory_tree(&mut self, ui: &mut egui::Ui, a: &Analysis) {
         let mut selected = None;

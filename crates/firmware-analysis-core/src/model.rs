@@ -80,6 +80,9 @@ pub struct Symbol {
     pub source_line: Option<u32>,
     /// STT_FILE is a compilation-unit label, not proof of an object-file path.
     pub compilation_unit: Option<String>,
+    /// DWARF compilation-unit path established by an unambiguous definition or ELF group link.
+    #[serde(default)]
+    pub dwarf_compilation_unit: Option<String>,
     pub attribution: String,
     /// Unique owned bytes; aliases/overlapping symbols do not double count.
     pub usage: Usage,

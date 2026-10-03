@@ -384,6 +384,7 @@ pub fn analyze_bytes(
             source_file,
             source_line,
             compilation_unit: unit,
+            dwarf_compilation_unit: None,
             attribution,
             usage: Usage::default(),
         });

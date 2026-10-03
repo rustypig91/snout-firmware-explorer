@@ -1,4 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+mod pie;
 mod shell;
 #[cfg(test)]
 mod tests;
@@ -72,6 +73,8 @@ struct Explorer {
     search: String,
     selected_file: Option<String>,
     selected_region: Option<usize>,
+    overview_section: Option<usize>,
+    overview_unit: Option<pie::UnitKey>,
     sort_column: usize,
     descending: bool,
     error: Option<String>,
@@ -98,6 +101,8 @@ impl Default for Explorer {
             search: String::new(),
             selected_file: None,
             selected_region: None,
+            overview_section: None,
+            overview_unit: None,
             sort_column: 1,
             descending: true,
             error: None,
@@ -229,6 +234,8 @@ impl Explorer {
                         self.stack = None;
                         self.details = None;
                         self.selected_region = None;
+                        self.overview_section = None;
+                        self.overview_unit = None;
                         self.selected_file = None;
                         self.artifact_search.clear();
                         self.search.clear();
@@ -246,6 +253,8 @@ impl Explorer {
                         self.stack = stack;
                         self.selected_file = None;
                         self.selected_region = None;
+                        self.overview_section = None;
+                        self.overview_unit = None;
                         self.search.clear();
                         self.details = None;
                         self.visible_rows = 0;
@@ -261,6 +270,8 @@ impl Explorer {
                     Ok(Loaded::Config(options, analysis)) => {
                         self.details = None;
                         self.selected_region = None;
+                        self.overview_section = None;
+                        self.overview_unit = None;
                         self.layout_override = Some(options.clone());
                         self.options = options;
                         self.analysis = analysis.map(Arc::new);

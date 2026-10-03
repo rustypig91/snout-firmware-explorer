@@ -30,6 +30,7 @@ mod tests {
             source_file: None,
             source_line: None,
             compilation_unit: Some("main.c".into()),
+            dwarf_compilation_unit: None,
             attribution: "ELF compilation-unit label (not an object path)".into(),
             usage: Default::default(),
         }
@@ -68,6 +69,15 @@ mod tests {
         );
         assert_eq!(symbols[1].source_file.as_deref(), Some("/one/main.c"));
         assert_eq!(symbols[3].source_file.as_deref(), Some("/two/main.c"));
+        assert_eq!(
+            symbols[1].dwarf_compilation_unit.as_deref(),
+            Some("/one/main.c")
+        );
+        assert_eq!(
+            symbols[3].dwarf_compilation_unit.as_deref(),
+            Some("/two/main.c")
+        );
+        assert!(symbols[4].dwarf_compilation_unit.is_none());
         assert!(symbols[4].source_file.is_none());
         assert!(symbols[5].source_file.is_none());
     }
@@ -115,6 +125,10 @@ mod tests {
             index.apply(std::slice::from_mut(&mut function), &[None]);
             assert_eq!(function.source_file.as_deref(), Some("/project/main.c"));
             assert_eq!(function.source_line, expected_line);
+            assert_eq!(
+                function.dwarf_compilation_unit.as_deref(),
+                Some("/project/main.c")
+            );
         }
     }
 
@@ -278,6 +292,7 @@ impl SourceIndex {
                         .then_some(symbol.source_line)
                         .flatten()
                 });
+                symbol.dwarf_compilation_unit = Some(definition.unit_path.clone());
                 symbol.source_file = Some(definition.source.clone());
                 symbol.attribution = if function {
                     "DWARF function definition"
@@ -294,7 +309,7 @@ impl SourceIndex {
             }
         }
         for (symbol, group) in symbols.iter_mut().zip(groups) {
-            if symbol.source_file.is_some() {
+            if symbol.dwarf_compilation_unit.is_some() {
                 continue;
             }
             let Some(link) = group
@@ -304,6 +319,10 @@ impl SourceIndex {
             else {
                 continue;
             };
+            symbol.dwarf_compilation_unit = Some(link.1.clone());
+            if symbol.source_file.is_some() {
+                continue;
+            }
             symbol.source_file = Some(link.1.clone());
             symbol.attribution = "DWARF compilation unit linked by symbol name and address".into();
         }

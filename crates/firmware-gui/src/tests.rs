@@ -623,3 +623,54 @@ fn configured_region_symbols_render_and_search() {
         }
     }
 }
+
+#[test]
+fn overview_mouse_back_returns_from_section_to_root() {
+    let analysis = analyze_path(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/cortex-m.elf"),
+        &AnalysisOptions::default(),
+    )
+    .unwrap();
+    let section = analysis
+        .sections
+        .iter()
+        .find(|s| s.allocated && s.size > 0)
+        .unwrap()
+        .index;
+    let mut app = Explorer {
+        analysis: Some(Arc::new(analysis)),
+        overview_section: Some(section),
+        overview_unit: Some(pie::UnitKey::Other),
+        ..Default::default()
+    };
+    let ctx = egui::Context::default();
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1280.0, 820.0),
+        )),
+        ..Default::default()
+    };
+    let output = ctx.run(input.clone(), |ctx| app.show(ctx));
+    assert!(!output.shapes.is_empty());
+    assert_eq!(app.overview_section, Some(section));
+    let mut back = input;
+    back.events.push(egui::Event::PointerButton {
+        pos: egui::pos2(600.0, 400.0),
+        button: egui::PointerButton::Extra1,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    let _ = ctx.run(back.clone(), |ctx| app.show(ctx));
+    assert_eq!(app.overview_section, Some(section));
+    assert_eq!(app.overview_unit, None);
+    if let egui::Event::PointerButton { pressed, .. } = &mut back.events[0] {
+        *pressed = false;
+    }
+    let _ = ctx.run(back.clone(), |ctx| app.show(ctx));
+    if let egui::Event::PointerButton { pressed, .. } = &mut back.events[0] {
+        *pressed = true;
+    }
+    let _ = ctx.run(back, |ctx| app.show(ctx));
+    assert_eq!(app.overview_section, None);
+}
