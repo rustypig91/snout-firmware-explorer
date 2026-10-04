@@ -46,8 +46,9 @@ for ((attempt = 0; attempt < 150; attempt++)); do
     echo "Application exited before capture" >&2
     exit 1
   fi
+  # The workspace path is prepended to the title after the folder scan.
   window_id=$(xdotool search --all --onlyvisible --pid "$app_pid" \
-    --name "^Rusty's Snout - Firmware Explorer" 2>/dev/null | head -n 1 || true)
+    --name "Rusty's Snout - Firmware Explorer$" 2>/dev/null | head -n 1 || true)
   if [[ -n $window_id ]]; then
     break
   fi
@@ -55,6 +56,9 @@ for ((attempt = 0; attempt < 150; attempt++)); do
 done
 if [[ -z $window_id ]]; then
   echo "Timed out waiting for the application window" >&2
+  # Show the titles we actually saw to make future matching failures actionable.
+  xdotool search --onlyvisible --pid "$app_pid" \
+    getwindowname %@ >&2 || true
   exit 1
 fi
 
