@@ -92,7 +92,10 @@ pub(super) fn compute(input: &LayoutInput) -> GraphLayout {
             for node in &nodes {
                 lane_right.insert(node.id.as_str(), x + width);
             }
-            headings.push((directory.to_owned(), egui::pos2(x + width / 2.0, -30.0)));
+            headings.push((
+                super::short_path(directory, input.nodes.iter().map(|n| n.directory.as_str())),
+                egui::pos2(x + width / 2.0, -30.0),
+            ));
             let mut y = 0.0;
             for node in nodes {
                 vg.element_mut(handles[&node.id]).move_to(Point::new(
@@ -197,10 +200,9 @@ pub(super) fn compute(input: &LayoutInput) -> GraphLayout {
         }
     }
     for (label, center) in &headings {
-        let displayed = super::short_path(label, []);
         bounds = bounds.union(egui::Rect::from_center_size(
             *center,
-            egui::vec2(displayed.chars().count() as f32 * 8.0, 24.0),
+            egui::vec2(label.chars().count() as f32 * 8.0, 24.0),
         ));
     }
     GraphLayout {
@@ -388,6 +390,23 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn directory_headings_distinguish_matching_suffixes() {
+        let mut input = input();
+        input.grouped = true;
+        input.nodes.truncate(2);
+        input.edges.truncate(1);
+        input.nodes[0].directory = "project-a/src/drivers".into();
+        input.nodes[1].directory = "project-b/src/drivers".into();
+        let geometry = compute(&input);
+        let labels: Vec<_> = geometry
+            .headings
+            .iter()
+            .map(|(label, _)| label.as_str())
+            .collect();
+        assert_eq!(labels, ["project-a/src/drivers", "project-b/src/drivers"]);
     }
 
     #[test]

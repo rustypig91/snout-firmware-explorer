@@ -30,6 +30,15 @@ impl Default for GraphView {
     }
 }
 
+fn node_directory(label: &str) -> String {
+    let normalized = label.replace('\\', "/");
+    normalized
+        .rsplit_once('/')
+        .map(|(directory, _)| directory)
+        .unwrap_or("[no directory]")
+        .into()
+}
+
 fn visible_nodes<'a>(
     graph: &'a DependencyGraph,
     state: &GraphView,
@@ -264,12 +273,7 @@ impl Explorer {
                         .unwrap_or(0);
                     NodeSpec {
                         id: node.id.clone(),
-                        directory: node
-                            .label
-                            .rsplit_once('/')
-                            .map(|p| p.0)
-                            .unwrap_or("[no directory]")
-                            .into(),
+                        directory: node_directory(&node.label),
                         size: graph_layout::card_size(minimum, bytes, maximum),
                     }
                 })
@@ -416,7 +420,7 @@ impl Explorer {
             painter.text(
                 screen(*pos),
                 egui::Align2::CENTER_CENTER,
-                short_path(label, []),
+                label,
                 egui::FontId::proportional((14.0 * scale).max(1.0)),
                 ui.visuals().text_color(),
             );
@@ -462,6 +466,20 @@ impl Explorer {
 mod tests {
     use super::*;
     use firmware_analysis_core::dependencies::{DependencyEdge, DependencyNode};
+
+    #[test]
+    fn directory_grouping_accepts_debug_paths_from_either_platform() {
+        assert_eq!(
+            node_directory(r"C:\project\drivers\spi.c"),
+            "C:/project/drivers"
+        );
+        assert_eq!(
+            node_directory("C:/project/drivers/spi.c"),
+            "C:/project/drivers"
+        );
+        assert_eq!(node_directory(r"drivers\spi.c"), "drivers");
+        assert_eq!(node_directory("spi.c"), "[no directory]");
+    }
 
     fn graph() -> DependencyGraph {
         DependencyGraph {
