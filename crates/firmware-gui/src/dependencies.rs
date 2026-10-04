@@ -32,6 +32,13 @@ impl Default for GraphView {
     }
 }
 
+impl GraphView {
+    fn select_edge(&mut self, from: &str, to: &str) {
+        self.selected = None;
+        self.edge = Some((from.into(), to.into()));
+    }
+}
+
 fn node_directory(label: &str) -> String {
     let normalized = label.replace('\\', "/");
     normalized
@@ -214,7 +221,7 @@ impl Explorer {
                                     let peer = if outgoing { &edge.to } else { &edge.from };
                                     if let Some(node) = graph.nodes.iter().find(|n| &n.id == peer) {
                                         if ui.button(format!("{} ({} symbols)", short_path(&node.label, []), edge.symbols.len())).on_hover_text(&node.label).clicked() {
-                                            self.graph_view.edge = Some((edge.from.clone(), edge.to.clone()));
+                                            self.graph_view.select_edge(&edge.from, &edge.to);
                                         }
                                     }
                                 }
@@ -485,7 +492,7 @@ impl Explorer {
                 edge.symbols.join("\n")
             ));
             if response.clicked() {
-                self.graph_view.edge = Some((edge.from.clone(), edge.to.clone()));
+                self.graph_view.select_edge(&edge.from, &edge.to);
             }
         }
     }
@@ -733,6 +740,26 @@ mod tests {
         };
         click(&mut app, cards[0]);
         assert_eq!(app.graph_view.selected.as_deref(), Some("app/main.c"));
+        let selected_output = frame(&mut app, vec![]);
+        let connection = selected_output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "drivers/spi.c (1 symbols)" => {
+                    Some(text.pos + text.galley.size() / 2.0)
+                }
+                _ => None,
+            })
+            .unwrap();
+        click(&mut app, connection);
+        assert!(app.graph_view.selected.is_none());
+        assert_eq!(
+            app.graph_view.edge,
+            Some(("app/main.c".into(), "drivers/spi.c".into()))
+        );
+        click(&mut app, cards[0]);
+        assert_eq!(app.graph_view.selected.as_deref(), Some("app/main.c"));
+        assert!(app.graph_view.edge.is_none());
         let arrow = output
             .shapes
             .iter()
@@ -744,12 +771,26 @@ mod tests {
             })
             .unwrap();
         click(&mut app, arrow);
+        assert!(app.graph_view.selected.is_none());
         assert_eq!(
             app.graph_view.edge,
             Some(("app/main.c".into(), "drivers/spi.c".into()))
         );
         let output = frame(&mut app, vec![]);
+        assert_eq!(
+            output
+                .shapes
+                .iter()
+                .filter(|shape| matches!(&shape.shape,
+                    egui::Shape::Rect(card) if card.fill == egui::Color32::from_rgb(40, 100, 140)
+                ))
+                .count(),
+            3
+        );
         assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "spi_transfer")));
+        click(&mut app, cards[0]);
+        assert_eq!(app.graph_view.selected.as_deref(), Some("app/main.c"));
+        assert!(app.graph_view.edge.is_none());
         frame(
             &mut app,
             vec![
@@ -790,8 +831,26 @@ mod tests {
             3
         );
         app.graph_view.focused = true;
-        frame(&mut app, vec![]);
+        let focused_output = frame(&mut app, vec![]);
         assert_eq!(app.visible_rows, 2);
+        let focused_arrow = focused_output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Path(path) if !path.closed && path.points.len() > 3 => {
+                    Some(path.points[path.points.len() / 2])
+                }
+                _ => None,
+            })
+            .unwrap();
+        click(&mut app, focused_arrow);
+        assert!(app.graph_view.selected.is_none());
+        assert_eq!(
+            app.graph_view.edge,
+            Some(("app/main.c".into(), "drivers/spi.c".into()))
+        );
+        frame(&mut app, vec![]);
+        assert_eq!(app.visible_rows, 3);
         app.graph_view.focused = false;
         app.search = "spi.c".into();
         frame(&mut app, vec![]);
