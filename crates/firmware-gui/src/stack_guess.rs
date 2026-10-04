@@ -75,10 +75,21 @@ pub(super) fn guess(analysis: &Analysis, build: &BuildFolder) -> Result<LoadedSt
         // Keep directory components and require a unique suffix match when the
         // map uses paths from a different build location. A suffix alone cannot
         // override evidence that a report belongs to another configuration.
-        let suffix_matches: Vec<_> = fallback_paths
+        let mut suffix_matches: Vec<_> = fallback_paths
             .iter()
             .filter(|path| object.components().count() > 1 && path.ends_with(&object))
             .collect();
+        // Resolve configuration proximity before uniqueness: a leftover copy
+        // from a cleaned build must not veto the current build's map evidence.
+        if let Some(parent) = firmware.parent() {
+            if let Some(depth) = suffix_matches
+                .iter()
+                .map(|path| common_depth(parent, path))
+                .max()
+            {
+                suffix_matches.retain(|path| common_depth(parent, path) == depth);
+            }
+        }
         if suffix_matches.len() == 1 {
             relocated_matches.insert(suffix_matches[0].clone());
         }
@@ -526,6 +537,42 @@ mod tests {
         assert!(!selection.contains(&other));
         assert_eq!(stack.entries.len(), 1);
         assert_eq!(stack.entries[0].local_bytes, 56);
+    }
+
+    #[test]
+    fn relocated_map_suffix_prefers_current_configuration_before_checking_uniqueness() {
+        let (_dir, root, mut analysis) = setup();
+        let elf = root.join("release/bin/app.elf");
+        std::fs::create_dir_all(elf.parent().unwrap()).unwrap();
+        std::fs::rename(&analysis.path, &elf).unwrap();
+        analysis.path = elf.display().to_string();
+        let map = root.join("release/app.map");
+        std::fs::write(
+            &map,
+            "Linker script and memory map\nLOAD objects/unknown.o\n",
+        )
+        .unwrap();
+        analysis.dependencies.map_path = Some(map.display().to_string());
+        let chosen = root.join("release/relocated/objects/unknown.su");
+        let other = root.join("debug/relocated/objects/unknown.su");
+        for path in [&chosen, &other] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            // Optimized-out functions cannot rescue a rejected map guess.
+            std::fs::write(path, "unknown.c:1:1:optimized_out\t24\tstatic\n").unwrap();
+        }
+        let (stack, selection) = guess(&analysis, &scan_folder(&root).unwrap()).unwrap();
+        let selection = selection.expect("map provenance should select the release report");
+        assert!(selection.contains(&chosen));
+        assert!(!selection.contains(&other));
+        assert_eq!(stack.entries.len(), 1);
+
+        // Equally close relocated copies still require manual selection.
+        let duplicate = root.join("release/another/objects/unknown.su");
+        std::fs::create_dir_all(duplicate.parent().unwrap()).unwrap();
+        std::fs::copy(&chosen, duplicate).unwrap();
+        let (stack, selection) = guess(&analysis, &scan_folder(&root).unwrap()).unwrap();
+        assert!(selection.is_none());
+        assert!(stack.entries.is_empty());
     }
 
     #[test]
