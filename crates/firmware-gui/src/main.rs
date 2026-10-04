@@ -263,7 +263,7 @@ impl Explorer {
         });
     }
     fn configure(&mut self, path: Option<PathBuf>) {
-        let dependency_map = self.active_dependency_map();
+        let dependency_map = self.dependency_map_for_reload();
         let current_path = self.analysis.as_ref().map(|a| a.path.clone());
         self.job(move || {
             let source = path

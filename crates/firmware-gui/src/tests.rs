@@ -1631,6 +1631,23 @@ fn dependency_map_choices_survive_refresh_restart_and_failed_import() {
         .notes
         .iter()
         .any(|n| n.contains("manual.map")));
+    restored.configure(None);
+    finish_job(&mut restored);
+    assert!(restored
+        .analysis
+        .as_ref()
+        .unwrap()
+        .dependencies
+        .notes
+        .iter()
+        .any(|n| n.contains("manual.map")));
+    std::fs::write(&map, table).unwrap();
+    restored.configure(None);
+    finish_job(&mut restored);
+    assert_eq!(
+        restored.analysis.as_ref().unwrap().dependencies.edges.len(),
+        1
+    );
     assert_eq!(restored.saved_dependency_map(&firmware), Some(map));
     restored.reset_build_settings();
     finish_job(&mut restored);

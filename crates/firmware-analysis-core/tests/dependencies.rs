@@ -213,3 +213,17 @@ fn weak_aliases_use_exact_function_ranges_and_reject_conflicting_owners() {
         .usage
         .is_none());
 }
+
+#[test]
+fn long_symbols_preserve_defining_paths_with_repeated_spaces() {
+    let symbol = "a_very_long_raw_mangled_symbol_name_that_exceeds_the_linker_column_width";
+    let object = "build  directory/main.o";
+    let text = format!("Cross Reference Table\nSymbol File\n{symbol} {object}\n  other.o\n");
+    let graph = from_map(&fixture(), &text, "spaces.map").unwrap();
+    assert!(graph
+        .nodes
+        .iter()
+        .any(|n| n.id == format!("object:{object}")));
+    assert_eq!(graph.edges[0].to, format!("object:{object}"));
+    assert_eq!(graph.edges[0].symbols, [symbol]);
+}

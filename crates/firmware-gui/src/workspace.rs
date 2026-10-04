@@ -76,13 +76,19 @@ impl Explorer {
             .get(firmware)
             .cloned()
     }
-    pub(super) fn active_dependency_map(&self) -> Option<PathBuf> {
-        self.analysis
-            .as_ref()?
-            .dependencies
-            .map_path
-            .as_ref()
-            .map(PathBuf::from)
+    pub(super) fn dependency_map_for_reload(&self) -> Option<PathBuf> {
+        let analysis = self.analysis.as_ref()?;
+        let firmware = std::path::Path::new(&analysis.path);
+        // A failed read clears map_path, but the selected map must still be
+        // retried when changing memory layouts, just as it is on refresh.
+        self.saved_dependency_map(firmware)
+            .or_else(|| analysis.dependencies.map_path.as_ref().map(PathBuf::from))
+            .or_else(|| {
+                self.build
+                    .as_ref()?
+                    .matching_map(firmware)
+                    .map(PathBuf::from)
+            })
     }
     pub(super) fn apply_dependency_map(&mut self, path: PathBuf) {
         let Some(analysis) = self.analysis.clone() else {
@@ -175,7 +181,7 @@ impl Explorer {
         });
     }
     pub(super) fn apply_map(&mut self, path: PathBuf) {
-        let dependency_map = self.active_dependency_map();
+        let dependency_map = self.dependency_map_for_reload();
         let current_path = self.analysis.as_ref().map(|a| a.path.clone());
         self.job(move || {
             let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;

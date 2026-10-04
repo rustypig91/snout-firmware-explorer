@@ -123,10 +123,10 @@ fn references(text: &str) -> Result<Vec<Reference>, String> {
                 .ok_or("Reference without a defining symbol")?;
             entry.users.insert(line.trim().replace('\\', "/"));
         } else {
-            // GNU ld pads symbols to a minimum width. Long raw symbols have one separator.
+            // Raw symbols contain no whitespace. Split at their first separator,
+            // since long symbols use a single space and paths may contain repeated spaces.
             let split = line
-                .find("  ")
-                .or_else(|| line.find(char::is_whitespace))
+                .find(char::is_whitespace)
                 .ok_or("Cross-reference symbol has no defining file")?;
             let symbol = line[..split].trim();
             let definition = line[split..].trim();
