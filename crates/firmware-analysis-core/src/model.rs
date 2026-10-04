@@ -78,6 +78,9 @@ pub struct Symbol {
     pub section: String,
     pub kind: String,
     pub weak: bool,
+    /// Local ELF symbols do not participate in GNU ld cross references.
+    #[serde(default)]
+    pub local: bool,
     pub source_file: Option<String>,
     pub source_line: Option<u32>,
     /// STT_FILE is a compilation-unit label, not proof of an object-file path.

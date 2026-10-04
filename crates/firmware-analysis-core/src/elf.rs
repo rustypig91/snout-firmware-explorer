@@ -405,6 +405,7 @@ pub fn analyze_bytes(
             }
             .into(),
             weak: raw.st_bind() == sym::STB_WEAK,
+            local: raw.st_bind() == sym::STB_LOCAL,
             source_file,
             source_line,
             compilation_unit: unit,

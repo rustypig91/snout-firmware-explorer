@@ -227,3 +227,43 @@ fn long_symbols_preserve_defining_paths_with_repeated_spaces() {
     assert_eq!(graph.edges[0].to, format!("object:{object}"));
     assert_eq!(graph.edges[0].symbols, [symbol]);
 }
+
+#[test]
+fn local_symbols_cannot_establish_cross_reference_object_ownership() {
+    let analysis = fixture();
+    let local = analysis
+        .symbols
+        .iter()
+        .find(|s| s.name == "private_state")
+        .unwrap();
+    assert!(local.local);
+    let text = "Cross Reference Table\nSymbol File\nprivate_state external.o\n  caller.o\n";
+    let graph = from_map(&analysis, text, "locals.map").unwrap();
+    assert!(graph
+        .nodes
+        .iter()
+        .any(|n| n.id == "object:external.o" && n.usage.is_none()));
+    assert_eq!(graph.edges[0].to, "object:external.o");
+}
+
+#[test]
+fn local_name_collision_does_not_make_global_definition_ambiguous() {
+    let mut analysis = fixture();
+    let mut local = analysis
+        .symbols
+        .iter()
+        .find(|s| s.name == "diagnose")
+        .unwrap()
+        .clone();
+    assert!(!local.local);
+    local.local = true;
+    local.dwarf_compilation_unit = Some("other/unit.c".into());
+    analysis.symbols.push(local);
+    let graph = from_map(&analysis, MAP, "locals.map").unwrap();
+    let diag = graph
+        .nodes
+        .iter()
+        .find(|n| n.label.ends_with("/diag.c"))
+        .unwrap();
+    assert_eq!(diag.objects, ["lib/diagnostics.a(diag.o)"]);
+}

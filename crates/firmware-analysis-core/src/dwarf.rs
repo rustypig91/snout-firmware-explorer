@@ -27,6 +27,7 @@ mod tests {
             section: ".data".into(),
             kind: "Global".into(),
             weak: false,
+            local: true,
             source_file: None,
             source_line: None,
             compilation_unit: Some("main.c".into()),

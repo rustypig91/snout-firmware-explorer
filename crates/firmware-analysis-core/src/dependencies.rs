@@ -153,6 +153,11 @@ pub fn from_map(analysis: &Analysis, text: &str, path: &str) -> Result<Dependenc
     graph.notes.push("Arrows mean linker symbol references, including data and function addresses; they are not a function call graph. Cross references may include discarded code. Map matching is not proof of build ownership.".into());
     let mut definitions: BTreeMap<&str, BTreeSet<Option<String>>> = BTreeMap::new();
     for (symbol, owner) in analysis.symbols.iter().zip(resolved_owners(analysis)) {
+        // --cref reports global symbols only. Static symbols with the same
+        // name belong to a different namespace and cannot establish ownership.
+        if symbol.local {
+            continue;
+        }
         definitions
             .entry(&symbol.name)
             .or_default()
