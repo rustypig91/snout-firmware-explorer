@@ -125,7 +125,37 @@ pub(super) fn guess(analysis: &Analysis, build: &BuildFolder) -> Result<LoadedSt
         .as_ref()
         .map(|(paths, _)| paths.clone())
         .unwrap_or_else(|| fallback_paths.clone());
-    let mut report = analyze_stack_files(analysis, analyzed_paths).map_err(|e| e.to_string())?;
+    let mut report = if provenance.is_some() {
+        analyze_stack_files(analysis, analyzed_paths).map_err(|e| e.to_string())?
+    } else {
+        // These are candidates across the build folder, not a selected set.
+        // An unrelated unreadable report must not hide usable function matches.
+        let mut combined = analyze_stack_files(analysis, Vec::new()).map_err(|e| e.to_string())?;
+        for path in analyzed_paths {
+            match analyze_stack_files(analysis, vec![path]) {
+                Ok(candidate) => {
+                    combined.entries.extend(candidate.entries);
+                    for warning in candidate.warnings {
+                        if !combined.warnings.contains(&warning) {
+                            combined.warnings.push(warning);
+                        }
+                    }
+                }
+                Err(error) => combined
+                    .warnings
+                    .push(format!("Skipped stack report while guessing: {error}")),
+            }
+        }
+        if !combined.entries.is_empty() {
+            combined
+                .warnings
+                .retain(|warning| !warning.starts_with("No stack usage information found."));
+        }
+        combined
+            .entries
+            .sort_by_key(|entry| std::cmp::Reverse(entry.local_bytes));
+        combined
+    };
     let (chosen, reason) = if let Some(provenance) = provenance {
         provenance
     } else {
@@ -336,6 +366,24 @@ mod tests {
         let (stack, selection) = guess(&analysis, &scan_folder(&root).unwrap()).unwrap();
         assert!(selection.unwrap().contains(&chosen));
         assert_eq!(stack.entries.len(), 1);
+    }
+
+    #[test]
+    fn unreadable_unrelated_reports_do_not_block_function_match_guesses() {
+        let (_dir, root, analysis) = setup();
+        let chosen = root.join("reports/diag.su");
+        report(&chosen, 56);
+        let unreadable = root.join("unrelated/broken.su");
+        std::fs::create_dir_all(unreadable.parent().unwrap()).unwrap();
+        std::fs::write(&unreadable, [0xff]).unwrap();
+        let (stack, selection) = guess(&analysis, &scan_folder(&root).unwrap()).unwrap();
+        assert!(selection.unwrap().contains(&chosen));
+        assert_eq!(stack.entries.len(), 1);
+        assert_eq!(stack.entries[0].local_bytes, 56);
+        assert!(stack
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("broken.su")));
     }
 
     #[test]
