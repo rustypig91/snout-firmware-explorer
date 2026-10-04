@@ -13,7 +13,6 @@ pub enum ArtifactKind {
     Firmware,
     Map,
     StackUsage,
-    LinkerScript,
     MemoryLayout,
 }
 impl ArtifactKind {
@@ -22,7 +21,6 @@ impl ArtifactKind {
             Self::Firmware => "ELF firmware",
             Self::Map => "Linker map",
             Self::StackUsage => "Stack usage",
-            Self::LinkerScript => "Linker script",
             Self::MemoryLayout => "Memory layout",
         }
     }
@@ -98,7 +96,7 @@ pub fn scan_folder(root: impl AsRef<Path>) -> Result<BuildFolder, Error> {
             let artifact_kind = match extension.as_str() {
                 "map" => Some(ArtifactKind::Map),
                 "su" => Some(ArtifactKind::StackUsage),
-                "ld" | "lds" => Some(ArtifactKind::LinkerScript),
+                "ld" | "lds" => None,
                 "json" => fs::read(&path)
                     .ok()
                     .and_then(|b| serde_json_layout(&b))

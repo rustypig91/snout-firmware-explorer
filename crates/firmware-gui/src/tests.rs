@@ -14,6 +14,77 @@ fn finish_job(app: &mut Explorer) {
 }
 
 #[test]
+fn active_map_follows_analysis_instead_of_preview_selection() {
+    let mut app = Explorer::default();
+    let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+    app.scan_build(folder);
+    finish_job(&mut app);
+    let root = app.build.as_ref().unwrap().root.clone();
+    let map = root.join("cortex-m.map");
+    let other_map = root.join("cortex-m-grown.map");
+    assert!(!app.map_in_use(&map));
+    app.open(root.join("cortex-m.elf"));
+    finish_job(&mut app);
+    assert!(app.map_in_use(&map));
+    assert!(!app.map_in_use(&other_map));
+    app.preview = Some((other_map.clone(), String::new()));
+    assert!(app.map_in_use(&map));
+    assert!(!app.map_in_use(&other_map));
+    app.apply_map(other_map.clone());
+    finish_job(&mut app);
+    assert!(!app.map_in_use(&map));
+    assert!(app.map_in_use(&other_map));
+    app.refresh();
+    finish_job(&mut app);
+    assert!(app.map_in_use(&other_map));
+    app.apply_map(root.join("missing.map"));
+    finish_job(&mut app);
+    assert!(app.error.is_some());
+    assert!(app.map_in_use(&other_map));
+    let mut restored = Explorer::default();
+    restored.apply_preferences(&app.preference_value());
+    finish_job(&mut restored);
+    finish_job(&mut restored);
+    assert!(restored.map_in_use(&other_map));
+    app.configure(Some(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/cortex-m-memory.json"),
+    ));
+    finish_job(&mut app);
+    assert!(!app.map_in_use(&map));
+    assert!(!app.map_in_use(&other_map));
+    app.discover_layout();
+    finish_job(&mut app);
+    assert!(app.map_in_use(&map));
+    app.open(root.join("cortex-m-grown.elf"));
+    finish_job(&mut app);
+    assert!(!app.map_in_use(&map));
+    assert!(app.map_in_use(&other_map));
+    let empty = tempfile::tempdir().unwrap();
+    app.scan_build(empty.path().to_owned());
+    finish_job(&mut app);
+    assert!(!app.map_in_use(&other_map));
+}
+
+#[test]
+fn unsupported_matching_map_is_not_marked_in_use() {
+    let folder = tempfile::tempdir().unwrap();
+    std::fs::write(
+        folder.path().join("app.elf"),
+        include_bytes!("../../../fixtures/cortex-m.elf"),
+    )
+    .unwrap();
+    std::fs::write(folder.path().join("app.map"), "unsupported map").unwrap();
+    let mut app = Explorer::default();
+    app.scan_build(folder.path().to_owned());
+    finish_job(&mut app);
+    let root = app.build.as_ref().unwrap().root.clone();
+    app.open(root.join("app.elf"));
+    finish_job(&mut app);
+    assert!(app.error.is_none());
+    assert!(!app.map_in_use(&root.join("app.map")));
+}
+
+#[test]
 fn map_rediscovery_commits_layout_only_after_successful_analysis() {
     let mut app = Explorer::default();
     app.scan_build(PathBuf::from(concat!(
@@ -918,4 +989,178 @@ fn update_preferences_round_trip_without_an_open_workspace() {
     restored.apply_preferences(&serde_json::json!({"version": 1}));
     assert!(restored.updates.check_on_startup);
     assert!(restored.updates.skipped_version.is_none());
+}
+
+#[test]
+fn stack_view_scopes_rows_to_selected_elf_and_keeps_unresolved_available() {
+    let analysis = firmware_analysis_core::analyze_bytes(
+        include_bytes!("../../../fixtures/cortex-m.elf"),
+        "fixture.elf",
+        &Default::default(),
+    )
+    .unwrap();
+    let mut report = analyze_stack(
+        &analysis,
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/cortex-m-main.su"
+        ),
+    )
+    .unwrap();
+    assert_eq!(report.entries.len(), 4);
+    assert!(report
+        .entries
+        .iter()
+        .all(|e| e.symbol_candidates.len() == 1));
+    let mut unrelated = report.entries[0].clone();
+    unrelated.function = "other_target".into();
+    unrelated.symbol_candidates.clear();
+    report.entries.push(unrelated);
+    let mut app = Explorer {
+        analysis: Some(Arc::new(analysis)),
+        stack: Some(report),
+        ..Default::default()
+    };
+    let ctx = egui::Context::default();
+    for (show_unresolved, expected) in [(false, 4), (true, 5)] {
+        app.stack_show_unresolved = show_unresolved;
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| app.stack_view(ui));
+        });
+        assert_eq!(app.visible_rows, expected);
+    }
+}
+
+#[test]
+fn supporting_file_preview_is_confined_to_overview_and_preserves_elf() {
+    let mut app = Explorer::default();
+    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures"));
+    finish_job(&mut app);
+    let build = app.build.clone().unwrap();
+    app.open(build.root.join("cortex-m.elf"));
+    finish_job(&mut app);
+    let analysis = app.analysis.clone().unwrap();
+    let ctx = egui::Context::default();
+    for kind in [
+        firmware_analysis_core::build::ArtifactKind::Map,
+        firmware_analysis_core::build::ArtifactKind::StackUsage,
+    ] {
+        app.change_view(View::Symbols);
+        app.select_artifact(
+            build
+                .artifacts
+                .iter()
+                .find(|a| a.kind == kind)
+                .unwrap()
+                .clone(),
+        );
+        finish_job(&mut app);
+        assert!(app.view == View::Overview);
+        assert!(Arc::ptr_eq(&analysis, app.analysis.as_ref().unwrap()));
+        // Use distinctive text to verify what the shell actually renders on every tab.
+        app.preview.as_mut().unwrap().1 = "supporting-file-preview-marker".into();
+        for view in View::ALL {
+            app.change_view(view);
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1280.0, 820.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| app.show(ctx),
+            );
+            let preview_visible = output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text().contains("supporting-file-preview-marker")));
+            assert_eq!(preview_visible, view == View::Overview, "{}", view.label());
+            assert!(Arc::ptr_eq(&analysis, app.analysis.as_ref().unwrap()));
+        }
+    }
+}
+
+#[test]
+fn map_choices_survive_elf_folder_switching_restart_and_folder_reset() {
+    let mut app = Explorer::default();
+    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures"));
+    finish_job(&mut app);
+    let root = app.build.as_ref().unwrap().root.clone();
+    let elf = root.join("cortex-m.elf");
+    let other_elf = root.join("cortex-m-grown.elf");
+    let map = root.join("cortex-m.map");
+    let other_map = root.join("cortex-m-grown.map");
+    app.open(elf.clone());
+    finish_job(&mut app);
+    app.apply_map(other_map.clone());
+    finish_job(&mut app);
+    app.open(other_elf.clone());
+    finish_job(&mut app);
+    app.apply_map(map.clone());
+    finish_job(&mut app);
+    app.open(elf.clone());
+    finish_job(&mut app);
+    assert!(app.map_in_use(&other_map));
+
+    let folder = tempfile::tempdir().unwrap();
+    std::fs::write(
+        folder.path().join("app.elf"),
+        include_bytes!("../../../fixtures/cortex-m.elf"),
+    )
+    .unwrap();
+    std::fs::write(
+        folder.path().join("manual.map"),
+        include_bytes!("../../../fixtures/cortex-m.map"),
+    )
+    .unwrap();
+    app.scan_build(folder.path().to_owned());
+    finish_job(&mut app);
+    let second_root = app.build.as_ref().unwrap().root.clone();
+    let second_elf = second_root.join("app.elf");
+    let second_map = second_root.join("manual.map");
+    app.open(second_elf.clone());
+    finish_job(&mut app);
+    app.apply_map(second_map.clone());
+    finish_job(&mut app);
+
+    let value =
+        serde_json::from_slice(&serde_json::to_vec(&app.preference_value()).unwrap()).unwrap();
+    let mut restored = Explorer::default();
+    restored.apply_preferences(&value);
+    finish_job(&mut restored);
+    finish_job(&mut restored);
+    assert!(restored.map_in_use(&second_map));
+    // Refresh reads the chosen map again after a rebuild, rather than using stale capacities.
+    std::fs::write(
+        &second_map,
+        include_bytes!("../../../fixtures/cortex-m-grown.map"),
+    )
+    .unwrap();
+    restored.refresh();
+    finish_job(&mut restored);
+    let expected = firmware_analysis_core::build::parse_map_regions(include_str!(
+        "../../../fixtures/cortex-m-grown.map"
+    ))
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(&restored.options).unwrap(),
+        serde_json::to_value(expected).unwrap()
+    );
+
+    restored.scan_build(root.clone());
+    finish_job(&mut restored);
+    finish_job(&mut restored);
+    assert!(restored.map_in_use(&other_map));
+    restored.open(other_elf.clone());
+    finish_job(&mut restored);
+    assert!(restored.map_in_use(&map));
+    restored.reset_build_settings();
+    finish_job(&mut restored);
+    assert!(restored.map_in_use(&other_map));
+    restored.open(elf.clone());
+    finish_job(&mut restored);
+    assert!(restored.map_in_use(&map));
+    // Reset affects only the current folder.
+    restored.scan_build(second_root);
+    finish_job(&mut restored);
+    finish_job(&mut restored);
+    assert!(restored.map_in_use(&second_map));
 }

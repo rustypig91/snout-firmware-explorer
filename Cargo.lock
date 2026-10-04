@@ -1134,6 +1134,7 @@ dependencies = [
  "futures-lite",
  "rfd",
  "self-replace",
+ "serde",
  "serde_json",
  "sha2",
  "tempfile",

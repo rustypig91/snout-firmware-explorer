@@ -93,10 +93,11 @@ impl Explorer {
         notes
     }
     pub(super) fn pick_layout(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Memory layout", &["json", "map"])
-            .pick_file()
-        {
+        let mut dialog = rfd::FileDialog::new().add_filter("Memory layout", &["json", "map"]);
+        if let Some(build) = &self.build {
+            dialog = dialog.set_directory(&build.root);
+        }
+        if let Some(path) = dialog.pick_file() {
             if path.extension().is_some_and(|e| e == "map") {
                 self.apply_map(path);
             } else {

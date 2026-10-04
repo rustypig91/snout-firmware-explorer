@@ -341,6 +341,12 @@ fn compiler_stack_reports_are_matched_without_invented_call_edges() {
     )
     .unwrap();
     assert!(!report.entries.is_empty());
+    let cpp = report
+        .entries
+        .iter()
+        .find(|e| e.function == "cpp_function")
+        .unwrap();
+    assert_eq!(cpp.symbol_candidates, vec!["_Z12cpp_functionj @ 0x800001d"]);
     assert!(report
         .entries
         .iter()
@@ -348,6 +354,54 @@ fn compiler_stack_reports_are_matched_without_invented_call_edges() {
     assert!(!report.call_graph.complete);
     assert!(report.call_graph.edges.is_empty());
     assert!(!report.call_graph.unresolved.is_empty());
+}
+
+#[test]
+fn stack_matching_preserves_overload_ambiguity_and_rejects_conflicting_sources() {
+    let mut a = analyze(ELF);
+    let original = a
+        .symbols
+        .iter()
+        .find(|s| s.name == "_Z12cpp_functionj")
+        .unwrap()
+        .clone();
+    let mut overload = original.clone();
+    overload.name = "_Z12cpp_functioni".into();
+    overload.demangled_name = "cpp_function(int)".into();
+    overload.source_line = Some(99);
+    a.symbols.push(overload);
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/cortex-m-main.su"
+    );
+    let report = analyze_stack(&a, path).unwrap();
+    let cpp = report
+        .entries
+        .iter()
+        .find(|e| e.function == "cpp_function")
+        .unwrap();
+    assert_eq!(cpp.symbol_candidates.len(), 1);
+
+    for symbol in &mut a.symbols {
+        symbol.source_file = None;
+        symbol.source_line = None;
+    }
+    let report = analyze_stack(&a, path).unwrap();
+    let cpp = report
+        .entries
+        .iter()
+        .find(|e| e.function == "cpp_function")
+        .unwrap();
+    assert_eq!(cpp.symbol_candidates.len(), 2);
+
+    for symbol in &mut a.symbols {
+        symbol.source_file = Some("other/target.c".into());
+    }
+    let report = analyze_stack(&a, path).unwrap();
+    assert!(report
+        .entries
+        .iter()
+        .all(|e| e.symbol_candidates.is_empty()));
 }
 
 #[test]

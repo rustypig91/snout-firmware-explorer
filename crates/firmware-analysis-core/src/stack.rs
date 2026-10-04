@@ -23,7 +23,7 @@ pub struct StackEntry {
     pub local_bytes: u64,
     pub qualifier: String,
     pub evidence: String,
-    /// All exact name matches; multiple results are explicitly ambiguous.
+    /// Candidates supported by name or source location; multiple results are ambiguous.
     pub symbol_candidates: Vec<String>,
 }
 
@@ -130,13 +130,72 @@ pub fn analyze_stack_files(
         })?;
         let (mut entries, warnings) = parse_stack_usage(&text, &path.display().to_string());
         for entry in &mut entries {
-            entry.symbol_candidates = analysis
+            let functions: Vec<_> = analysis
                 .symbols
                 .iter()
+                .filter(|s| s.kind == "Function")
+                // A known conflicting source path rules out same-name functions in other units.
                 .filter(|s| {
-                    s.kind == "Function"
-                        && (s.name == entry.function || s.demangled_name == entry.function)
+                    s.source_file
+                        .as_ref()
+                        .is_none_or(|p| source_matches(p, &entry.source_file))
                 })
+                .collect();
+            let mut candidates: Vec<_> = functions
+                .iter()
+                .copied()
+                .filter(|s| s.name == entry.function || s.demangled_name == entry.function)
+                .collect();
+            let mut method = "exact symbol name";
+            if candidates.is_empty() {
+                candidates = functions
+                    .iter()
+                    .copied()
+                    .filter(|s| {
+                        s.source_line == Some(entry.source_line)
+                            && s.source_file
+                                .as_ref()
+                                .is_some_and(|p| source_matches(p, &entry.source_file))
+                    })
+                    .collect();
+                method = "DWARF source file and line";
+            }
+            if candidates.is_empty() && !entry.function.contains('(') {
+                candidates = functions
+                    .iter()
+                    .copied()
+                    .filter(|s| {
+                        s.demangled_name
+                            .split_once('(')
+                            .is_some_and(|(name, _)| name == entry.function)
+                    })
+                    .collect();
+                method = "demangled function name without parameters";
+            }
+            // Prefer source evidence when duplicate local names or overloads exist.
+            let located: Vec<_> = candidates
+                .iter()
+                .copied()
+                .filter(|s| {
+                    s.source_line == Some(entry.source_line)
+                        && s.source_file
+                            .as_ref()
+                            .is_some_and(|p| source_matches(p, &entry.source_file))
+                })
+                .collect();
+            if !located.is_empty() {
+                candidates = located;
+                if method != "DWARF source file and line" {
+                    method = "symbol name and DWARF source file/line";
+                }
+            }
+            if !candidates.is_empty() {
+                entry
+                    .evidence
+                    .push_str(&format!("; ELF candidates matched by {method}"));
+            }
+            entry.symbol_candidates = candidates
+                .into_iter()
                 .map(|s| format!("{} @ {:#x}", s.name, s.address))
                 .collect();
         }
@@ -150,6 +209,22 @@ pub fn analyze_stack_files(
         .entries
         .sort_by_key(|e| std::cmp::Reverse(e.local_bytes));
     Ok(report)
+}
+
+/// Debug paths may be absolute on the build machine while .su paths are relative.
+/// Compare whole components and separators, never just arbitrary string suffixes.
+fn source_matches(a: &str, b: &str) -> bool {
+    let a = a.replace('\\', "/");
+    let b = b.replace('\\', "/");
+    let parts = |p: &str| {
+        p.split('/')
+            .filter(|c| !c.is_empty() && *c != ".")
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    let a = parts(&a);
+    let b = parts(&b);
+    !a.is_empty() && !b.is_empty() && (a.ends_with(&b) || b.ends_with(&a))
 }
 
 fn collect(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), Error> {

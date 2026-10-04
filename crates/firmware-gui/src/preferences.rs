@@ -23,10 +23,10 @@ impl Explorer {
         };
         let path = PathBuf::from(&a.path);
         let layout = self.layout_override.clone();
+        let source = layout.as_ref().map(|_| self.layout_source.clone());
         self.job(move || {
             let build = firmware_analysis_core::build::scan_folder(root).map_err(|e| e.to_string())?;
-            let mut a = firmware_analysis_core::build::analyze_build_firmware(&build, &path, layout.as_ref())
-                .map_err(|e| e.to_string())?;
+            let (mut a, layout, source) = super::workspace::analyze_selected(&build, &path, layout, source)?;
             let reports = build.artifacts.iter()
                 .filter(|a| a.kind == firmware_analysis_core::build::ArtifactKind::StackUsage)
                 .map(|a| a.path.clone()).collect();
@@ -40,12 +40,12 @@ impl Explorer {
                     None
                 }
             };
-            Ok(Loaded::Refresh(Box::new((build, a, stack, layout))))
+            Ok(Loaded::Refresh(Box::new((build, a, stack, layout, source))))
         });
     }
 
     pub(super) fn preference_value(&self) -> serde_json::Value {
-        serde_json::json!({"version": 1, "check_updates_on_startup": self.updates.check_on_startup, "skipped_version": self.updates.skipped_version, "folder": self.build.as_ref().map(|b| &b.root), "firmware": self.analysis.as_ref().map(|a| &a.path), "layout": self.layout_override, "layout_source": self.layout_source, "view": self.view.label(), "directories": self.tree, "metric": self.overview_metric.label(), "contributor_ram": self.contributor_ram})
+        serde_json::json!({"version": 1, "build_settings": self.build_settings, "check_updates_on_startup": self.updates.check_on_startup, "skipped_version": self.updates.skipped_version, "folder": self.build.as_ref().map(|b| &b.root), "firmware": self.analysis.as_ref().map(|a| &a.path), "layout": self.layout_override, "layout_source": self.layout_source, "view": self.view.label(), "directories": self.tree, "metric": self.overview_metric.label(), "contributor_ram": self.contributor_ram})
     }
     pub(super) fn save_preferences(&self) -> Result<(), Box<dyn std::error::Error>> {
         let Some(path) = preferences_path() else {
@@ -82,6 +82,8 @@ impl Explorer {
         if value["version"].as_u64() != Some(1) {
             return;
         }
+        self.build_settings =
+            serde_json::from_value(value["build_settings"].clone()).unwrap_or_default();
         self.updates.check_on_startup = value["check_updates_on_startup"].as_bool().unwrap_or(true);
         self.updates.skipped_version = value["skipped_version"].as_str().map(str::to_owned);
         self.view = View::ALL
@@ -114,6 +116,22 @@ impl Explorer {
                 .ok()
                 .flatten();
             let layout = layout.filter(|l| firmware_analysis_core::validate_options(l).is_ok());
+            let settings = self.build_settings.entry(folder.clone()).or_default();
+            if settings.firmware.is_none() {
+                settings.firmware = Some(firmware.clone());
+            }
+            if let Some(options) = &layout {
+                settings
+                    .layouts
+                    .entry(firmware.clone())
+                    .or_insert_with(|| super::SavedLayout {
+                        options: options.clone(),
+                        source: value["layout_source"]
+                            .as_str()
+                            .unwrap_or("Saved layout")
+                            .into(),
+                    });
+            }
             self.remembered_firmware = Some(RememberedFirmware {
                 folder: folder.clone(),
                 path: firmware,

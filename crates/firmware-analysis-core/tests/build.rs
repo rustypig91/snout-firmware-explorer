@@ -76,6 +76,7 @@ fn scans_nested_artifacts_and_uses_map_capacities() {
     )
     .unwrap();
     fs::write(dir.0.join("memory.ld"), "MEMORY {}").unwrap();
+    fs::write(dir.0.join("memory.lds"), "MEMORY {}").unwrap();
     fs::write(
         dir.0.join("layout.json"),
         include_bytes!("../../../examples/cortex-m-memory.json"),
@@ -84,7 +85,13 @@ fn scans_nested_artifacts_and_uses_map_capacities() {
     fs::write(dir.0.join("other.json"), "{}").unwrap();
     fs::write(dir.0.join("fake.out"), "not ELF").unwrap();
     let build = scan_folder(&dir.0).unwrap();
-    assert_eq!(build.artifacts.len(), 5);
+    assert_eq!(build.artifacts.len(), 4);
+    assert!(!build.artifacts.iter().any(|a| {
+        matches!(
+            a.path.extension().and_then(|e| e.to_str()),
+            Some("ld" | "lds")
+        )
+    }));
     assert!(build
         .artifacts
         .iter()

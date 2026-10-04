@@ -151,6 +151,16 @@ impl Explorer {
                                 ui.close_menu();
                                 self.pick_baseline();
                             }
+                            if ui
+                                .add_enabled(
+                                    self.build.is_some(),
+                                    egui::Button::new("Reset settings for this build folder"),
+                                )
+                                .clicked()
+                            {
+                                ui.close_menu();
+                                self.reset_build_settings();
+                            }
                             ui.separator();
                             if ui
                                 .add_enabled(
@@ -271,13 +281,13 @@ impl Explorer {
             if let Some(error) = self.error.clone() {
                 ui.horizontal_wrapped(|ui| { ui.colored_label(egui::Color32::LIGHT_RED, error); if ui.small_button("Dismiss").clicked() { self.error = None; } }); ui.separator();
             }
-            if self.artifact_preview(ui) { return; }
+            if self.view == View::Overview && self.artifact_preview(ui) { return; }
             let Some(a) = self.analysis.clone() else {
                 ui.add_space(24.0); ui.heading("Firmware Explorer");
-                ui.label(if self.build.is_some() { "Select a firmware image or supporting file in the left pane." } else { "Select a build folder to discover firmware, maps, linker scripts and stack reports." });
+                ui.label(if self.build.is_some() { "Select a firmware image or supporting file in the left pane." } else { "Select a build folder to discover firmware, maps, memory layouts and stack reports." });
                 ui.add_space(8.0);
                 if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Open build folder...")).clicked() { self.pick_build(); }
-                ui.collapsing("Which files are supported?", |ui| { ui.label("The folder and its subfolders are scanned for linked ELF images (including .elf, .axf and .out), .map, .su, .ld/.lds and memory-layout JSON. Select firmware to analyze it; supporting files can be previewed. A unique same-name GNU linker map supplies memory capacities automatically. HEX and BIN lack the required metadata."); });
+                ui.collapsing("Which files are supported?", |ui| { ui.label("The folder and its subfolders are scanned for linked ELF images (including .elf, .axf and .out), .map, .su and memory-layout JSON. Select firmware to analyze it; supporting files can be previewed. A unique same-name GNU linker map supplies memory capacities automatically. HEX and BIN lack the required metadata."); });
                 return;
             };
             if self.view != View::Overview {

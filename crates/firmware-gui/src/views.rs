@@ -581,10 +581,48 @@ impl Explorer {
             ui.label("Build with -fstack-usage, then rescan the build folder and select firmware to load discovered reports automatically. Use reports from the same firmware build.");
             return;
         };
-        ui.small("Reports may span multiple targets. Expand a row for its report path; inspect analysis notes for matching limitations.");
+        if let Some(analysis) = &self.analysis {
+            ui.small(format!(
+                "Stack reports for {}",
+                display_path(&analysis.path)
+            ));
+            let matched: std::collections::HashSet<_> = report
+                .entries
+                .iter()
+                .flat_map(|e| e.symbol_candidates.iter())
+                .collect();
+            let missing: Vec<_> = analysis
+                .symbols
+                .iter()
+                .filter(|s| s.kind == "Function")
+                .filter(|s| !matched.contains(&format!("{} @ {:#x}", s.name, s.address)))
+                .collect();
+            ui.collapsing(
+                format!(
+                    "{} ELF functions without stack reports (size unknown)",
+                    missing.len()
+                ),
+                |ui| {
+                    for symbol in missing {
+                        ui.label(&symbol.demangled_name);
+                    }
+                },
+            );
+        }
+        let unresolved = report
+            .entries
+            .iter()
+            .filter(|e| e.symbol_candidates.is_empty())
+            .count();
+        ui.checkbox(
+            &mut self.stack_show_unresolved,
+            format!("Show unresolved reports ({unresolved})"),
+        );
+        ui.small("Multiple ELF candidates are ambiguous. Expand a row for matching evidence and its report path.");
         let rows = report
             .entries
             .iter()
+            .filter(|e| self.stack_show_unresolved || !e.symbol_candidates.is_empty())
             .map(|e| {
                 Row::new(
                     vec![
@@ -607,7 +645,7 @@ impl Explorer {
                 )
             })
             .collect();
-        self.table(ui, &[("Function","Compiler function label"),("Local frame","Compiler reported bytes, not a call-chain estimate"),("Qualifier","static: fixed frame; dynamic,bounded: compiler bound; dynamic: total may be unbounded"),("Source","Location reported by the compiler"),("ELF matches","Exact name matches only. Zero is unresolved; more than one is ambiguous.")], rows);
+        self.table(ui, &[("Function","Compiler function label"),("Local frame","Compiler reported bytes, not a call-chain estimate"),("Qualifier","static: fixed frame; dynamic,bounded: compiler bound; dynamic: total may be unbounded"),("Source","Location reported by the compiler"),("ELF matches","Matched by symbol name or source location. Zero is unresolved; more than one is ambiguous.")], rows);
     }
     pub(super) fn compare_view(&mut self, ui: &mut egui::Ui) {
         let Some(c) = &self.comparison else {

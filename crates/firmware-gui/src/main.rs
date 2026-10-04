@@ -66,10 +66,16 @@ type Refreshed = (
     Analysis,
     Option<StackReport>,
     Option<AnalysisOptions>,
+    String,
 );
 enum Loaded {
     Refresh(Box<Refreshed>),
-    Firmware(Analysis, Option<StackReport>, Option<AnalysisOptions>),
+    Firmware(
+        Analysis,
+        Option<StackReport>,
+        Option<AnalysisOptions>,
+        String,
+    ),
     Build(firmware_analysis_core::build::BuildFolder),
     Text(PathBuf, String),
     Baseline(Comparison),
@@ -84,6 +90,16 @@ struct RememberedFirmware {
     layout: Option<AnalysisOptions>,
     source: String,
 }
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+struct BuildSettings {
+    firmware: Option<PathBuf>,
+    layouts: std::collections::BTreeMap<PathBuf, SavedLayout>,
+}
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct SavedLayout {
+    options: AnalysisOptions,
+    source: String,
+}
 struct Explorer {
     analysis: Option<Arc<Analysis>>,
     build: Option<Arc<firmware_analysis_core::build::BuildFolder>>,
@@ -92,6 +108,7 @@ struct Explorer {
     layout_override: Option<AnalysisOptions>,
     comparison: Option<Comparison>,
     stack: Option<StackReport>,
+    stack_show_unresolved: bool,
     options: AnalysisOptions,
     receiver: Option<mpsc::Receiver<JobResult>>,
     view: View,
@@ -120,6 +137,7 @@ struct Explorer {
     updates: update_ui::Updates,
     pending_restore: Option<(PathBuf, Option<AnalysisOptions>, String)>,
     remembered_firmware: Option<RememberedFirmware>,
+    build_settings: std::collections::BTreeMap<PathBuf, BuildSettings>,
 }
 impl Default for Explorer {
     fn default() -> Self {
@@ -131,6 +149,7 @@ impl Default for Explorer {
             layout_override: None,
             comparison: None,
             stack: None,
+            stack_show_unresolved: false,
             options: AnalysisOptions::default(),
             receiver: None,
             view: View::Overview,
@@ -158,6 +177,7 @@ impl Default for Explorer {
             layout_source: String::new(),
             pending_restore: None,
             remembered_firmware: None,
+            build_settings: Default::default(),
             updates: update_ui::Updates::default(),
         }
     }
@@ -175,15 +195,7 @@ impl Explorer {
         });
     }
     fn open(&mut self, path: PathBuf) {
-        let layout = if self
-            .analysis
-            .as_ref()
-            .is_some_and(|a| std::path::Path::new(&a.path) != path)
-        {
-            None
-        } else {
-            self.layout_override.clone()
-        };
+        let layout = self.saved_layout(&path).map(|saved| saved.options.clone());
         self.open_with_layout(path, layout);
     }
     fn discover_layout(&mut self) {
@@ -198,17 +210,22 @@ impl Explorer {
         let Some(build) = self.build.clone() else {
             return;
         };
+        let source = layout.as_ref().map(|_| {
+            self.saved_layout(&path)
+                .map(|saved| saved.source.clone())
+                .unwrap_or_else(|| self.layout_source.clone())
+        });
         self.job(move || {
-            let mut analysis = firmware_analysis_core::build::analyze_build_firmware(&build, &path, layout.as_ref()).map_err(|e| e.to_string())?;
+            let (mut analysis, layout, source) = workspace::analyze_selected(&build, &path, layout, source)?;
             let reports = build.artifacts.iter().filter(|a| a.kind == firmware_analysis_core::build::ArtifactKind::StackUsage).map(|a| a.path.clone()).collect();
             let stack = match firmware_analysis_core::stack::analyze_stack_files(&analysis, reports) {
                 Ok(mut report) => {
-                    report.warnings.push(format!("Reports discovered under {}. This folder may contain multiple targets or configurations; exact symbol-name matches do not prove build ownership.", build.root.display()));
+                    report.warnings.push(format!("Reports discovered under {}. This folder may contain multiple targets or configurations; symbol/source matches do not prove build ownership.", build.root.display()));
                     Some(report)
                 }
                 Err(e) => { analysis.warnings.push(format!("Stack reports could not be loaded: {e}")); None }
             };
-            Ok(Loaded::Firmware(analysis, stack, layout))
+            Ok(Loaded::Firmware(analysis, stack, layout, source))
         });
     }
     fn configure(&mut self, path: Option<PathBuf>) {
@@ -277,9 +294,9 @@ impl Explorer {
                 self.region_cache_key = 0;
                 let result = result.map(|loaded| match loaded {
                     Loaded::Refresh(result) => {
-                        let (build, a, stack, layout) = *result;
+                        let (build, a, stack, layout, source) = *result;
                         self.build = Some(Arc::new(build));
-                        Loaded::Firmware(a, stack, layout)
+                        Loaded::Firmware(a, stack, layout, source)
                     }
                     other => other,
                 });
@@ -301,44 +318,59 @@ impl Explorer {
                         self.artifact_search.clear();
                         self.search.clear();
                         self.visible_rows = 0;
-                        let restore = self.pending_restore.take().or_else(|| {
-                            let remembered = self.remembered_firmware.as_ref()?;
-                            let build = self.build.as_ref()?;
-                            (remembered.folder == build.root
-                                && remembered.path.is_file()
-                                && build.artifacts.iter().any(|artifact| {
-                                    artifact.kind
-                                        == firmware_analysis_core::build::ArtifactKind::Firmware
-                                        && artifact.path == remembered.path
-                                }))
-                            .then(|| {
-                                (
-                                    remembered.path.clone(),
-                                    remembered.layout.clone(),
-                                    remembered.source.clone(),
-                                )
+                        let restore = self
+                            .pending_restore
+                            .take()
+                            .or_else(|| {
+                                let build = self.build.as_ref()?;
+                                let settings = self.build_settings.get(&build.root)?;
+                                let path = settings.firmware.as_ref()?;
+                                build
+                                    .artifacts
+                                    .iter()
+                                    .any(|a| {
+                                        a.kind
+                                            == firmware_analysis_core::build::ArtifactKind::Firmware
+                                            && &a.path == path
+                                    })
+                                    .then(|| {
+                                        let saved = settings.layouts.get(path);
+                                        (
+                                            path.clone(),
+                                            saved.map(|s| s.options.clone()),
+                                            saved.map(|s| s.source.clone()).unwrap_or_default(),
+                                        )
+                                    })
                             })
-                        });
+                            .or_else(|| {
+                                let remembered = self.remembered_firmware.as_ref()?;
+                                let build = self.build.as_ref()?;
+                                (remembered.folder == build.root
+                                    && remembered.path.is_file()
+                                    && build.artifacts.iter().any(|artifact| {
+                                        artifact.kind
+                                            == firmware_analysis_core::build::ArtifactKind::Firmware
+                                            && artifact.path == remembered.path
+                                    }))
+                                .then(|| {
+                                    (
+                                        remembered.path.clone(),
+                                        remembered.layout.clone(),
+                                        remembered.source.clone(),
+                                    )
+                                })
+                            });
                         if let Some((path, layout, source)) = restore {
                             self.layout_source = source;
                             self.open_with_layout(path, layout);
                         }
                     }
                     Ok(Loaded::Text(path, text)) => {
+                        self.change_view(View::Overview);
                         self.preview = Some((path, text));
                     }
-                    Ok(Loaded::Firmware(a, stack, layout)) => {
-                        if layout.is_none() {
-                            self.layout_source = if a.options.regions.is_empty() {
-                                "ELF inference".into()
-                            } else {
-                                self.build
-                                    .as_ref()
-                                    .and_then(|b| b.matching_map(std::path::Path::new(&a.path)))
-                                    .map(|p| p.display().to_string())
-                                    .unwrap_or_else(|| "Matching map".into())
-                            };
-                        }
+                    Ok(Loaded::Firmware(a, stack, layout, source)) => {
+                        self.layout_source = source;
                         self.layout_override = layout;
                         self.options = a.options.clone();
                         self.preview = None;
@@ -376,6 +408,19 @@ impl Explorer {
                     Err(error) => self.error = Some(error),
                 }
                 if let (Some(build), Some(analysis)) = (&self.build, &self.analysis) {
+                    let settings = self.build_settings.entry(build.root.clone()).or_default();
+                    settings.firmware = Some(PathBuf::from(&analysis.path));
+                    if let Some(options) = &self.layout_override {
+                        settings.layouts.insert(
+                            PathBuf::from(&analysis.path),
+                            SavedLayout {
+                                options: options.clone(),
+                                source: self.layout_source.clone(),
+                            },
+                        );
+                    } else {
+                        settings.layouts.remove(&PathBuf::from(&analysis.path));
+                    }
                     self.remembered_firmware = Some(RememberedFirmware {
                         folder: build.root.clone(),
                         path: PathBuf::from(&analysis.path),

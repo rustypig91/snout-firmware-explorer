@@ -6,7 +6,64 @@ use firmware_analysis_core::{
 };
 use std::{io::Read, path::PathBuf};
 
+pub(super) fn analyze_selected(
+    build: &firmware_analysis_core::build::BuildFolder,
+    path: &std::path::Path,
+    mut layout: Option<super::AnalysisOptions>,
+    source: Option<String>,
+) -> Result<(super::Analysis, Option<super::AnalysisOptions>, String), String> {
+    if let Some(source) = &source {
+        if std::path::Path::new(source)
+            .extension()
+            .is_some_and(|e| e == "map")
+        {
+            layout = Some(
+                parse_map_regions(&std::fs::read_to_string(source).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?,
+            );
+        }
+    }
+    let analysis =
+        firmware_analysis_core::build::analyze_build_firmware(build, path, layout.as_ref())
+            .map_err(|e| e.to_string())?;
+    let source = source.unwrap_or_else(|| {
+        if analysis.options.regions.is_empty() {
+            "ELF inference".into()
+        } else {
+            build
+                .matching_map(path)
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "Matching map".into())
+        }
+    });
+    Ok((analysis, layout, source))
+}
+
 impl Explorer {
+    pub(super) fn saved_layout(&self, path: &std::path::Path) -> Option<&super::SavedLayout> {
+        self.build_settings
+            .get(&self.build.as_ref()?.root)?
+            .layouts
+            .get(path)
+    }
+
+    pub(super) fn reset_build_settings(&mut self) {
+        if self.receiver.is_some() {
+            return;
+        }
+        if let Some(build) = &self.build {
+            self.build_settings.remove(&build.root);
+            self.remembered_firmware = None;
+            self.pending_restore = None;
+            self.preview = None;
+            self.discover_layout();
+        }
+    }
+
+    pub(super) fn map_in_use(&self, path: &std::path::Path) -> bool {
+        self.analysis.is_some() && std::path::Path::new(&self.layout_source) == path
+    }
+
     pub(super) fn load_build_stack(&mut self) {
         let (Some(build), Some(analysis)) = (self.build.clone(), self.analysis.clone()) else {
             return;
@@ -14,7 +71,7 @@ impl Explorer {
         self.job(move || {
             let paths = build.artifacts.iter().filter(|a| a.kind == ArtifactKind::StackUsage).map(|a| a.path.clone()).collect();
             let mut report = firmware_analysis_core::stack::analyze_stack_files(&analysis, paths).map_err(|e| e.to_string())?;
-            report.warnings.push(format!("All reports under {} are shown. Check paths when this folder contains multiple builds or targets.", build.root.display()));
+            report.warnings.push(format!("Reports loaded from {}. The Stack tab shows candidates in the selected ELF; unresolved entries remain available. Check report paths when this folder contains multiple builds or targets.", build.root.display()));
             Ok(Loaded::Stack(report))
         });
     }
@@ -30,7 +87,7 @@ impl Explorer {
                 .map_err(|e| e.to_string())
         });
     }
-    fn select_artifact(&mut self, artifact: Artifact) {
+    pub(super) fn select_artifact(&mut self, artifact: Artifact) {
         if artifact.kind == ArtifactKind::Firmware {
             self.open(artifact.path);
             return;
@@ -96,7 +153,6 @@ impl Explorer {
                         ArtifactKind::Firmware,
                         ArtifactKind::Map,
                         ArtifactKind::StackUsage,
-                        ArtifactKind::LinkerScript,
                         ArtifactKind::MemoryLayout,
                     ] {
                         let artifacts: Vec<_> = build
@@ -120,28 +176,47 @@ impl Explorer {
                             kind.label(),
                             artifacts.len()
                         ))
-                        .default_open(kind == ArtifactKind::Firmware)
+                        .default_open(
+                            kind == ArtifactKind::Firmware
+                                || (kind == ArtifactKind::Map
+                                    && artifacts.iter().any(|a| self.map_in_use(&a.path))),
+                        )
                         .show(ui, |ui| {
                             for artifact in artifacts {
-                                let active = self
-                                    .preview
-                                    .as_ref()
-                                    .map(|(p, _)| p == &artifact.path)
-                                    .unwrap_or_else(|| {
-                                        self.analysis.as_ref().is_some_and(|a| {
-                                            std::path::Path::new(&a.path) == artifact.path
-                                        })
-                                    });
+                                let active = artifact.kind == ArtifactKind::Firmware
+                                    && self.analysis.as_ref().is_some_and(|a| {
+                                        std::path::Path::new(&a.path) == artifact.path
+                                    })
+                                    || self
+                                        .preview
+                                        .as_ref()
+                                        .map(|(p, _)| p == &artifact.path)
+                                        .unwrap_or_else(|| {
+                                            self.analysis.as_ref().is_some_and(|a| {
+                                                std::path::Path::new(&a.path) == artifact.path
+                                            })
+                                        });
                                 let label = artifact
                                     .path
                                     .strip_prefix(&build.root)
                                     .unwrap_or(&artifact.path)
                                     .display()
                                     .to_string();
+                                let in_use = artifact.kind == ArtifactKind::Map
+                                    && self.map_in_use(&artifact.path);
+                                let label = if in_use {
+                                    egui::RichText::new(format!(
+                                        "{} (in use)",
+                                        display_path(&label)
+                                    ))
+                                    .strong()
+                                } else {
+                                    egui::RichText::new(display_path(&label))
+                                };
                                 if ui
                                     .add_enabled(
                                         self.receiver.is_none(),
-                                        egui::Button::new(display_path(&label))
+                                        egui::Button::new(label)
                                             .frame(false)
                                             .selected(active)
                                             .wrap(),
@@ -193,11 +268,6 @@ impl Explorer {
                             self.preview = None;
                             self.scan_stack(path.clone());
                         }
-                    }
-                    "ld" | "lds" => {
-                        ui.weak(
-                            "Linker script preview; region import uses the resolved linker map.",
-                        );
                     }
                     _ => {}
                 }
