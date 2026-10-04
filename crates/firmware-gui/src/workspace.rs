@@ -51,7 +51,56 @@ pub(super) fn analyze_selected(
     Ok((analysis, layout, source))
 }
 
+pub(super) fn read_dependency_map(analysis: &mut super::Analysis, path: &std::path::Path) {
+    match std::fs::read_to_string(path) {
+        Ok(text) => firmware_analysis_core::dependencies::import_map(
+            analysis,
+            &text,
+            &path.display().to_string(),
+        ),
+        Err(error) => {
+            analysis.dependencies = firmware_analysis_core::dependencies::units(analysis);
+            analysis
+                .dependencies
+                .notes
+                .push(format!("{}: {error}", path.display()));
+        }
+    }
+}
+
 impl Explorer {
+    pub(super) fn saved_dependency_map(&self, firmware: &std::path::Path) -> Option<PathBuf> {
+        self.build_settings
+            .get(&self.build.as_ref()?.root)?
+            .dependency_maps
+            .get(firmware)
+            .cloned()
+    }
+    pub(super) fn active_dependency_map(&self) -> Option<PathBuf> {
+        self.analysis
+            .as_ref()?
+            .dependencies
+            .map_path
+            .as_ref()
+            .map(PathBuf::from)
+    }
+    pub(super) fn apply_dependency_map(&mut self, path: PathBuf) {
+        let Some(analysis) = self.analysis.clone() else {
+            return;
+        };
+        self.job(move || {
+            let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+            let graph = firmware_analysis_core::dependencies::from_map(
+                &analysis,
+                &text,
+                &path.display().to_string(),
+            )?;
+            let mut analysis = (*analysis).clone();
+            analysis.dependencies = graph;
+            Ok(Loaded::Dependencies(analysis, path))
+        });
+    }
+
     pub(super) fn saved_layout(&self, path: &std::path::Path) -> Option<&super::SavedLayout> {
         self.build_settings
             .get(&self.build.as_ref()?.root)?
@@ -126,15 +175,17 @@ impl Explorer {
         });
     }
     pub(super) fn apply_map(&mut self, path: PathBuf) {
+        let dependency_map = self.active_dependency_map();
         let current_path = self.analysis.as_ref().map(|a| a.path.clone());
         self.job(move || {
             let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
             let options = parse_map_regions(&text).map_err(|e| e.to_string())?;
-            let analysis = current_path.map(|p| {
+            let mut analysis = current_path.map(|p| {
                 let mut a = analyze_path(p, &options)?;
                 a.warnings.push(format!("Memory regions selected from {}. Flash/RAM roles are inferred from names and attributes; verify this map belongs to the selected firmware.", path.display()));
                 Ok::<_, firmware_analysis_core::Error>(a)
             }).transpose().map_err(|e| e.to_string())?;
+            if let (Some(analysis), Some(map)) = (&mut analysis, dependency_map) { read_dependency_map(analysis, &map); }
             Ok(Loaded::Config(options, analysis, path.display().to_string()))
         });
     }
@@ -270,6 +321,11 @@ impl Explorer {
                     .as_str()
                 {
                     "map" => {
+                        if self.analysis.is_some()
+                            && ui.button("Use cross references from this map").clicked()
+                        {
+                            self.apply_dependency_map(path.clone());
+                        }
                         if ui.button("Use memory regions from this map").clicked() {
                             self.apply_map(path.clone());
                         }

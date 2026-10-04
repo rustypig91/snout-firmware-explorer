@@ -1,0 +1,173 @@
+use firmware_analysis_core::{
+    analyze_bytes,
+    dependencies::{from_map, import_map, units},
+    Analysis,
+};
+
+fn fixture() -> Analysis {
+    analyze_bytes(
+        include_bytes!("../../../fixtures/cortex-m.elf"),
+        "firmware.elf",
+        &Default::default(),
+    )
+    .unwrap()
+}
+
+// GNU ld's padded cross-reference format. Object paths intentionally have spaces,
+// Windows separators, and an archive member; source identity comes only from symbols.
+const MAP: &str = "Cross Reference Table\n\nSymbol                                            File\nReset_Handler                                     C:\\build dir\\main.o\n                                                  C:\\build dir\\main.o\ndiagnose                                          lib/diagnostics.a(diag.o)\n                                                  C:\\build dir\\main.o\n                                                  C:\\build dir\\main.o\ninitialized                                       C:\\build dir\\main.o\n                                                  lib/diagnostics.a(diag.o)\nexternal_missing                                  lib/unknown.o\n                                                  C:\\build dir\\main.o\n";
+
+#[test]
+fn exact_symbol_definitions_connect_units_and_preserve_reference_evidence() {
+    let analysis = fixture();
+    let graph = from_map(&analysis, MAP, "firmware.map").unwrap();
+    let main = graph
+        .nodes
+        .iter()
+        .find(|n| n.label.ends_with("/main.c"))
+        .unwrap();
+    let diag = graph
+        .nodes
+        .iter()
+        .find(|n| n.label.ends_with("/diag.c"))
+        .unwrap();
+    assert_eq!(main.objects, ["C:/build dir/main.o"]);
+    assert_eq!(diag.objects, ["lib/diagnostics.a(diag.o)"]);
+    assert_eq!(
+        graph
+            .edges
+            .iter()
+            .find(|e| e.from == main.id && e.to == diag.id)
+            .unwrap()
+            .symbols,
+        ["diagnose"]
+    );
+    assert_eq!(
+        graph
+            .edges
+            .iter()
+            .find(|e| e.from == diag.id && e.to == main.id)
+            .unwrap()
+            .symbols,
+        ["initialized"]
+    );
+    assert!(!graph.edges.iter().any(|e| e.from == e.to));
+    let unknown = graph
+        .nodes
+        .iter()
+        .find(|n| n.label == "lib/unknown.o")
+        .unwrap();
+    assert!(unknown.usage.is_none());
+    assert!(graph
+        .edges
+        .iter()
+        .any(|e| e.from == main.id && e.to == unknown.id));
+    assert_eq!(graph.map_path.as_deref(), Some("firmware.map"));
+    let baseline = units(&analysis);
+    let usage = |nodes: &[firmware_analysis_core::dependencies::DependencyNode]| {
+        nodes
+            .iter()
+            .filter_map(|n| n.usage)
+            .fold((0, 0), |sum, u| (sum.0 + u.flash, sum.1 + u.ram))
+    };
+    assert_eq!(usage(&graph.nodes), usage(&baseline.nodes));
+    assert_eq!(
+        serde_json::to_value(&graph).unwrap(),
+        serde_json::to_value(from_map(&analysis, MAP, "firmware.map").unwrap()).unwrap()
+    );
+}
+
+#[test]
+fn header_source_locations_do_not_create_compilation_units() {
+    let mut analysis = fixture();
+    let expected = units(&analysis).nodes.len();
+    for symbol in &mut analysis.symbols {
+        symbol.source_file = Some("include/shared.h".into());
+    }
+    let graph = units(&analysis);
+    assert_eq!(graph.nodes.len(), expected);
+    assert!(!graph.nodes.iter().any(|n| n.label.ends_with("shared.h")));
+}
+
+#[test]
+fn ambiguous_duplicate_definitions_and_mixed_object_owners_are_not_guessed() {
+    let mut analysis = fixture();
+    let mut duplicate = analysis
+        .symbols
+        .iter()
+        .find(|s| s.name == "diagnose")
+        .unwrap()
+        .clone();
+    duplicate.dwarf_compilation_unit = Some("different/diag.c".into());
+    analysis.symbols.push(duplicate);
+    let graph = from_map(&analysis, MAP, "ambiguous.map").unwrap();
+    assert!(graph
+        .nodes
+        .iter()
+        .find(|n| n.label == "lib/diagnostics.a(diag.o)")
+        .unwrap()
+        .usage
+        .is_none());
+    let graph = from_map(
+        &fixture(),
+        &MAP.replace("lib/diagnostics.a(diag.o)", "C:\\build dir\\main.o"),
+        "lto.map",
+    )
+    .unwrap();
+    assert!(graph
+        .nodes
+        .iter()
+        .find(|n| n.label == "C:/build dir/main.o")
+        .unwrap()
+        .usage
+        .is_none());
+}
+
+#[test]
+fn stripped_elf_keeps_object_graph_without_source_or_size_claims() {
+    let analysis = analyze_bytes(
+        include_bytes!("../../../fixtures/cortex-m-stripped.elf"),
+        "stripped.elf",
+        &Default::default(),
+    )
+    .unwrap();
+    assert!(units(&analysis).nodes.is_empty());
+    let graph = from_map(&analysis, MAP, "stripped.map").unwrap();
+    assert_eq!(graph.nodes.len(), 3);
+    assert_eq!(graph.edges.len(), 3);
+    assert!(graph.nodes.iter().all(|n| n.usage.is_none()));
+}
+
+#[test]
+fn malformed_tables_and_missing_reports_do_not_invent_edges() {
+    let mut analysis = fixture();
+    for text in [
+        "no table",
+        "Cross Reference Table\n",
+        "Cross Reference Table\nSymbol File\n  orphan.o",
+        "Cross Reference Table\nSymbol File\nmissing_file",
+        "Cross Reference Table\nUnknown Header",
+    ] {
+        assert!(from_map(&analysis, text, "bad.map").is_err());
+        import_map(&mut analysis, text, "bad.map");
+        assert!(analysis.dependencies.edges.is_empty());
+        assert!(analysis.dependencies.map_path.is_none());
+        assert!(!analysis.dependencies.nodes.is_empty());
+    }
+    // Additive report field stays backwards compatible with existing JSON envelopes.
+    let mut json = serde_json::to_value(&analysis).unwrap();
+    json.as_object_mut().unwrap().remove("dependencies");
+    let restored: Analysis = serde_json::from_value(json).unwrap();
+    assert!(restored.dependencies.nodes.is_empty());
+}
+
+#[test]
+fn long_symbols_and_same_basename_objects_keep_distinct_identities() {
+    let symbol = "a_very_long_raw_mangled_symbol_name_that_exceeds_the_linker_column_width";
+    let text =
+        format!("Cross Reference Table\nSymbol File\n{symbol} first/main.o\n  second/main.o\n");
+    let graph = from_map(&fixture(), &text, "long.map").unwrap();
+    assert!(graph.nodes.iter().any(|n| n.id == "object:first/main.o"));
+    assert!(graph.nodes.iter().any(|n| n.id == "object:second/main.o"));
+    assert_eq!(graph.edges[0].symbols, [symbol]);
+}

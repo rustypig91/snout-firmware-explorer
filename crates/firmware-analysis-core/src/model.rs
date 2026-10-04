@@ -15,6 +15,8 @@ pub struct Analysis {
     pub tree: FileTree,
     pub memory_map: Vec<MemoryRange>,
     pub warnings: Vec<String>,
+    #[serde(default)]
+    pub dependencies: crate::dependencies::DependencyGraph,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -149,3 +149,37 @@ fn unsupported_or_invalid_maps_do_not_block_firmware() {
         .iter()
         .any(|w| w.contains("capacity remains unknown")));
 }
+
+#[test]
+fn matching_cross_references_load_even_with_explicit_memory_layout() {
+    let dir = Temp::new();
+    fs::write(
+        dir.0.join("app.elf"),
+        include_bytes!("../../../fixtures/cortex-m.elf"),
+    )
+    .unwrap();
+    fs::write(dir.0.join("app.map"), format!("{MAP}\nCross Reference Table\nSymbol File\nReset_Handler  main.o\ndiagnose  diag.o\n  main.o\n")).unwrap();
+    let build = scan_folder(&dir.0).unwrap();
+    for options in [None, Some(Default::default())] {
+        let analysis = analyze_build_firmware(
+            &build,
+            build.root.join("app.elf").as_path(),
+            options.as_ref(),
+        )
+        .unwrap();
+        assert_eq!(analysis.dependencies.edges.len(), 1);
+        assert_eq!(analysis.dependencies.edges[0].symbols, ["diagnose"]);
+        assert!(analysis
+            .dependencies
+            .map_path
+            .as_ref()
+            .unwrap()
+            .ends_with("app.map"));
+    }
+    // A matching filename does not make an unsupported map into dependency evidence.
+    fs::write(dir.0.join("app.map"), MAP).unwrap();
+    let analysis = analyze_build_firmware(&build, &build.root.join("app.elf"), None).unwrap();
+    assert!(analysis.dependencies.edges.is_empty());
+    assert!(analysis.dependencies.map_path.is_none());
+    assert!(!analysis.dependencies.nodes.is_empty());
+}

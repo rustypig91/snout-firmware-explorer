@@ -688,6 +688,7 @@ fn all_data_views_render_headlessly() {
                         View::Symbols => app.symbols(ui, &analysis),
                         View::Sections => app.sections(ui, &analysis),
                         View::MemoryMap => app.memory_map(ui, &analysis),
+                        View::Dependencies => app.dependency_view(ui, &analysis),
                         View::Stack => app.stack_view(ui),
                         View::Compare => app.compare_view(ui),
                     });
@@ -1556,4 +1557,70 @@ fn map_choices_survive_elf_folder_switching_restart_and_folder_reset() {
     finish_job(&mut restored);
     finish_job(&mut restored);
     assert!(restored.map_in_use(&second_map));
+}
+
+#[test]
+fn dependency_map_choices_survive_refresh_restart_and_failed_import() {
+    let folder = tempfile::tempdir().unwrap();
+    std::fs::write(
+        folder.path().join("app.elf"),
+        include_bytes!("../../../fixtures/cortex-m.elf"),
+    )
+    .unwrap();
+    let map = folder.path().join("manual.map");
+    let table =
+        "Cross Reference Table\n\nSymbol File\nReset_Handler  main.o\ndiagnose  diag.o\n  main.o\n";
+    std::fs::write(&map, table).unwrap();
+    let mut app = Explorer::default();
+    app.scan_build(folder.path().into());
+    finish_job(&mut app);
+    let firmware = app.build.as_ref().unwrap().root.join("app.elf");
+    app.open(firmware.clone());
+    finish_job(&mut app);
+    assert!(app.analysis.as_ref().unwrap().dependencies.edges.is_empty());
+    app.apply_dependency_map(map.clone());
+    finish_job(&mut app);
+    assert!(app.view == View::Dependencies);
+    assert_eq!(app.analysis.as_ref().unwrap().dependencies.edges.len(), 1);
+    assert_eq!(app.saved_dependency_map(&firmware), Some(map.clone()));
+    let prefs = app.preference_value();
+    app.apply_dependency_map(folder.path().join("missing.map"));
+    finish_job(&mut app);
+    assert!(app.error.is_some());
+    assert_eq!(app.analysis.as_ref().unwrap().dependencies.edges.len(), 1);
+    std::fs::write(&map, format!("{table}initialized  main.o\n  diag.o\n")).unwrap();
+    app.refresh();
+    finish_job(&mut app);
+    assert_eq!(app.analysis.as_ref().unwrap().dependencies.edges.len(), 2);
+    let mut restored = Explorer::default();
+    restored.apply_preferences(&prefs);
+    finish_job(&mut restored);
+    finish_job(&mut restored);
+    assert!(restored.view == View::Dependencies);
+    assert_eq!(
+        restored.analysis.as_ref().unwrap().dependencies.edges.len(),
+        2
+    );
+    std::fs::remove_file(&map).unwrap();
+    restored.refresh();
+    finish_job(&mut restored);
+    assert!(restored
+        .analysis
+        .as_ref()
+        .unwrap()
+        .dependencies
+        .edges
+        .is_empty());
+    assert!(restored
+        .analysis
+        .as_ref()
+        .unwrap()
+        .dependencies
+        .notes
+        .iter()
+        .any(|n| n.contains("manual.map")));
+    assert_eq!(restored.saved_dependency_map(&firmware), Some(map));
+    restored.reset_build_settings();
+    finish_job(&mut restored);
+    assert_eq!(restored.saved_dependency_map(&firmware), None);
 }

@@ -14,7 +14,7 @@ Alternatively use Clang with ARM target support and `ld.lld` on PATH:
 python fixtures/generate.py
 ```
 
-Run from the repository root. The script regenerates three ELF files, a matching `.map` for each ELF, and compiler `.su` reports. The committed GNU linker maps let the build-folder example automatically import the 256 KiB Flash and 64 KiB RAM capacities. Clang/LLD also emits maps, but its map format does not support automatic capacity import. Toolchains may produce different code sizes; the committed baseline and CLI test totals refer to the stated GCC version. Debug paths reflect the generation machine and tests deliberately compare suffixes. No downloaded compiler is committed (`fixtures/build/` is ignored).
+Run from the repository root. The script regenerates three ELF files, a matching `.map` for each ELF, and compiler `.su` reports. The committed GNU linker maps let the build-folder example automatically import the 256 KiB Flash and 64 KiB RAM capacities. Future GNU regenerations also include raw-symbol cross references for the Dependencies view (`--cref --no-demangle`). The current committed maps predate that option and show unit nodes without connections. Clang/LLD also emits maps, but its map format does not support automatic capacity import. Toolchains may produce different code sizes; the committed baseline and CLI test totals refer to the stated GCC version. Debug paths reflect the generation machine and tests deliberately compare suffixes. No downloaded compiler is committed (`fixtures/build/` is ignored).
 
 GNU `arm-none-eabi-size -A` / `arm-none-eabi-readelf -l -S` reference for the committed baseline:
 

@@ -45,9 +45,11 @@ impl Explorer {
         let path = PathBuf::from(&a.path);
         let layout = self.layout_override.clone();
         let source = layout.as_ref().map(|_| self.layout_source.clone());
+        let dependency_map = self.saved_dependency_map(&path);
         self.job(move || {
             let build = firmware_analysis_core::build::scan_folder(root).map_err(|e| e.to_string())?;
             let (mut a, layout, source) = super::workspace::analyze_selected(&build, &path, layout, source)?;
+            if let Some(map) = dependency_map { super::workspace::read_dependency_map(&mut a, &map); }
             let reports = build.artifacts.iter()
                 .filter(|a| a.kind == firmware_analysis_core::build::ArtifactKind::StackUsage)
                 .map(|a| a.path.clone()).collect();

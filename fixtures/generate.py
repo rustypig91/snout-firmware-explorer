@@ -29,7 +29,7 @@ for variant, extra in [('cortex-m', 0), ('cortex-m-grown', 8)]:
         subprocess.run([compiler, *flags, f'-DEXTRA={extra}', '-c', f'fixtures/src/{source}.c', '-o', str(obj)], check=True)
         objects.append(str(obj))
     if args.gcc:
-        command = [compiler, '-mcpu=cortex-m3', '-mthumb', '-nostdlib', '-Wl,--build-id=none', '-Wl,-T,fixtures/src/cortex-m.ld', *objects]
+        command = [compiler, '-mcpu=cortex-m3', '-mthumb', '-nostdlib', '-Wl,--build-id=none', '-Wl,--cref,--no-demangle', '-Wl,-T,fixtures/src/cortex-m.ld', *objects]
     else:
         linker = shutil.which('ld.lld') or str(Path(compiler).with_name('ld.lld.exe'))
         command = [linker, '-T', 'fixtures/src/cortex-m.ld', '--build-id=none', *objects]

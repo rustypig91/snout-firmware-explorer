@@ -479,7 +479,7 @@ pub fn analyze_bytes(
     }
     warnings.sort();
     warnings.dedup();
-    Ok(Analysis {
+    let mut analysis = Analysis {
         schema_version: 1,
         path: path.into(),
         options: options.clone(),
@@ -509,7 +509,10 @@ pub fn analyze_bytes(
         tree,
         memory_map,
         warnings,
-    })
+        dependencies: Default::default(),
+    };
+    analysis.dependencies = crate::dependencies::units(&analysis);
+    Ok(analysis)
 }
 
 #[cfg(test)]
