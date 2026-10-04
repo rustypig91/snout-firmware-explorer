@@ -1,3 +1,4 @@
+use super::display::display_path;
 use super::Explorer;
 use eframe::egui;
 use firmware_analysis_core::{format_bytes as bytes, Analysis};
@@ -73,7 +74,7 @@ fn metric_slices(
                         s.kind,
                         s.normalized_address,
                         bytes(s.size),
-                        s.source_file.as_deref().unwrap_or("Unknown source")
+                        display_path(s.source_file.as_deref().unwrap_or("Unknown source"))
                     ),
                 });
             }
@@ -96,7 +97,7 @@ fn metric_slices(
             }
             for (key, size) in units {
                 slices.push(Slice {
-                    name: key.label().to_owned(), size,
+                    name: display_path(key.label()).into_owned(), size,
                     tip: match &key {
                         UnitKey::Dwarf(_) => "DWARF compilation unit. Click to inspect functions and data symbols.",
                         UnitKey::Elf(_) => "ELF compilation-unit label (not a proven object path). Click to inspect symbols.",
@@ -159,7 +160,7 @@ impl Explorer {
                 ui.label(format!("/ {}", section.name));
             }
             if let Some(unit) = &self.overview_unit {
-                ui.label(format!("/ {}", unit.label()));
+                ui.label(format!("/ {}", display_path(unit.label())));
             }
         });
         let items = metric_slices(

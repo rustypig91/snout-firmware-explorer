@@ -1,3 +1,4 @@
+use super::display::display_path;
 use super::{egui, Explorer, View};
 use firmware_analysis_core::format_bytes as bytes;
 
@@ -82,11 +83,7 @@ impl Explorer {
             .as_ref()
             .map(|build| {
                 let path = build.root.display().to_string();
-                let path = if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
-                    format!(r"\\{unc}")
-                } else {
-                    path.strip_prefix(r"\\?\").unwrap_or(&path).to_owned()
-                };
+                let path = display_path(&path);
                 format!("{path} - Rusty's Snout - Firmware Explorer")
             })
             .unwrap_or_else(|| "Rusty's Snout - Firmware Explorer".into());

@@ -1,6 +1,6 @@
+use super::display::display_path;
 use super::{egui, Explorer, View};
 use firmware_analysis_core::{format_bytes as bytes, Analysis, Section, Usage};
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Metric {
     Flash,
@@ -158,14 +158,14 @@ impl Explorer {
             .unwrap_or(path);
         ui.label(format!(
             "{} | {} / {}-bit",
-            relative.display(),
+            display_path(&relative.to_string_lossy()),
             a.metadata.architecture,
             a.metadata.bitness
         ));
         ui.collapsing("Firmware details", |ui| {
             ui.label(format!("{} endian | Entry {:#x} | ELF {}",
                 a.metadata.endianness, a.metadata.entry_point, bytes(a.metadata.file_size)));
-            ui.label(&a.path);
+            ui.label(display_path(&a.path));
             ui.small("ELF file size includes debug information and headers; it is not programmed image size.");
         });
         ui.separator();
@@ -214,7 +214,7 @@ impl Explorer {
             } else {
                 &self.layout_source
             };
-            ui.label(format!("Layout: {source}"));
+            ui.label(format!("Layout: {}", display_path(source)));
             if ui
                 .add_enabled(
                     self.receiver.is_none(),
@@ -299,7 +299,7 @@ impl Explorer {
                 .link(format!(
                     "{} | {}",
                     bytes(metric.value(file.usage)),
-                    file.path
+                    display_path(&file.path)
                 ))
                 .clicked()
             {
@@ -332,7 +332,7 @@ impl Explorer {
                     ));
                     ui.label(format!(
                         "Source: {} | {}",
-                        symbol.source_file.as_deref().unwrap_or("Unknown"),
+                        display_path(symbol.source_file.as_deref().unwrap_or("Unknown")),
                         symbol.attribution
                     ));
                     if ui.link("Open in Symbols").clicked() {

@@ -1,3 +1,4 @@
+use super::display::display_path;
 use super::{egui, Explorer, Loaded};
 use firmware_analysis_core::{
     analyze_path,
@@ -140,12 +141,12 @@ impl Explorer {
                                 if ui
                                     .add_enabled(
                                         self.receiver.is_none(),
-                                        egui::Button::new(&label)
+                                        egui::Button::new(display_path(&label))
                                             .frame(false)
                                             .selected(active)
                                             .wrap(),
                                     )
-                                    .on_hover_text(artifact.path.display().to_string())
+                                    .on_hover_text(display_path(&artifact.path.to_string_lossy()))
                                     .clicked()
                                 {
                                     selected = Some(artifact.clone());
@@ -164,7 +165,7 @@ impl Explorer {
             return false;
         };
         ui.heading(path.file_name().unwrap_or_default().to_string_lossy());
-        ui.label(path.display().to_string());
+        ui.label(display_path(&path.to_string_lossy()));
         ui.horizontal(|ui| {
             if self.analysis.is_some() && ui.button("Back to firmware").clicked() {
                 self.preview = None;

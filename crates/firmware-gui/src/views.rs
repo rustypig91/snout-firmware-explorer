@@ -1,3 +1,4 @@
+use super::display::display_path;
 use super::{Explorer, View};
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
@@ -294,7 +295,7 @@ impl Explorer {
             .map(|f| {
                 let mut row = Row::new(
                     vec![
-                        f.path.clone(),
+                        display_path(&f.path).into_owned(),
                         bytes(f.usage.flash),
                         bytes(f.usage.ram),
                         f.symbol_count.to_string(),
@@ -328,7 +329,7 @@ impl Explorer {
     }
     pub(super) fn symbols(&mut self, ui: &mut egui::Ui, a: &Analysis) {
         if let Some(file) = &self.selected_file {
-            ui.weak(file);
+            ui.weak(display_path(file));
         }
         let rows = a
             .symbols
@@ -375,11 +376,11 @@ impl Explorer {
                             String::new()
                         },
                         s.weak,
-                        s.source_file.as_deref().unwrap_or("Unknown"),
+                        display_path(s.source_file.as_deref().unwrap_or("Unknown")),
                         s.source_line
                             .map(|l| l.to_string())
                             .unwrap_or_else(|| "?".into()),
-                        s.compilation_unit.as_deref().unwrap_or("Unknown"),
+                        display_path(s.compilation_unit.as_deref().unwrap_or("Unknown")),
                         s.attribution
                     ),
                 )
@@ -487,7 +488,7 @@ impl Explorer {
                                 s.source_file
                                     .as_ref()
                                     .or(s.compilation_unit.as_ref())
-                                    .cloned()
+                                    .map(|path| display_path(path).into_owned())
                                     .unwrap_or_else(|| "[unattributed]".into()),
                             ],
                             &[(1, entry.address.into()), (2, s.size.into())],
@@ -571,7 +572,7 @@ impl Explorer {
                         e.function.clone(),
                         bytes(e.local_bytes),
                         e.qualifier.clone(),
-                        format!("{}:{}", e.source_file, e.source_line),
+                        format!("{}:{}", display_path(&e.source_file), e.source_line),
                         e.symbol_candidates.len().to_string(),
                     ],
                     &[
@@ -580,7 +581,9 @@ impl Explorer {
                     ],
                     format!(
                         "{}\n{}\nELF matches: {:?}",
-                        e.report_file, e.evidence, e.symbol_candidates
+                        display_path(&e.report_file),
+                        e.evidence,
+                        e.symbol_candidates
                     ),
                 )
             })
@@ -600,8 +603,11 @@ impl Explorer {
             ui.label(format!("RAM {:+} B", c.ram_delta))
                 .on_hover_text(format!("{} to {}", bytes(c.old.ram), bytes(c.new.ram)));
             ui.separator();
-            ui.weak("Current minus older")
-                .on_hover_text(format!("Older: {}\nCurrent: {}", c.old_path, c.new_path));
+            ui.weak("Current minus older").on_hover_text(format!(
+                "Older: {}\nCurrent: {}",
+                display_path(&c.old_path),
+                display_path(&c.new_path)
+            ));
         });
         let changes = if self.comparison_symbols {
             &c.symbols
@@ -778,13 +784,15 @@ fn tree(
     };
     let label = format!(
         "{}  {} / {}",
-        node.name,
+        display_path(&node.name),
         bytes(node.usage.flash),
         bytes(node.usage.ram)
     );
     let help = format!(
         "{}\nFlash: {} B\nRAM: {} B",
-        node.name, node.usage.flash, node.usage.ram
+        display_path(&node.name),
+        node.usage.flash,
+        node.usage.ram
     );
     if node.children.is_empty() {
         if ui
