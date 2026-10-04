@@ -55,10 +55,22 @@ impl Explorer {
         self.descending = !matches!(view, View::MemoryMap);
     }
 
+    pub(super) fn show_file_symbols(&mut self, path: String) {
+        self.change_view(View::Symbols);
+        self.search.clear();
+        self.details = None;
+        self.selected_file = Some(path);
+        self.kind_filter = "All".into();
+    }
+
     pub(super) fn show(&mut self, ctx: &egui::Context) {
         if let Some(path) = ctx.input(|i| i.raw.dropped_files.iter().find_map(|f| f.path.clone())) {
             if self.receiver.is_none() {
-                self.scan_build(path);
+                match super::startup::parse([path.into_os_string()]) {
+                    Ok(Some(startup)) => self.open_startup(&startup),
+                    Ok(None) => {}
+                    Err(error) => self.error = Some(error),
+                }
             }
         }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::O))
@@ -175,6 +187,18 @@ impl Explorer {
                                 self.start_update_check(ctx, true);
                                 ui.close_menu();
                             }
+                            if ui
+                                .checkbox(
+                                    &mut self.updates.check_on_startup,
+                                    "Check for updates on startup",
+                                )
+                                .changed()
+                            {
+                                if let Err(error) = self.save_preferences() {
+                                    self.error =
+                                        Some(format!("Could not save update preferences: {error}"));
+                                }
+                            }
                             ui.separator();
                             if ui
                                 .button("Support developer")
@@ -215,7 +239,7 @@ impl Explorer {
                     ui.separator();
                     ui.small(format!("{} rows", self.visible_rows));
                 } else {
-                    ui.small("Ready / Select or drop a build folder to begin");
+                    ui.small("Ready / Select or drop a build folder or ELF to begin");
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if self.analysis.is_some()
@@ -291,7 +315,7 @@ impl Explorer {
                 return;
             };
             if self.view != View::Overview {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.add(egui::TextEdit::singleline(&mut self.search).hint_text("Filter...").desired_width(200.0));
                     if ui.small_button("Clear").clicked() { self.search.clear(); self.selected_file = None; self.kind_filter = "All".into(); }
                     if matches!(self.view, View::Files | View::Symbols) { ui.toggle_value(&mut self.tree, "Directories"); }
@@ -309,8 +333,14 @@ impl Explorer {
                         });
                     }
                     if self.view == View::Compare {
-                        ui.selectable_value(&mut self.comparison_symbols, false, "Files");
-                        ui.selectable_value(&mut self.comparison_symbols, true, "Symbols");
+                        let previous = self.comparison_group;
+                        ui.selectable_value(&mut self.comparison_group, 2, "Sections");
+                        ui.selectable_value(&mut self.comparison_group, 0, "Files");
+                        ui.selectable_value(&mut self.comparison_group, 1, "Symbols");
+                        if previous != self.comparison_group {
+                            self.search.clear();
+                            self.details = None;
+                        }
                     }
                 });
                 ui.separator();

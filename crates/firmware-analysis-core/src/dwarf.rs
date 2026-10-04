@@ -137,6 +137,26 @@ mod tests {
         assert_eq!(join("C:\\project", "src/main.c"), "C:/project/src/main.c");
         assert_eq!(join("/project", "./src/main.c"), "/project/src/main.c");
         assert_eq!(join("/project", "/other/main.c"), "/other/main.c");
+        assert_eq!(
+            join("/project/build", "../src/main.c"),
+            "/project/src/main.c"
+        );
+        assert_eq!(
+            join("C:\\project\\build", "..\\src\\main.c"),
+            "C:/project/src/main.c"
+        );
+        assert_eq!(join("/project", "/../../src/main.c"), "/src/main.c");
+        assert_eq!(join("../build", "../../src/main.c"), "../../src/main.c");
+        assert_eq!(normalize_source_path("C:/../../main.c"), "C:/main.c");
+        assert_eq!(
+            normalize_source_path("//server/share/./main.c"),
+            "//server/share/main.c"
+        );
+        assert_eq!(
+            normalize_source_path("//server/share/build/../../../main.c"),
+            "//server/share/main.c"
+        );
+        assert_eq!(normalize_source_path("C:../main.c"), "C:../main.c");
     }
 }
 
@@ -162,12 +182,41 @@ fn join(base: &str, path: &str) -> String {
     } else {
         format!("{}/{path}", base.replace('\\', "/").trim_end_matches('/'))
     };
-    // Normalize dot components without consulting the host filesystem.
-    joined
-        .split('/')
-        .filter(|part| *part != ".")
-        .collect::<Vec<_>>()
-        .join("/")
+    normalize_source_path(&joined)
+}
+
+/// Resolve source path components without consulting the host filesystem.
+pub(crate) fn normalize_source_path(path: &str) -> String {
+    let path = path.replace('\\', "/");
+    let (prefix, rest, rooted, protected_parts) = if path.starts_with("//") {
+        // A UNC share is the root, so neither its server nor share can be removed.
+        ("//", path.trim_start_matches('/'), true, 2)
+    } else if path.starts_with('/') {
+        ("/", path.trim_start_matches('/'), true, 0)
+    } else if path.as_bytes().get(1) == Some(&b':') {
+        let (drive, rest) = path.split_at(2);
+        if rest.starts_with('/') {
+            (&path[..3], rest.trim_start_matches('/'), true, 0)
+        } else {
+            (drive, rest, false, 0)
+        }
+    } else {
+        ("", path.as_str(), false, 0)
+    };
+    let mut parts = Vec::new();
+    for part in rest.split('/') {
+        match part {
+            "" | "." => {}
+            ".." if parts.len() > protected_parts
+                && parts.last().is_some_and(|last| *last != "..") =>
+            {
+                parts.pop();
+            }
+            ".." if rooted => {}
+            _ => parts.push(part),
+        }
+    }
+    format!("{prefix}{}", parts.join("/"))
 }
 
 impl SourceIndex {

@@ -59,6 +59,20 @@ pub enum Uncertainty {
     CallGraphUnavailable,
 }
 
+impl Uncertainty {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::IndirectCall => "Indirect call target unknown",
+            Self::Recursion => "Recursive call depth unknown",
+            Self::InlineAssembly => "Inline assembly stack effects unknown",
+            Self::InterruptEntry => "Interrupt nesting and overhead unknown",
+            Self::MissingSymbol => "Missing function symbol",
+            Self::MissingStackInformation => "Missing compiler stack report",
+            Self::CallGraphUnavailable => "Call graph analysis unavailable",
+        }
+    }
+}
+
 pub fn parse_stack_usage(text: &str, report_file: &str) -> (Vec<StackEntry>, Vec<String>) {
     let mut entries = Vec::new();
     let mut warnings = Vec::new();
@@ -214,16 +228,28 @@ pub fn analyze_stack_files(
 /// Debug paths may be absolute on the build machine while .su paths are relative.
 /// Compare whole components and separators, never just arbitrary string suffixes.
 fn source_matches(a: &str, b: &str) -> bool {
-    let a = a.replace('\\', "/");
-    let b = b.replace('\\', "/");
+    let a = crate::dwarf::normalize_source_path(a);
+    let b = crate::dwarf::normalize_source_path(b);
+    let absolute = |p: &str| {
+        p.starts_with('/')
+            || (p.as_bytes().get(1) == Some(&b':') && p.as_bytes().get(2) == Some(&b'/'))
+    };
+    let both_absolute = absolute(&a) && absolute(&b);
     let parts = |p: &str| {
         p.split('/')
-            .filter(|c| !c.is_empty() && *c != ".")
+            .filter(|c| !c.is_empty())
+            // Leading parent components refer to the unknown build directory.
+            // The remaining suffix still provides the same source evidence as
+            // a report using src/main.c directly.
+            .skip_while(|c| *c == "..")
             .map(str::to_owned)
             .collect::<Vec<_>>()
     };
     let a = parts(&a);
     let b = parts(&b);
+    if both_absolute {
+        return a == b;
+    }
     !a.is_empty() && !b.is_empty() && (a.ends_with(&b) || b.ends_with(&a))
 }
 
@@ -246,8 +272,41 @@ fn collect(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), Error> {
             })?;
             collect(&entry.path(), files)?;
         }
-    } else if path.extension().is_some_and(|s| s == "su") {
+    } else if meta.is_file()
+        && path
+            .extension()
+            .is_some_and(|s| s.to_string_lossy().eq_ignore_ascii_case("su"))
+    {
         files.push(path.to_owned());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_matching_allows_relative_reports_but_rejects_conflicting_absolute_paths() {
+        assert!(source_matches("/project/src/main.c", "src/main.c"));
+        assert!(source_matches(r"C:\project\src\main.c", "./src/main.c"));
+        assert!(source_matches(
+            "/project/src/main.c",
+            "/project/./src/main.c"
+        ));
+        assert!(source_matches("/project/src/main.c", "../src/main.c"));
+        assert!(source_matches("/project/src/main.c", "../../src/main.c"));
+        assert!(source_matches(
+            "/project/build/../src/main.c",
+            "../src/main.c"
+        ));
+        assert!(source_matches(
+            r"C:\project\build\..\src\main.c",
+            r"..\src\main.c"
+        ));
+        assert!(!source_matches("/project/src/main.c", "../other/main.c"));
+        assert!(!source_matches("/project/src/main.c", "/src/main.c"));
+        assert!(!source_matches(r"C:\project\main.c", r"D:\project\main.c"));
+        assert!(!source_matches("/project/notmain.c", "main.c"));
+    }
 }

@@ -13,14 +13,26 @@ pub(super) fn analyze_selected(
     source: Option<String>,
 ) -> Result<(super::Analysis, Option<super::AnalysisOptions>, String), String> {
     if let Some(source) = &source {
-        if std::path::Path::new(source)
+        let extension = std::path::Path::new(source)
             .extension()
-            .is_some_and(|e| e == "map")
-        {
-            layout = Some(
-                parse_map_regions(&std::fs::read_to_string(source).map_err(|e| e.to_string())?)
-                    .map_err(|e| e.to_string())?,
-            );
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_ascii_lowercase();
+        match extension.as_str() {
+            "map" => {
+                layout = Some(
+                    parse_map_regions(&std::fs::read_to_string(source).map_err(|e| e.to_string())?)
+                        .map_err(|e| e.to_string())?,
+                )
+            }
+            "json" => {
+                let options =
+                    serde_json::from_slice(&std::fs::read(source).map_err(|e| e.to_string())?)
+                        .map_err(|e| e.to_string())?;
+                firmware_analysis_core::validate_options(&options).map_err(|e| e.to_string())?;
+                layout = Some(options);
+            }
+            _ => {}
         }
     }
     let analysis =
@@ -263,11 +275,11 @@ impl Explorer {
                             self.configure(Some(path.clone()));
                         }
                     }
-                    "su" if self.analysis.is_some() => {
-                        if ui.button("View this stack report").clicked() {
-                            self.preview = None;
-                            self.scan_stack(path.clone());
-                        }
+                    "su" if self.analysis.is_some()
+                        && ui.button("View this stack report").clicked() =>
+                    {
+                        self.preview = None;
+                        self.scan_stack(path.clone());
                     }
                     _ => {}
                 }

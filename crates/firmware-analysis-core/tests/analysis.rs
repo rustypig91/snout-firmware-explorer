@@ -188,8 +188,30 @@ fn comparison_tracks_growth_and_shrinkage() {
         .iter()
         .any(|s| s.identity.ends_with("samples") && s.ram_delta == 32));
     assert_eq!(diff.files.iter().map(|f| f.ram_delta).sum::<i128>(), 32);
+    assert_eq!(
+        diff.sections.iter().map(|s| s.ram_delta).sum::<i128>(),
+        diff.ram_delta
+    );
+    assert_eq!(
+        diff.sections.iter().map(|s| s.flash_delta).sum::<i128>(),
+        diff.flash_delta
+    );
+    assert!(diff
+        .sections
+        .iter()
+        .any(|s| s.identity == ".bss" && s.ram_delta == 32));
+    assert!(compare(&old, &old).sections.is_empty());
     assert_eq!(compare(&new, &old).ram_delta, -32);
     assert!(compare(&old, &old).symbols.is_empty());
+}
+
+#[test]
+fn older_comparison_json_remains_readable_without_section_deltas() {
+    let mut json = serde_json::to_value(compare(&analyze(ELF), &analyze(GROWN))).unwrap();
+    json.as_object_mut().unwrap().remove("sections");
+    let report: firmware_analysis_core::compare::Comparison = serde_json::from_value(json).unwrap();
+    assert!(report.sections.is_empty());
+    assert_eq!(report.ram_delta, 32);
 }
 
 #[test]

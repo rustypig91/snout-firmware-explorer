@@ -36,6 +36,23 @@ fn region_kind(options: &AnalysisOptions, address: u64, size: u64) -> Option<Mem
         .map(|r| r.kind)
 }
 
+fn is_mapping_symbol(machine: u16, name: &str, symbol: &sym::Sym) -> bool {
+    if symbol.st_type() != sym::STT_NOTYPE
+        || symbol.st_bind() != sym::STB_LOCAL
+        || symbol.st_size != 0
+    {
+        return false;
+    }
+    // Arm ABI mapping symbols use an exact marker or a dot-delimited suffix.
+    // A shared prefix alone does not make an ordinary symbol a mapping marker.
+    let marker = name.split('.').next().unwrap_or(name);
+    match machine {
+        header::EM_ARM => matches!(marker, "$a" | "$d" | "$t"),
+        header::EM_AARCH64 => matches!(marker, "$x" | "$d"),
+        _ => false,
+    }
+}
+
 /// Validate a physical memory layout before applying it to a report.
 pub fn validate_options(options: &AnalysisOptions) -> Result<(), Error> {
     for (i, region) in options.regions.iter().enumerate() {
@@ -66,7 +83,7 @@ pub fn analyze_bytes(
     validate_options(options)?;
     if !bytes.starts_with(b"\x7fELF") {
         return Err(Error::Invalid(
-            "Expected an ELF file (MAP input is not implemented yet)".into(),
+            "Expected an ELF file containing linked firmware; linker maps describe memory regions but cannot replace firmware input".into(),
         ));
     }
     let elf = Elf::parse(bytes).map_err(|e| Error::Invalid(e.to_string()))?;
@@ -304,11 +321,7 @@ pub fn analyze_bytes(
             continue;
         };
         let name = elf.strtab.get_at(raw.st_name).unwrap_or("");
-        if name.is_empty()
-            || name.starts_with("$t")
-            || name.starts_with("$d")
-            || name.starts_with("$a")
-        {
+        if name.is_empty() || is_mapping_symbol(elf.header.e_machine, name, &raw) {
             continue;
         }
         let address = if elf.header.e_machine == header::EM_ARM && raw.st_type() == sym::STT_FUNC {
@@ -486,4 +499,75 @@ pub fn analyze_bytes(
         memory_map,
         warnings,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_dollar_prefixed_symbols_survive_firmware_analysis() {
+        let mut data = include_bytes!("../../../fixtures/cortex-m.elf").to_vec();
+        let original = analyze_bytes(&data, "fixture", &AnalysisOptions::default()).unwrap();
+        let original_name = "_Z12cpp_functionj";
+        let name_offset = {
+            let elf = Elf::parse(&data).unwrap();
+            let symbol = elf
+                .syms
+                .iter()
+                .find(|symbol| elf.strtab.get_at(symbol.st_name) == Some(original_name))
+                .unwrap();
+            let table = elf
+                .section_headers
+                .iter()
+                .find(|section| section.sh_type == SHT_SYMTAB)
+                .unwrap();
+            elf.section_headers[table.sh_link as usize].sh_offset as usize + symbol.st_name
+        };
+        data[name_offset..name_offset + original_name.len()].fill(0);
+        data[name_offset..name_offset + 5].copy_from_slice(b"$data");
+        let report = analyze_bytes(&data, "fixture", &AnalysisOptions::default()).unwrap();
+        let symbol = report
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "$data")
+            .unwrap();
+        assert!(symbol.size > 0);
+        assert_eq!(report.symbols.len(), original.symbols.len());
+        assert_eq!(report.totals, original.totals);
+    }
+
+    #[test]
+    fn mapping_markers_are_specific_to_their_architecture_and_symbol_metadata() {
+        let mapping = sym::Sym::default();
+        for name in ["$a", "$a.1", "$d", "$d.pool", "$t", "$t.2"] {
+            assert!(is_mapping_symbol(header::EM_ARM, name, &mapping));
+            assert!(!is_mapping_symbol(header::EM_X86_64, name, &mapping));
+        }
+        for name in ["$x", "$x.1", "$d", "$d.pool"] {
+            assert!(is_mapping_symbol(header::EM_AARCH64, name, &mapping));
+        }
+        for name in ["$data", "$task", "$a_function", "$xylophone"] {
+            assert!(!is_mapping_symbol(header::EM_ARM, name, &mapping));
+            assert!(!is_mapping_symbol(header::EM_AARCH64, name, &mapping));
+        }
+        assert!(!is_mapping_symbol(header::EM_ARM, "$x", &mapping));
+        assert!(!is_mapping_symbol(header::EM_AARCH64, "$t", &mapping));
+        for ordinary in [
+            sym::Sym {
+                st_info: sym::STB_GLOBAL << 4,
+                ..mapping
+            },
+            sym::Sym {
+                st_info: sym::STT_FUNC,
+                ..mapping
+            },
+            sym::Sym {
+                st_size: 4,
+                ..mapping
+            },
+        ] {
+            assert!(!is_mapping_symbol(header::EM_ARM, "$d", &ordinary));
+        }
+    }
 }

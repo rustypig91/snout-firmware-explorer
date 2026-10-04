@@ -1,5 +1,5 @@
 use super::{AnalysisOptions, Explorer, Loaded, RememberedFirmware, View};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn preferences_path() -> Option<PathBuf> {
     std::env::var_os("APPDATA")
@@ -8,6 +8,27 @@ fn preferences_path() -> Option<PathBuf> {
         .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".config")))
         .map(|p| p.join("snout-firmware-explorer").join("workspace.json"))
 }
+
+fn write_preferences(
+    path: &Path,
+    value: &serde_json::Value,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Missing preferences folder",
+        )
+    })?;
+    std::fs::create_dir_all(parent)?;
+    // Stage alongside the destination so replacement stays on one filesystem.
+    // Keep the last saved workspace intact until the new file is complete.
+    let mut staged = tempfile::NamedTempFile::new_in(parent)?;
+    serde_json::to_writer_pretty(&mut staged, value)?;
+    staged.as_file().sync_all()?;
+    staged.persist(path).map_err(|error| error.error)?;
+    Ok(())
+}
+
 impl Explorer {
     pub(super) fn refresh(&mut self) {
         if self.receiver.is_some() {
@@ -51,9 +72,7 @@ impl Explorer {
         let Some(path) = preferences_path() else {
             return Ok(());
         };
-        std::fs::create_dir_all(path.parent().unwrap())?;
-        std::fs::write(path, serde_json::to_vec_pretty(&self.preference_value())?)?;
-        Ok(())
+        write_preferences(&path, &self.preference_value())
     }
     pub(super) fn restore_preferences(&mut self, restore_workspace: bool) {
         let Some(path) = preferences_path() else {
@@ -145,5 +164,47 @@ impl Explorer {
         if restore_workspace {
             self.scan_build(folder);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+
+    #[test]
+    fn saves_replace_complete_preferences_without_truncating_the_previous_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config/workspace.json");
+        let first = serde_json::json!({"version": 1, "firmware": "first.elf"});
+        write_preferences(&path, &first).unwrap();
+        let mut previous = std::fs::File::open(&path).unwrap();
+        let next = serde_json::json!({"version": 1, "firmware": "next.elf"});
+        write_preferences(&path, &next).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()).unwrap(),
+            next
+        );
+        let mut old_data = Vec::new();
+        previous.read_to_end(&mut old_data).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&old_data).unwrap(),
+            first
+        );
+        assert_eq!(
+            std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+            1
+        );
+    }
+
+    #[test]
+    fn failed_replacement_preserves_the_destination_and_removes_staging_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("workspace.json");
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("keep"), b"saved").unwrap();
+        assert!(write_preferences(&path, &serde_json::json!({"version": 1})).is_err());
+        assert_eq!(std::fs::read(path.join("keep")).unwrap(), b"saved");
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 }

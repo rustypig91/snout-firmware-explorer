@@ -12,6 +12,8 @@ pub struct Comparison {
     pub new: Usage,
     pub flash_delta: i128,
     pub ram_delta: i128,
+    #[serde(default)]
+    pub sections: Vec<Change>,
     pub files: Vec<Change>,
     pub symbols: Vec<Change>,
     pub warnings: Vec<String>,
@@ -28,6 +30,13 @@ pub struct Change {
 }
 
 pub fn compare(old: &Analysis, new: &Analysis) -> Comparison {
+    let sections = |a: &Analysis| {
+        let mut map = BTreeMap::new();
+        for s in a.sections.iter().filter(|s| s.allocated) {
+            add(&mut map, s.name.clone(), s.usage);
+        }
+        map
+    };
     let files = |a: &Analysis| {
         let mut map = BTreeMap::new();
         for f in &a.files {
@@ -75,6 +84,7 @@ pub fn compare(old: &Analysis, new: &Analysis) -> Comparison {
         new: new.totals,
         flash_delta: i128::from(new.totals.flash) - i128::from(old.totals.flash),
         ram_delta: i128::from(new.totals.ram) - i128::from(old.totals.ram),
+        sections: changes(sections(old), sections(new)),
         files: changes(files(old), files(new)),
         symbols: changes(symbols(old), symbols(new)),
         warnings,

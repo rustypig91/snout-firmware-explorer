@@ -176,9 +176,8 @@ impl Explorer {
             self.overview_metric.label(),
             bytes(total)
         ));
-        ui.small(
-            "Select a row to explore. Aliases share unique bytes; zero-sized labels remain listed.",
-        );
+        ui.weak("Select a row to explore")
+            .on_hover_text("Aliases share unique bytes; zero-sized labels remain listed.");
         let mut selected = None;
         for item in &items {
             let fraction = if total == 0 {

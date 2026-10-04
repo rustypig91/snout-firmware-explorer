@@ -81,7 +81,19 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Startup>
 impl super::Explorer {
     pub(super) fn open_startup(&mut self, startup: &Startup) {
         if let Some(folder) = &startup.folder {
-            self.pending_restore = startup.elf.clone().map(|path| (path, None, String::new()));
+            self.pending_restore = startup.elf.clone().map(|path| {
+                let saved = self
+                    .build_settings
+                    .get(folder)
+                    .and_then(|settings| settings.layouts.get(&path));
+                (
+                    path,
+                    saved.map(|layout| layout.options.clone()),
+                    saved
+                        .map(|layout| layout.source.clone())
+                        .unwrap_or_default(),
+                )
+            });
             self.view = super::View::Overview;
             self.scan_build(folder.clone());
         }

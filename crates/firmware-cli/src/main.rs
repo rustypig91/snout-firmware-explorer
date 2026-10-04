@@ -73,6 +73,7 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
                 diff.ram_delta
             )?;
             for (title, changes) in [
+                ("Changed sections", &diff.sections),
                 ("Changed files", &diff.files),
                 ("Changed symbols", &diff.symbols),
             ] {
@@ -206,6 +207,8 @@ fn main() -> ExitCode {
         Err(e) => {
             if e.downcast_ref::<io::Error>()
                 .is_some_and(|e| e.kind() == io::ErrorKind::BrokenPipe)
+                || e.downcast_ref::<serde_json::Error>()
+                    .is_some_and(|e| e.io_error_kind() == Some(io::ErrorKind::BrokenPipe))
             {
                 return ExitCode::SUCCESS;
             }

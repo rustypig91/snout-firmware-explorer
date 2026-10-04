@@ -50,6 +50,13 @@ impl Explorer {
             }
         });
         self.visible_rows = rows.len();
+        if rows.is_empty() {
+            ui.weak(if self.search.is_empty() {
+                "No entries for the current selection."
+            } else {
+                "No entries match the filter. Clear it to see available entries."
+            });
+        }
         let editing_text = ui
             .memory(|m| m.focused())
             .is_some_and(|id| egui::TextEdit::load_state(ui.ctx(), id).is_some());
@@ -283,8 +290,7 @@ impl Explorer {
                 .iter()
                 .find(|f| f.path.trim_start_matches('/') == path)
             {
-                self.change_view(View::Symbols);
-                self.selected_file = Some(file.path.clone());
+                self.show_file_symbols(file.path.clone());
             }
         }
     }
@@ -306,7 +312,13 @@ impl Explorer {
                         (2, f.usage.ram.into()),
                         (3, f.symbol_count as i128),
                     ],
-                    String::new(),
+                    format!(
+                        "{}\n{}\nFlash: {} / RAM: {}",
+                        display_path(&f.path),
+                        f.attribution,
+                        bytes(f.usage.flash),
+                        bytes(f.usage.ram)
+                    ),
                 );
                 row.action = Some(f.path.clone());
                 row
@@ -323,8 +335,7 @@ impl Explorer {
             ],
             rows,
         ) {
-            self.change_view(View::Symbols);
-            self.selected_file = Some(file);
+            self.show_file_symbols(file);
         }
     }
     pub(super) fn symbols(&mut self, ui: &mut egui::Ui, a: &Analysis) {
@@ -364,7 +375,10 @@ impl Explorer {
                         (6, s.address.into()),
                     ],
                     format!(
-                        "{}{}Weak symbol: {}\nSource: {}:{}\nCompilation unit: {}\n{}",
+                        "Address: {:#010x}\nSection: {} (index {})\n{}{}Weak symbol: {}\nSource: {}:{}\nCompilation unit: {}\n{}",
+                        s.address,
+                        s.section,
+                        s.section_index,
                         if s.name != s.demangled_name {
                             format!("Linker name: {}\n", s.name)
                         } else {
@@ -575,6 +589,17 @@ impl Explorer {
     }
     pub(super) fn stack_view(&mut self, ui: &mut egui::Ui) {
         ui.label("Compiler-reported local frames · Call-chain total: unknown").on_hover_text("Local stack excludes callers, callees and interrupt overhead. Recursive or indirect calls require additional analysis.");
+        ui.collapsing("Why is total stack unknown?", |ui| {
+            ui.label("The app reads compiler .su reports but does not construct a call graph. Local frames cannot establish the maximum nested call chain or interrupt overhead.");
+            if let Some(report) = &self.stack {
+                for call in &report.call_graph.unresolved {
+                    ui.label(format!("{}: {}", call.function.as_deref().unwrap_or("Whole firmware"), call.reason.label()));
+                }
+                let dynamic = report.entries.iter().filter(|e| e.qualifier == "dynamic").count();
+                if dynamic > 0 { ui.label(format!("{dynamic} dynamic frames have no compiler-provided upper bound.")); }
+            }
+            ui.label("Use .su reports from this build (-fstack-usage). Inspect missing ELF functions and ambiguous matches below; call-chain analysis and runtime stack high-water measurements are needed for total stack sizing.");
+        });
         let Some(report) = &self.stack else {
             self.visible_rows = 0;
             ui.add_space(15.0);
@@ -614,15 +639,20 @@ impl Explorer {
             .iter()
             .filter(|e| e.symbol_candidates.is_empty())
             .count();
-        ui.checkbox(
-            &mut self.stack_show_unresolved,
-            format!("Show unresolved reports ({unresolved})"),
-        );
-        ui.small("Multiple ELF candidates are ambiguous. Expand a row for matching evidence and its report path.");
+        let no_matches = unresolved == report.entries.len();
+        if no_matches && unresolved > 0 {
+            ui.weak("No reports match symbols in this ELF. Showing all reports; verify that they belong to this build.");
+        } else {
+            ui.checkbox(
+                &mut self.stack_show_unresolved,
+                format!("Show unresolved reports ({unresolved})"),
+            );
+        }
+        ui.weak("Expand a frame for evidence").on_hover_text("Multiple ELF candidates are ambiguous. Each expanded row includes matching evidence and its report path.");
         let rows = report
             .entries
             .iter()
-            .filter(|e| self.stack_show_unresolved || !e.symbol_candidates.is_empty())
+            .filter(|e| no_matches || self.stack_show_unresolved || !e.symbol_candidates.is_empty())
             .map(|e| {
                 Row::new(
                     vec![
@@ -653,7 +683,7 @@ impl Explorer {
             ui.weak("Use Menu > Compare to select an older build. Current minus older is shown.");
             return;
         };
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label(format!("Flash {:+} B", c.flash_delta))
                 .on_hover_text(format!("{} to {}", bytes(c.old.flash), bytes(c.new.flash)));
             ui.separator();
@@ -666,10 +696,10 @@ impl Explorer {
                 display_path(&c.new_path)
             ));
         });
-        let changes = if self.comparison_symbols {
-            &c.symbols
-        } else {
-            &c.files
+        let changes = match self.comparison_group {
+            1 => &c.symbols,
+            2 => &c.sections,
+            _ => &c.files,
         };
         let rows = changes
             .iter()
@@ -806,16 +836,6 @@ fn sort_header(ui: &mut egui::Ui, title: &str, descending: Option<bool>) -> egui
         }
     }
     response
-}
-pub(super) fn metric(ui: &mut egui::Ui, title: &str, value: u64, help: &str) {
-    ui.label(title).on_hover_text(help);
-    ui.label(
-        RichText::new(bytes(value))
-            .strong()
-            .monospace()
-            .color(ACCENT),
-    )
-    .on_hover_text(format!("{value} bytes\n{help}"));
 }
 fn tree(
     ui: &mut egui::Ui,

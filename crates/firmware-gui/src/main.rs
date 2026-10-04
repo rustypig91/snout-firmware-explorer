@@ -6,6 +6,7 @@ mod wake;
 use wake::Wake;
 static RESTART_PATH: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
 mod display;
+mod insights;
 mod overview;
 mod pie;
 mod preferences;
@@ -78,7 +79,7 @@ enum Loaded {
     ),
     Build(firmware_analysis_core::build::BuildFolder),
     Text(PathBuf, String),
-    Baseline(Comparison),
+    Baseline(Analysis),
     Stack(StackReport),
     Config(AnalysisOptions, Option<Analysis>, String),
 }
@@ -107,6 +108,7 @@ struct Explorer {
     preview: Option<(PathBuf, String)>,
     layout_override: Option<AnalysisOptions>,
     comparison: Option<Comparison>,
+    baseline: Option<Arc<Analysis>>,
     stack: Option<StackReport>,
     stack_show_unresolved: bool,
     options: AnalysisOptions,
@@ -117,6 +119,7 @@ struct Explorer {
     selected_region: Option<usize>,
     overview_section: Option<usize>,
     overview_unit: Option<pie::UnitKey>,
+    overview_scroll_top: bool,
     sort_column: usize,
     descending: bool,
     error: Option<String>,
@@ -126,7 +129,7 @@ struct Explorer {
     show_about: bool,
     visible_rows: usize,
     kind_filter: String,
-    comparison_symbols: bool,
+    comparison_group: usize,
     overview_metric: overview::Metric,
     contributor_ram: bool,
     region_cache: Vec<firmware_analysis_core::regions::RegionUsage>,
@@ -148,6 +151,7 @@ impl Default for Explorer {
             preview: None,
             layout_override: None,
             comparison: None,
+            baseline: None,
             stack: None,
             stack_show_unresolved: false,
             options: AnalysisOptions::default(),
@@ -158,6 +162,7 @@ impl Default for Explorer {
             selected_region: None,
             overview_section: None,
             overview_unit: None,
+            overview_scroll_top: false,
             sort_column: 1,
             descending: true,
             error: None,
@@ -167,7 +172,7 @@ impl Default for Explorer {
             show_about: false,
             visible_rows: 0,
             kind_filter: "All".into(),
-            comparison_symbols: false,
+            comparison_group: 0,
             overview_metric: overview::Metric::Flash,
             contributor_ram: false,
             region_cache: Vec::new(),
@@ -256,11 +261,11 @@ impl Explorer {
             .add_filter("All files", &["*"])
             .pick_file()
         {
-            if let Some(current) = self.analysis.clone() {
+            if self.analysis.is_some() {
                 let options = self.options.clone();
                 self.job(move || {
                     analyze_path(path, &options)
-                        .map(|old| Loaded::Baseline(compare(&old, &current)))
+                        .map(Loaded::Baseline)
                         .map_err(|e| e.to_string())
                 });
             }
@@ -292,6 +297,7 @@ impl Explorer {
             Some(Ok(result)) => {
                 self.receiver = None;
                 self.region_cache_key = 0;
+                let refreshed = matches!(&result, Ok(Loaded::Refresh(_)));
                 let result = result.map(|loaded| match loaded {
                     Loaded::Refresh(result) => {
                         let (build, a, stack, layout, source) = *result;
@@ -309,6 +315,7 @@ impl Explorer {
                         self.options = AnalysisOptions::default();
                         self.layout_override = None;
                         self.comparison = None;
+                        self.baseline = None;
                         self.stack = None;
                         self.details = None;
                         self.selected_region = None;
@@ -317,6 +324,7 @@ impl Explorer {
                         self.selected_file = None;
                         self.artifact_search.clear();
                         self.search.clear();
+                        self.kind_filter = "All".into();
                         self.visible_rows = 0;
                         let restore = self
                             .pending_restore
@@ -375,18 +383,30 @@ impl Explorer {
                         self.options = a.options.clone();
                         self.preview = None;
                         self.analysis = Some(Arc::new(a));
-                        self.comparison = None;
+                        if refreshed {
+                            self.comparison = self
+                                .baseline
+                                .as_ref()
+                                .map(|old| compare(old, self.analysis.as_ref().unwrap()));
+                        } else {
+                            self.comparison = None;
+                            self.baseline = None;
+                        }
                         self.stack = stack;
                         self.selected_file = None;
                         self.selected_region = None;
                         self.overview_section = None;
                         self.overview_unit = None;
                         self.search.clear();
+                        self.kind_filter = "All".into();
+                        self.stack_show_unresolved = false;
                         self.details = None;
                         self.visible_rows = 0;
                     }
-                    Ok(Loaded::Baseline(c)) => {
-                        self.comparison = Some(c);
+                    Ok(Loaded::Baseline(old)) => {
+                        self.comparison =
+                            self.analysis.as_ref().map(|current| compare(&old, current));
+                        self.baseline = Some(Arc::new(old));
                         self.change_view(View::Compare);
                     }
                     Ok(Loaded::Stack(s)) => {
@@ -404,6 +424,7 @@ impl Explorer {
                         self.analysis = analysis.map(Arc::new);
                         self.preview = None;
                         self.comparison = None;
+                        self.baseline = None;
                     }
                     Err(error) => self.error = Some(error),
                 }

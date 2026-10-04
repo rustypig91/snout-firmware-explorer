@@ -14,6 +14,300 @@ fn finish_job(app: &mut Explorer) {
 }
 
 #[test]
+fn symbol_navigation_clears_filters_even_when_already_in_symbols() {
+    let mut app = Explorer {
+        view: View::Symbols,
+        search: "no-match".into(),
+        kind_filter: "Label".into(),
+        details: Some(("old".into(), "detail".into())),
+        ..Default::default()
+    };
+    app.show_file_symbols("src/main.c".into());
+    assert_eq!(app.selected_file.as_deref(), Some("src/main.c"));
+    assert!(app.search.is_empty());
+    assert_eq!(app.kind_filter, "All");
+    assert!(app.details.is_none());
+}
+
+#[test]
+fn overview_explains_reservations_and_links_growth_to_section_comparison() {
+    let old = analyze_path(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/cortex-m.elf"),
+        &Default::default(),
+    )
+    .unwrap();
+    let new = analyze_path(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/cortex-m-grown.elf"),
+        &Default::default(),
+    )
+    .unwrap();
+    let mut app = Explorer {
+        analysis: Some(Arc::new(new.clone())),
+        comparison: Some(compare(&old, &new)),
+        ..Default::default()
+    };
+    let ctx = egui::Context::default();
+    shell::configure_style(&ctx);
+    fn frame(
+        ctx: &egui::Context,
+        app: &mut Explorer,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 1600.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.show(ctx),
+        )
+    }
+    fn click_text(ctx: &egui::Context, app: &mut Explorer, text: &str) {
+        let output = frame(ctx, app, vec![]);
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.text() == text => {
+                    Some(t.pos + t.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("Missing text: {text}"));
+        for pressed in [true, false] {
+            frame(
+                ctx,
+                app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+    }
+    frame(&ctx, &mut app, vec![]);
+    let output = frame(&ctx, &mut app, vec![]);
+    let has_text = |text: &str| {
+        output
+            .shapes
+            .iter()
+            .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == text))
+    };
+    assert!(has_text("Flash: 260 B used | Capacity unknown"));
+    assert!(has_text("RAM: 264 B used | Capacity unknown"));
+    assert!(!has_text("Flash payload"));
+    assert!(!has_text("Static RAM"));
+    assert!(has_text("RAM code: 28 B"));
+    assert!(output.shapes.iter().any(
+        |s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text().ends_with("src/main.c"))
+    ));
+    click_text(&ctx, &mut app, "Explain 128 B unattributed RAM");
+    frame(&ctx, &mut app, vec![]);
+    click_text(
+        &ctx,
+        &mut app,
+        "128 B in .reserved · reserved without a source owner",
+    );
+    assert!(app.overview_metric == overview::Metric::Ram);
+    assert_eq!(
+        app.overview_section,
+        new.sections
+            .iter()
+            .find(|s| s.name == ".reserved")
+            .map(|s| s.index)
+    );
+    click_text(&ctx, &mut app, "RAM +32 B | .bss");
+    assert!(app.view == View::Compare);
+    assert_eq!(app.comparison_group, 2);
+    assert_eq!(app.search, ".bss");
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.visible_rows, 1);
+}
+
+#[test]
+fn same_named_symbols_at_different_addresses_expand_independently() {
+    let mut analysis = analyze_path(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/cortex-m.elf"),
+        &Default::default(),
+    )
+    .unwrap();
+    let mut symbols: Vec<_> = analysis
+        .symbols
+        .iter()
+        .filter(|symbol| symbol.kind == "Global")
+        .take(2)
+        .cloned()
+        .collect();
+    assert_eq!(symbols.len(), 2);
+    assert_ne!(symbols[0].address, symbols[1].address);
+    for symbol in &mut symbols {
+        symbol.name = "shared_local".into();
+        symbol.demangled_name = "shared_local".into();
+        symbol.weak = false;
+        symbol.source_file = None;
+        symbol.source_line = None;
+        symbol.compilation_unit = None;
+        symbol.attribution = "Unknown owner".into();
+    }
+    symbols.sort_by_key(|symbol| symbol.address);
+    let addresses: Vec<_> = symbols.iter().map(|symbol| symbol.address).collect();
+    analysis.symbols = symbols;
+    let mut app = Explorer {
+        analysis: Some(Arc::new(analysis)),
+        view: View::Symbols,
+        sort_column: 6,
+        descending: false,
+        ..Default::default()
+    };
+    let ctx = egui::Context::default();
+    for address in addresses {
+        let _ = ctx.run(
+            egui::RawInput {
+                events: [true, false]
+                    .map(|pressed| egui::Event::Key {
+                        key: egui::Key::ArrowDown,
+                        physical_key: None,
+                        pressed,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    })
+                    .into(),
+                ..Default::default()
+            },
+            |ctx| app.show(ctx),
+        );
+        assert_eq!(app.visible_rows, 2);
+        assert_eq!(app.details.as_ref().unwrap().0, "shared_local");
+        assert!(app
+            .details
+            .as_ref()
+            .unwrap()
+            .1
+            .contains(&format!("Address: {address:#010x}")));
+    }
+}
+
+#[test]
+fn refresh_reloads_uppercase_maps_and_json_layouts_and_keeps_comparison() {
+    let folder = tempfile::tempdir().unwrap();
+    let elf = folder.path().join("app.elf");
+    std::fs::write(&elf, include_bytes!("../../../fixtures/cortex-m.elf")).unwrap();
+    let map = folder.path().join("manual.MAP");
+    std::fs::write(&map, include_bytes!("../../../fixtures/cortex-m.map")).unwrap();
+    let layout = folder.path().join("memory.JSON");
+    std::fs::write(
+        &layout,
+        include_bytes!("../../../examples/cortex-m-memory.json"),
+    )
+    .unwrap();
+    let mut app = Explorer::default();
+    app.scan_build(folder.path().to_owned());
+    finish_job(&mut app);
+    app.open(elf.clone());
+    finish_job(&mut app);
+    for source in [&map, &layout] {
+        if source == &map {
+            app.apply_map(source.clone());
+        } else {
+            app.configure(Some(source.clone()));
+        }
+        finish_job(&mut app);
+        let old = app.analysis.as_ref().unwrap().as_ref().clone();
+        app.job(move || Ok(Loaded::Baseline(old)));
+        finish_job(&mut app);
+        if source == &map {
+            std::fs::write(
+                source,
+                include_str!("../../../fixtures/cortex-m-grown.map").replacen(
+                    "0x00040000",
+                    "0x00080000",
+                    1,
+                ),
+            )
+            .unwrap();
+        } else {
+            let mut options = app.options.clone();
+            options.regions[0].size *= 2;
+            std::fs::write(source, serde_json::to_vec(&options).unwrap()).unwrap();
+        }
+        let previous = app.options.clone();
+        std::fs::write(&elf, include_bytes!("../../../fixtures/cortex-m-grown.elf")).unwrap();
+        app.refresh();
+        finish_job(&mut app);
+        assert!(app.error.is_none(), "{:?}", app.error);
+        assert_ne!(app.options, previous);
+        assert!(app.comparison.is_some());
+        assert!(app.baseline.is_some());
+        if source == &map {
+            assert_eq!(app.comparison.as_ref().unwrap().ram_delta, 32);
+            assert!(app
+                .comparison
+                .as_ref()
+                .unwrap()
+                .sections
+                .iter()
+                .any(|s| s.identity == ".bss"));
+        }
+    }
+}
+
+#[test]
+fn stripped_firmware_shows_unresolved_uppercase_stack_reports() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("report.SU");
+    std::fs::write(&path, include_bytes!("../../../fixtures/cortex-m-main.su")).unwrap();
+    let analysis = analyze_path(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/cortex-m-stripped.elf"),
+        &Default::default(),
+    )
+    .unwrap();
+    let report = analyze_stack(&analysis, folder.path()).unwrap();
+    assert_eq!(report.entries.len(), 4);
+    let mut app = Explorer {
+        analysis: Some(Arc::new(analysis)),
+        stack: Some(report),
+        ..Default::default()
+    };
+    let ctx = egui::Context::default();
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| app.stack_view(ui));
+    });
+    assert_eq!(app.visible_rows, 4);
+}
+
+#[test]
+fn dropping_an_elf_opens_its_folder_and_selects_it() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/cortex-m-grown.elf")
+        .canonicalize()
+        .unwrap();
+    let mut app = Explorer::default();
+    let ctx = egui::Context::default();
+    let _ = ctx.run(
+        egui::RawInput {
+            dropped_files: vec![egui::DroppedFile {
+                path: Some(path.clone()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        |ctx| app.show(ctx),
+    );
+    finish_job(&mut app);
+    finish_job(&mut app);
+    assert!(app.error.is_none());
+    assert_eq!(PathBuf::from(&app.analysis.as_ref().unwrap().path), path);
+}
+
+#[test]
 fn active_map_follows_analysis_instead_of_preview_selection() {
     let mut app = Explorer::default();
     let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
@@ -813,6 +1107,49 @@ fn startup_folder_restores_saved_elf_unless_another_is_explicitly_selected() {
             explicit.unwrap_or(first.clone())
         );
     }
+}
+
+#[test]
+fn explicit_startup_selection_restores_its_saved_layout_and_reloads_the_source() {
+    let folder = tempfile::tempdir().unwrap();
+    let first = folder.path().join("first.elf");
+    let second = folder.path().join("second.elf");
+    let map = folder.path().join("manual.map");
+    for path in [&first, &second] {
+        std::fs::write(path, include_bytes!("../../../fixtures/cortex-m.elf")).unwrap();
+    }
+    std::fs::write(&map, include_bytes!("../../../fixtures/cortex-m.map")).unwrap();
+    let mut original = Explorer::default();
+    original.scan_build(folder.path().to_owned());
+    finish_job(&mut original);
+    original.open(second.clone());
+    finish_job(&mut original);
+    original.apply_map(map.clone());
+    finish_job(&mut original);
+    original.open(first);
+    finish_job(&mut original);
+
+    let updated_map =
+        include_str!("../../../fixtures/cortex-m.map").replacen("0x00040000", "0x00080000", 1);
+    std::fs::write(&map, &updated_map).unwrap();
+    let expected = firmware_analysis_core::build::parse_map_regions(&updated_map).unwrap();
+    let mut restored = Explorer::default();
+    restored.apply_preferences_with_workspace(&original.preference_value(), false);
+    restored.open_startup(&startup::Startup {
+        folder: Some(folder.path().to_owned()),
+        elf: Some(second.clone()),
+        ..Default::default()
+    });
+    finish_job(&mut restored);
+    finish_job(&mut restored);
+    assert!(restored.error.is_none(), "{:?}", restored.error);
+    assert_eq!(
+        PathBuf::from(&restored.analysis.as_ref().unwrap().path),
+        second
+    );
+    assert!(restored.map_in_use(&map));
+    assert_eq!(restored.options, expected);
+    assert_eq!(restored.saved_layout(&second).unwrap().options, expected);
 }
 
 #[test]
