@@ -1,4 +1,5 @@
 use super::*;
+use firmware_analysis_core::stack::analyze_stack;
 
 fn finish_job(app: &mut Explorer) {
     let result = app
@@ -509,6 +510,20 @@ fn folder_workflow_selects_firmware_and_loads_stack_automatically() {
     finish_job(&mut app);
     assert!(app.analysis.is_some());
     assert!(!app.stack.as_ref().unwrap().entries.is_empty());
+    assert!(app
+        .stack
+        .as_ref()
+        .unwrap()
+        .entries
+        .iter()
+        .all(|entry| entry.report_file.contains("cortex-m-objects.dir")));
+    assert!(app
+        .stack
+        .as_ref()
+        .unwrap()
+        .warnings
+        .iter()
+        .any(|w| w.contains("selected automatically")));
     let previous = app.analysis.as_ref().unwrap().path.clone();
     app.open(build.root.join("missing.elf"));
     finish_job(&mut app);
@@ -996,7 +1011,7 @@ fn build_folder_scan_finds_adjacent_and_nested_reports() {
     app.build = Some(Arc::new(
         firmware_analysis_core::build::scan_folder(&root).unwrap(),
     ));
-    app.load_build_stack();
+    app.select_stack_reports(vec![root.clone()]);
     let result = app
         .receiver
         .take()
@@ -1005,7 +1020,7 @@ fn build_folder_scan_finds_adjacent_and_nested_reports() {
         .unwrap()
         .unwrap();
     std::fs::remove_dir_all(&root).unwrap();
-    let Loaded::Stack(report) = result else {
+    let Loaded::SelectedStack(report, _) = result else {
         panic!("Expected stack report")
     };
     assert_eq!(report.entries.len(), 2);
@@ -1690,4 +1705,369 @@ fn committed_fixture_renders_six_bubbles_and_sixteen_dependency_arrowheads() {
     )).count();
     assert_eq!(bubbles, 6);
     assert_eq!(arrows, 16);
+}
+
+#[test]
+fn stack_selection_is_build_independent_persisted_per_elf_and_refreshed() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let elf = root.join("app.elf");
+    let other = root.join("other.elf");
+    let bytes = include_bytes!("../../../fixtures/build/cortex-m.elf");
+    std::fs::write(&elf, bytes).unwrap();
+    std::fs::write(&other, bytes).unwrap();
+    let first = root.join("arbitrary-one.su");
+    let second = root.join("arbitrary-two.su");
+    std::fs::write(&first, "diag.c:22:36:diagnose\t56\tstatic\n").unwrap();
+    std::fs::write(&second, "diag.c:22:36:diagnose\t80\tstatic\n").unwrap();
+    let mut app = Explorer::default();
+    app.scan_build(root.clone());
+    finish_job(&mut app);
+    app.open(elf.clone());
+    finish_job(&mut app);
+    assert!(app.stack.as_ref().unwrap().entries.is_empty());
+    app.select_stack_reports(vec![first.clone()]);
+    finish_job(&mut app);
+    assert_eq!(app.stack.as_ref().unwrap().entries.len(), 1);
+    assert_eq!(app.stack.as_ref().unwrap().entries[0].local_bytes, 56);
+    app.refresh();
+    finish_job(&mut app);
+    assert_eq!(app.stack.as_ref().unwrap().entries[0].local_bytes, 56);
+    let preferences = app.preference_value();
+    let mut restored = Explorer::default();
+    restored.apply_preferences_with_workspace(&preferences, false);
+    restored.build = app.build.clone();
+    assert_eq!(restored.saved_stack_reports(&elf), Some(vec![first]));
+    app.open(other);
+    finish_job(&mut app);
+    assert!(app.stack.as_ref().unwrap().entries.is_empty());
+    app.open(elf);
+    finish_job(&mut app);
+    assert_eq!(app.stack.as_ref().unwrap().entries[0].local_bytes, 56);
+    app.select_stack_reports(vec![]);
+    finish_job(&mut app);
+    app.refresh();
+    finish_job(&mut app);
+    assert!(app.stack.as_ref().unwrap().entries.is_empty());
+}
+
+#[test]
+fn selected_report_folder_remains_recursive_and_discovers_new_reports_on_refresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let elf = root.join("app.elf");
+    std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+    let reports = root.join("reports");
+    std::fs::create_dir_all(reports.join("nested")).unwrap();
+    std::fs::write(
+        reports.join("diag.su"),
+        "diag.c:22:36:diagnose\t56\tstatic\n",
+    )
+    .unwrap();
+    let mut app = Explorer::default();
+    app.scan_build(root.clone());
+    finish_job(&mut app);
+    app.open(elf.clone());
+    finish_job(&mut app);
+    // The folder itself is saved, rather than a snapshot of its files.
+    app.select_stack_reports(vec![reports.clone()]);
+    finish_job(&mut app);
+    assert_eq!(app.saved_stack_reports(&elf), Some(vec![reports.clone()]));
+    assert_eq!(app.stack.as_ref().unwrap().entries.len(), 1);
+    std::fs::write(
+        reports.join("nested/new.su"),
+        "sensor.c:9:1:sensor_init\t24\tstatic\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("unrelated.su"),
+        "diag.c:22:36:diagnose\t80\tstatic\n",
+    )
+    .unwrap();
+    app.refresh();
+    finish_job(&mut app);
+    assert_eq!(app.stack.as_ref().unwrap().entries.len(), 2);
+    // Overlapping folder/file selections load each report only once.
+    app.select_stack_reports(vec![reports.clone(), reports.join("diag.su")]);
+    finish_job(&mut app);
+    assert_eq!(app.stack.as_ref().unwrap().entries.len(), 2);
+    let preferences = app.preference_value();
+    let mut restored = Explorer::default();
+    restored.apply_preferences_with_workspace(&preferences, false);
+    restored.build = app.build.clone();
+    restored.open(elf);
+    finish_job(&mut restored);
+    assert_eq!(restored.stack.as_ref().unwrap().entries.len(), 2);
+}
+
+#[test]
+fn sidebar_checkboxes_and_map_radios_apply_choices_to_current_elf() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let elf = root.join("app.elf");
+    std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+    for name in ["app.map", "other.map"] {
+        std::fs::write(
+            root.join(name),
+            include_bytes!("../../../fixtures/build/cortex-m.map"),
+        )
+        .unwrap();
+    }
+    std::fs::write(root.join("frame.su"), "diag.c:22:36:diagnose\t56\tstatic\n").unwrap();
+    let mut app = Explorer::default();
+    app.scan_build(root.clone());
+    finish_job(&mut app);
+    app.open(elf.clone());
+    finish_job(&mut app);
+    let ctx = egui::Context::default();
+    fn frame(
+        ctx: &egui::Context,
+        app: &mut Explorer,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 1800.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.build_browser(ctx),
+        )
+    }
+    fn click(ctx: &egui::Context, app: &mut Explorer, pos: egui::Pos2) {
+        for pressed in [true, false] {
+            frame(
+                ctx,
+                app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+    }
+    // Allow the default-open collapsing sections to finish laying out.
+    frame(&ctx, &mut app, vec![]);
+    let output = frame(&ctx, &mut app, vec![]);
+    let text_pos = |output: &egui::FullOutput, name: &str| {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(t) if t.galley.text() == name => {
+                    Some(t.pos + t.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("Missing sidebar label {name}"))
+    };
+    click(&ctx, &mut app, text_pos(&output, "frame.su"));
+    finish_job(&mut app);
+    assert_eq!(app.saved_stack_reports(&elf), Some(vec![]));
+    let output = frame(&ctx, &mut app, vec![]);
+    click(&ctx, &mut app, text_pos(&output, "frame.su"));
+    finish_job(&mut app);
+    assert_eq!(
+        app.saved_stack_reports(&elf),
+        Some(vec![root.join("frame.su")])
+    );
+    let output = frame(&ctx, &mut app, vec![]);
+    let label = text_pos(&output, "other.map");
+    let radio = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Circle(c)
+                if c.center.x < label.x && (c.center.y - label.y).abs() < 2.0 =>
+            {
+                Some(c.center)
+            }
+            _ => None,
+        })
+        .expect("Map radio button");
+    click(&ctx, &mut app, radio);
+    finish_job(&mut app);
+    assert!(app.map_in_use(&root.join("other.map")));
+    assert!(!app.map_in_use(&root.join("app.map")));
+    assert_eq!(
+        app.saved_stack_reports(&elf),
+        Some(vec![root.join("frame.su")])
+    );
+}
+
+#[test]
+fn stack_folder_rules_save_immediately_and_survive_disk_restart_and_file_changes() {
+    for whole_folder in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let elf = root.join("app.elf");
+        std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+        let reports = root.join("reports");
+        std::fs::create_dir(&reports).unwrap();
+        let first = reports.join("a.su");
+        let unchecked = reports.join("b.su");
+        std::fs::write(&first, "diag.c:22:36:diagnose\t56\tstatic\n").unwrap();
+        std::fs::write(&unchecked, "sensor.c:9:1:sensor_init\t24\tstatic\n").unwrap();
+        let preferences_file = root.join("config/workspace.json");
+        let mut app = Explorer {
+            preferences_file: Some(preferences_file.clone()),
+            ..Default::default()
+        };
+        app.scan_build(root.clone());
+        finish_job(&mut app);
+        app.open(elf.clone());
+        finish_job(&mut app);
+        let paths = vec![first.clone(), unchecked.clone()];
+        let mut selection = workspace::StackSelection::default();
+        selection.set(if whole_folder { &reports } else { &first }, true, &paths);
+        app.select_stack_selection(selection.clone());
+        // Saved before the analysis finishes, without relying on on_exit.
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&preferences_file).unwrap()).unwrap();
+        let settings: std::collections::BTreeMap<PathBuf, BuildSettings> =
+            serde_json::from_value(saved["build_settings"].clone()).unwrap();
+        assert_eq!(settings[&root].stack_reports[&elf], selection);
+        finish_job(&mut app);
+        drop(app);
+        std::fs::remove_file(&first).unwrap();
+        let new = reports.join("new.su");
+        std::fs::write(&new, "diag.c:22:36:diagnose\t80\tstatic\n").unwrap();
+        let mut restored = Explorer {
+            preferences_file: Some(preferences_file.clone()),
+            ..Default::default()
+        };
+        restored.restore_preferences(true);
+        finish_job(&mut restored);
+        finish_job(&mut restored);
+        assert!(restored.error.is_none());
+        assert_eq!(
+            restored.saved_stack_selection(&elf),
+            Some(selection.clone())
+        );
+        assert!(restored.current_stack_selection().contains(&new));
+        assert_eq!(
+            restored.current_stack_selection().contains(&unchecked),
+            whole_folder
+        );
+        let entries = &restored.stack.as_ref().unwrap().entries;
+        assert!(entries
+            .iter()
+            .any(|entry| std::path::Path::new(&entry.report_file) == new));
+        assert!(!entries
+            .iter()
+            .any(|entry| std::path::Path::new(&entry.report_file) == first));
+        assert_eq!(entries.len(), if whole_folder { 2 } else { 1 });
+        // Losing every report does not lose the saved directory intent.
+        std::fs::remove_file(&new).unwrap();
+        std::fs::remove_file(&unchecked).unwrap();
+        restored.refresh();
+        finish_job(&mut restored);
+        assert!(restored.stack.as_ref().unwrap().entries.is_empty());
+        assert_eq!(restored.saved_stack_selection(&elf), Some(selection));
+        std::fs::write(&new, "diag.c:22:36:diagnose\t96\tstatic\n").unwrap();
+        restored.refresh();
+        finish_job(&mut restored);
+        assert_eq!(restored.stack.as_ref().unwrap().entries[0].local_bytes, 96);
+        let mut selection = restored.current_stack_selection();
+        selection.set(&reports, false, std::slice::from_ref(&new));
+        restored.select_stack_selection(selection);
+        finish_job(&mut restored);
+        drop(restored);
+        let later = reports.join("later.su");
+        std::fs::write(&later, "sensor.c:9:1:sensor_init\t32\tstatic\n").unwrap();
+        let mut restored = Explorer {
+            preferences_file: Some(preferences_file),
+            ..Default::default()
+        };
+        restored.restore_preferences(true);
+        finish_job(&mut restored);
+        finish_job(&mut restored);
+        assert!(!restored.current_stack_selection().contains(&later));
+        assert!(restored.stack.as_ref().unwrap().entries.is_empty());
+    }
+}
+
+#[test]
+fn automatic_stack_choices_are_saved_per_elf_and_manual_choices_take_precedence() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let first_elf = root.join("app.elf");
+    let second_elf = root.join("other.elf");
+    for elf in [&first_elf, &second_elf] {
+        std::fs::write(elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+    }
+    let first_dir = root.join("CMakeFiles/app.dir/src");
+    let second_dir = root.join("CMakeFiles/other.dir/src");
+    for directory in [&first_dir, &second_dir] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    let first_report = first_dir.join("diag.su");
+    let second_report = second_dir.join("diag.su");
+    std::fs::write(&first_report, "diag.c:22:36:diagnose\t56\tstatic\n").unwrap();
+    std::fs::write(&second_report, "diag.c:22:36:diagnose\t96\tstatic\n").unwrap();
+    let preferences_file = root.join("config/workspace.json");
+    let mut app = Explorer {
+        preferences_file: Some(preferences_file.clone()),
+        ..Default::default()
+    };
+    app.scan_build(root.clone());
+    finish_job(&mut app);
+    app.open(first_elf.clone());
+    finish_job(&mut app);
+    assert_eq!(app.stack.as_ref().unwrap().entries[0].local_bytes, 56);
+    let guessed = app.saved_stack_selection(&first_elf).unwrap();
+    assert!(guessed.contains(&first_report));
+    assert!(!guessed.contains(&second_report));
+    assert!(guessed.paths.contains(&first_dir));
+    app.open(second_elf.clone());
+    finish_job(&mut app);
+    assert_eq!(app.stack.as_ref().unwrap().entries[0].local_bytes, 96);
+    assert!(app
+        .saved_stack_selection(&second_elf)
+        .unwrap()
+        .contains(&second_report));
+    app.open(first_elf.clone());
+    finish_job(&mut app);
+    drop(app);
+    let new_report = first_dir.join("nested/new.su");
+    std::fs::create_dir_all(new_report.parent().unwrap()).unwrap();
+    std::fs::write(&new_report, "sensor.c:9:1:sensor_init\t24\tstatic\n").unwrap();
+    let mut restored = Explorer {
+        preferences_file: Some(preferences_file.clone()),
+        ..Default::default()
+    };
+    restored.restore_preferences(true);
+    finish_job(&mut restored);
+    finish_job(&mut restored);
+    assert_eq!(restored.saved_stack_selection(&first_elf), Some(guessed));
+    assert_eq!(restored.stack.as_ref().unwrap().entries.len(), 2);
+    restored.select_stack_reports(vec![second_report.clone()]);
+    finish_job(&mut restored);
+    restored.refresh();
+    finish_job(&mut restored);
+    assert_eq!(restored.stack.as_ref().unwrap().entries.len(), 1);
+    assert_eq!(restored.stack.as_ref().unwrap().entries[0].local_bytes, 96);
+    restored.select_stack_reports(vec![]);
+    finish_job(&mut restored);
+    drop(restored);
+    let mut restored = Explorer {
+        preferences_file: Some(preferences_file),
+        ..Default::default()
+    };
+    restored.restore_preferences(true);
+    finish_job(&mut restored);
+    finish_job(&mut restored);
+    assert!(restored.stack.as_ref().unwrap().entries.is_empty());
+    assert_eq!(restored.saved_stack_reports(&first_elf), Some(vec![]));
+    restored.open(second_elf.clone());
+    finish_job(&mut restored);
+    assert_eq!(restored.stack.as_ref().unwrap().entries[0].local_bytes, 96);
 }

@@ -68,7 +68,345 @@ pub(super) fn read_dependency_map(analysis: &mut super::Analysis, path: &std::pa
     }
 }
 
+/// Persist directory rules and explicit exceptions instead of a snapshot of files.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(from = "StoredStackSelection")]
+pub(super) struct StackSelection {
+    pub paths: Vec<PathBuf>,
+    pub excluded: Vec<PathBuf>,
+    pub auto_directories: Vec<PathBuf>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum StoredStackSelection {
+    Legacy(Vec<PathBuf>),
+    Rules {
+        #[serde(default)]
+        paths: Vec<PathBuf>,
+        #[serde(default)]
+        excluded: Vec<PathBuf>,
+        #[serde(default)]
+        auto_directories: Vec<PathBuf>,
+    },
+}
+impl From<StoredStackSelection> for StackSelection {
+    fn from(value: StoredStackSelection) -> Self {
+        match value {
+            StoredStackSelection::Legacy(paths) => Self {
+                paths,
+                ..Default::default()
+            },
+            StoredStackSelection::Rules {
+                paths,
+                excluded,
+                auto_directories,
+            } => Self {
+                paths,
+                excluded,
+                auto_directories,
+            },
+        }
+    }
+}
+impl StackSelection {
+    pub fn contains(&self, path: &std::path::Path) -> bool {
+        // The most specific rule wins. Automatic siblings override an unchecked
+        // directory, while explicit file exceptions override automatic siblings.
+        let included = self
+            .paths
+            .iter()
+            .filter(|p| path.starts_with(p))
+            .map(|p| p.components().count() * 2)
+            .chain(
+                self.auto_directories
+                    .iter()
+                    .filter(|p| path.parent() == Some(p.as_path()))
+                    .map(|p| p.components().count() * 2 + 1),
+            )
+            .max();
+        let excluded = self
+            .excluded
+            .iter()
+            .filter(|p| path.starts_with(p))
+            .map(|p| p.components().count() * 2)
+            .max();
+        included.is_some_and(|depth| excluded.is_none_or(|excluded| depth > excluded))
+    }
+
+    pub fn set(&mut self, path: &std::path::Path, checked: bool, paths: &[PathBuf]) {
+        let file = paths.iter().any(|p| p == path);
+        if checked && file {
+            if let Some(parent) = path.parent() {
+                if !self.auto_directories.iter().any(|p| p == parent) {
+                    // Existing unchecked siblings stay unchecked; future siblings are included.
+                    let unchecked: Vec<_> = paths
+                        .iter()
+                        .filter(|p| {
+                            p.parent() == Some(parent) && p.as_path() != path && !self.contains(p)
+                        })
+                        .cloned()
+                        .collect();
+                    self.excluded.extend(unchecked);
+                    self.auto_directories.push(parent.to_owned());
+                }
+            }
+        }
+        self.paths.retain(|p| !p.starts_with(path));
+        self.excluded.retain(|p| !p.starts_with(path));
+        self.auto_directories.retain(|p| !p.starts_with(path));
+        if checked {
+            self.paths.push(path.to_owned());
+        } else {
+            self.excluded.push(path.to_owned());
+            if file {
+                if let Some(parent) = path.parent() {
+                    if !paths
+                        .iter()
+                        .any(|p| p.parent() == Some(parent) && self.contains(p))
+                    {
+                        self.auto_directories.retain(|p| p != parent);
+                        if !paths
+                            .iter()
+                            .any(|p| p.starts_with(parent) && self.contains(p))
+                        {
+                            // An entirely unchecked folder also excludes future reports.
+                            self.paths.retain(|p| !p.starts_with(parent));
+                            self.excluded.retain(|p| !p.starts_with(parent));
+                            self.excluded.push(parent.to_owned());
+                        }
+                    }
+                }
+            }
+        }
+        self.remember_sibling_directories(paths);
+        self.paths.sort();
+        self.paths.dedup();
+        self.excluded.sort();
+        self.excluded.dedup();
+        self.auto_directories.sort();
+        self.auto_directories.dedup();
+    }
+
+    pub(super) fn remember_sibling_directories(&mut self, paths: &[PathBuf]) {
+        let parents: std::collections::BTreeSet<_> = paths
+            .iter()
+            .filter(|p| self.contains(p))
+            .filter_map(|p| p.parent().map(std::path::Path::to_owned))
+            .collect();
+        for parent in parents {
+            if self.auto_directories.contains(&parent) {
+                continue;
+            }
+            let unchecked: Vec<_> = paths
+                .iter()
+                .filter(|p| p.parent() == Some(parent.as_path()) && !self.contains(p))
+                .cloned()
+                .collect();
+            self.excluded.extend(unchecked);
+            self.auto_directories.push(parent);
+        }
+    }
+
+    fn report_paths(
+        &self,
+        build: &firmware_analysis_core::build::BuildFolder,
+    ) -> Result<Vec<PathBuf>, String> {
+        let mut candidates: std::collections::BTreeSet<_> = build
+            .artifacts
+            .iter()
+            .filter(|a| a.kind == ArtifactKind::StackUsage)
+            .map(|a| a.path.clone())
+            .collect();
+        for path in self.paths.iter().chain(&self.auto_directories) {
+            if path.starts_with(&build.root) {
+                continue;
+            }
+            if path.is_dir() {
+                let external = scan_folder(path).map_err(|e| e.to_string())?;
+                candidates.extend(
+                    external
+                        .artifacts
+                        .into_iter()
+                        .filter(|a| a.kind == ArtifactKind::StackUsage)
+                        .map(|a| a.path),
+                );
+            } else if path.is_file() {
+                candidates.insert(path.clone());
+            }
+        }
+        Ok(candidates
+            .into_iter()
+            .filter(|p| self.contains(p))
+            .collect())
+    }
+}
+
+pub(super) fn load_stack_reports(
+    analysis: &super::Analysis,
+    build: &firmware_analysis_core::build::BuildFolder,
+    selected: Option<StackSelection>,
+) -> Result<super::LoadedStack, String> {
+    if let Some(selection) = selected {
+        let paths = selection.report_paths(build)?;
+        let report = firmware_analysis_core::stack::analyze_stack_files(analysis, paths)
+            .map_err(|e| e.to_string())?;
+        Ok((report, Some(selection)))
+    } else {
+        super::stack_guess::guess(analysis, build)
+    }
+}
+
+fn report_folder_ui(
+    ui: &mut egui::Ui,
+    folder: &std::path::Path,
+    paths: &[PathBuf],
+    selected: &mut StackSelection,
+    search: &str,
+) {
+    let descendants: Vec<_> = paths.iter().filter(|p| p.starts_with(folder)).collect();
+    let visible: Vec<_> = descendants
+        .iter()
+        .copied()
+        .filter(|p| p.to_string_lossy().to_lowercase().contains(search))
+        .collect();
+    if visible.is_empty() {
+        return;
+    }
+    let count = descendants.len();
+    let checked_count = descendants.iter().filter(|p| selected.contains(p)).count();
+    let mut checked = count > 0 && count == checked_count;
+    let id = ui.make_persistent_id(folder);
+    egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
+        .show_header(ui, |ui| {
+            if ui
+                .add(
+                    egui::Checkbox::new(
+                        &mut checked,
+                        format!(
+                            "{} ({checked_count}/{count})",
+                            folder
+                                .file_name()
+                                .unwrap_or(folder.as_os_str())
+                                .to_string_lossy()
+                        ),
+                    )
+                    .indeterminate(checked_count > 0 && checked_count < count),
+                )
+                .on_hover_text(
+                    "Select all stack reports in this directory, including new files on refresh",
+                )
+                .changed()
+            {
+                selected.set(folder, checked, paths);
+            }
+        })
+        .body_unindented(|ui| {
+            ui.scope(|ui| {
+                ui.spacing_mut().indent = 8.0;
+                ui.indent(id.with("reports"), |ui| {
+                    let directories: std::collections::BTreeSet<_> = visible
+                        .iter()
+                        .filter_map(|path| {
+                            let relative = path.strip_prefix(folder).ok()?;
+                            (relative.components().count() > 1).then(|| {
+                                folder.join(relative.components().next().unwrap().as_os_str())
+                            })
+                        })
+                        .collect();
+                    for directory in directories {
+                        report_folder_ui(ui, &directory, paths, selected, search);
+                    }
+                    for path in visible.iter().filter(|p| p.parent() == Some(folder)) {
+                        let mut checked = selected.contains(path);
+                        if ui
+                            .checkbox(
+                                &mut checked,
+                                path.file_name().unwrap_or_default().to_string_lossy(),
+                            )
+                            .on_hover_text(display_path(&path.to_string_lossy()))
+                            .changed()
+                        {
+                            selected.set(path, checked, paths);
+                        }
+                    }
+                });
+            });
+        });
+}
+
 impl Explorer {
+    pub(super) fn saved_stack_selection(
+        &self,
+        firmware: &std::path::Path,
+    ) -> Option<StackSelection> {
+        self.build_settings
+            .get(&self.build.as_ref()?.root)?
+            .stack_reports
+            .get(firmware)
+            .cloned()
+    }
+    #[cfg(test)]
+    pub(super) fn saved_stack_reports(&self, firmware: &std::path::Path) -> Option<Vec<PathBuf>> {
+        self.saved_stack_selection(firmware)
+            .map(|selection| selection.paths)
+    }
+    #[cfg(test)]
+    pub(super) fn select_stack_reports(&mut self, paths: Vec<PathBuf>) {
+        self.select_stack_selection(StackSelection {
+            paths,
+            ..Default::default()
+        });
+    }
+    pub(super) fn select_stack_selection(&mut self, selection: StackSelection) {
+        if self.receiver.is_some() {
+            return;
+        }
+        let (Some(analysis), Some(build)) = (self.analysis.clone(), self.build.clone()) else {
+            return;
+        };
+        self.build_settings
+            .entry(build.root.clone())
+            .or_default()
+            .stack_reports
+            .insert(PathBuf::from(&analysis.path), selection.clone());
+        // Save the user's intent before analysis, even if the app closes during the job.
+        self.job(move || {
+            let paths = selection.report_paths(&build)?;
+            let report = firmware_analysis_core::stack::analyze_stack_files(&analysis, paths)
+                .map_err(|e| e.to_string())?;
+            Ok(Loaded::SelectedStack(report, selection))
+        });
+        self.persist_preferences();
+    }
+    pub(super) fn current_stack_selection(&self) -> StackSelection {
+        let Some(analysis) = &self.analysis else {
+            return StackSelection::default();
+        };
+        let mut selection = self
+            .saved_stack_selection(std::path::Path::new(&analysis.path))
+            .unwrap_or_else(|| StackSelection {
+                paths: self
+                    .stack
+                    .iter()
+                    .flat_map(|report| report.entries.iter())
+                    .map(|entry| PathBuf::from(&entry.report_file))
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            });
+        let paths: Vec<_> = self
+            .build
+            .iter()
+            .flat_map(|build| build.artifacts.iter())
+            .filter(|artifact| artifact.kind == ArtifactKind::StackUsage)
+            .map(|artifact| artifact.path.clone())
+            .collect();
+        selection.remember_sibling_directories(&paths);
+        selection
+    }
+
     pub(super) fn saved_dependency_map(&self, firmware: &std::path::Path) -> Option<PathBuf> {
         self.build_settings
             .get(&self.build.as_ref()?.root)?
@@ -135,17 +473,6 @@ impl Explorer {
         self.analysis.is_some() && std::path::Path::new(&self.layout_source) == path
     }
 
-    pub(super) fn load_build_stack(&mut self) {
-        let (Some(build), Some(analysis)) = (self.build.clone(), self.analysis.clone()) else {
-            return;
-        };
-        self.job(move || {
-            let paths = build.artifacts.iter().filter(|a| a.kind == ArtifactKind::StackUsage).map(|a| a.path.clone()).collect();
-            let mut report = firmware_analysis_core::stack::analyze_stack_files(&analysis, paths).map_err(|e| e.to_string())?;
-            report.warnings.push(format!("Reports loaded from {}. The Stack tab shows candidates in the selected ELF; unresolved entries remain available. Check report paths when this folder contains multiple builds or targets.", build.root.display()));
-            Ok(Loaded::Stack(report))
-        });
-    }
     pub(super) fn pick_build(&mut self) {
         if let Some(path) = rfd::FileDialog::new().pick_folder() {
             self.scan_build(path);
@@ -200,6 +527,9 @@ impl Explorer {
             return;
         };
         let mut selected = None;
+        let mut selected_map = None;
+        let mut reports = self.current_stack_selection();
+        let previous_reports = reports.clone();
         egui::SidePanel::left("build_artifacts")
             .default_width(260.0)
             .width_range(180.0..=500.0)
@@ -244,6 +574,19 @@ impl Explorer {
                         if artifacts.is_empty() {
                             continue;
                         }
+                        if kind == ArtifactKind::StackUsage {
+                            egui::CollapsingHeader::new(format!("{} ({})", kind.label(), artifacts.len()))
+                                .default_open(true)
+                                .show(ui, |ui| {
+                                    let paths: Vec<_> = build.artifacts.iter()
+                                        .filter(|a| a.kind == ArtifactKind::StackUsage)
+                                        .map(|a| a.path.clone()).collect();
+                                    ui.add_enabled_ui(self.analysis.is_some() && self.receiver.is_none(), |ui| {
+                                        report_folder_ui(ui, &build.root, &paths, &mut reports, &self.artifact_search.to_lowercase());
+                                    });
+                                });
+                            continue;
+                        }
                         egui::CollapsingHeader::new(format!(
                             "{} ({})",
                             kind.label(),
@@ -277,15 +620,25 @@ impl Explorer {
                                     .to_string();
                                 let in_use = artifact.kind == ArtifactKind::Map
                                     && self.map_in_use(&artifact.path);
-                                let label = if in_use {
-                                    egui::RichText::new(format!(
-                                        "{} (in use)",
-                                        display_path(&label)
-                                    ))
-                                    .strong()
-                                } else {
-                                    egui::RichText::new(display_path(&label))
-                                };
+                                if artifact.kind == ArtifactKind::Map {
+                                    ui.horizontal(|ui| {
+                                        if ui.add_enabled(self.analysis.is_some() && self.receiver.is_none(),
+                                            egui::RadioButton::new(in_use, ""))
+                                            .on_hover_text("Use memory regions from this map for the current ELF")
+                                            .clicked() && !in_use
+                                        {
+                                            selected_map = Some(artifact.path.clone());
+                                        }
+                                        if ui.add_enabled(self.receiver.is_none(),
+                                            egui::Button::new(display_path(&label)).frame(false).selected(active).wrap())
+                                            .on_hover_text("Preview map").clicked()
+                                        {
+                                            selected = Some(artifact.clone());
+                                        }
+                                    });
+                                    continue;
+                                }
+                                let label = egui::RichText::new(display_path(&label));
                                 if ui
                                     .add_enabled(
                                         self.receiver.is_none(),
@@ -304,7 +657,11 @@ impl Explorer {
                     }
                 });
             });
-        if let Some(artifact) = selected {
+        if reports != previous_reports {
+            self.select_stack_selection(reports);
+        } else if let Some(path) = selected_map {
+            self.apply_map(path);
+        } else if let Some(artifact) = selected {
             self.select_artifact(artifact);
         }
     }
@@ -332,20 +689,10 @@ impl Explorer {
                         {
                             self.apply_dependency_map(path.clone());
                         }
-                        if ui.button("Use memory regions from this map").clicked() {
-                            self.apply_map(path.clone());
-                        }
+                        ui.small("Select this map's radio button in the left menu to use its memory regions.");
                     }
-                    "json" => {
-                        if ui.button("Use this memory layout").clicked() {
-                            self.configure(Some(path.clone()));
-                        }
-                    }
-                    "su" if self.analysis.is_some()
-                        && ui.button("View this stack report").clicked() =>
-                    {
-                        self.preview = None;
-                        self.scan_stack(path.clone());
+                    "json" if ui.button("Use this memory layout").clicked() => {
+                        self.configure(Some(path.clone()));
                     }
                     _ => {}
                 }
@@ -358,5 +705,104 @@ impl Explorer {
                 ui.add(egui::Label::new(egui::RichText::new(text).monospace()).selectable(true));
             });
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn folder_rules_keep_new_files_selected_and_preserve_explicit_exceptions() {
+        let root = PathBuf::from("build");
+        let paths = vec![
+            root.join("a.su"),
+            root.join("objects/b.su"),
+            root.join("objects/nested/c.su"),
+        ];
+        let mut selected = StackSelection::default();
+        selected.set(&root, true, &paths);
+        selected.set(&paths[1], false, &paths);
+        assert_eq!(selected.paths, vec![root.clone()]);
+        assert!(selected.contains(&paths[0]));
+        assert!(!selected.contains(&paths[1]));
+        assert!(selected.contains(&paths[2]));
+        assert!(selected.contains(&root.join("objects/new.su")));
+        selected.set(&root.join("objects"), false, &paths);
+        assert!(selected.contains(&paths[0]));
+        assert!(!selected.contains(&root.join("objects/new.su")));
+        assert!(!selected.contains(&paths[2]));
+        selected.set(&root.join("objects"), true, &paths);
+        assert!(selected.contains(&paths[1]));
+        assert!(selected.contains(&root.join("objects/new.su")));
+        selected.set(&root, false, &paths);
+        assert!(!selected.contains(&root.join("new.su")));
+    }
+
+    #[test]
+    fn selecting_one_file_selects_future_siblings_but_preserves_unchecked_existing_files() {
+        let root = PathBuf::from("build");
+        let paths = vec![root.join("a.su"), root.join("b.su")];
+        let mut selected = StackSelection::default();
+        selected.set(&paths[0], true, &paths);
+        assert!(selected.contains(&paths[0]));
+        assert!(!selected.contains(&paths[1]));
+        assert!(selected.contains(&root.join("new.su")));
+        assert!(!selected.contains(&root.join("other/new.su")));
+        selected.set(&paths[0], false, &paths);
+        assert!(!selected.contains(&root.join("new.su")));
+        // A later selection inside an excluded directory re-enables future siblings.
+        selected.set(&paths[1], true, &paths);
+        assert!(!selected.contains(&paths[0]));
+        assert!(selected.contains(&paths[1]));
+        assert!(selected.contains(&root.join("new.su")));
+    }
+
+    #[test]
+    fn deselecting_every_file_in_a_recursive_folder_excludes_future_files() {
+        let root = PathBuf::from("build");
+        let paths = vec![
+            root.join("objects/a.su"),
+            root.join("objects/b.su"),
+            root.join("keep.su"),
+        ];
+        let mut selected = StackSelection::default();
+        selected.set(&root, true, &paths);
+        selected.set(&paths[0], false, &paths);
+        selected.set(&paths[1], false, &paths);
+        assert!(!selected.contains(&root.join("objects/new.su")));
+        assert!(selected.contains(&paths[2]));
+        assert!(selected.contains(&root.join("new.su")));
+    }
+
+    #[test]
+    fn partial_default_selections_include_future_siblings_and_can_select_subdirectories() {
+        let root = PathBuf::from("build");
+        let paths = vec![
+            root.join("a.su"),
+            root.join("b.su"),
+            root.join("objects/c.su"),
+        ];
+        let mut selected = StackSelection {
+            paths: paths[..2].to_vec(),
+            ..Default::default()
+        };
+        selected.set(&paths[0], false, &paths);
+        assert!(!selected.contains(&paths[0]));
+        assert!(selected.contains(&paths[1]));
+        assert!(selected.contains(&root.join("new.su")));
+        assert!(!selected.contains(&paths[2]));
+        selected.set(&root.join("objects"), true, &paths);
+        assert!(selected.paths.contains(&root.join("objects")));
+        assert!(selected.contains(&paths[2]));
+        assert!(selected.contains(&root.join("objects/nested/new.su")));
+    }
+
+    #[test]
+    fn old_saved_file_and_folder_lists_still_deserialize() {
+        let paths = vec![PathBuf::from("build/a.su"), PathBuf::from("build/objects")];
+        let selection: StackSelection = serde_json::from_value(serde_json::json!(paths)).unwrap();
+        assert_eq!(selection.paths, paths);
+        assert!(selection.contains(std::path::Path::new("build/objects/new.su")));
     }
 }

@@ -1,0 +1,325 @@
+use super::{workspace::StackSelection, Analysis, LoadedStack};
+use firmware_analysis_core::{
+    build::{ArtifactKind, BuildFolder},
+    stack::analyze_stack_files,
+};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Path, PathBuf},
+};
+
+/// Prefer build provenance over function names, which can be shared by multiple targets.
+pub(super) fn guess(analysis: &Analysis, build: &BuildFolder) -> Result<LoadedStack, String> {
+    let paths: Vec<_> = build
+        .artifacts
+        .iter()
+        .filter(|a| a.kind == ArtifactKind::StackUsage)
+        .map(|a| a.path.clone())
+        .collect();
+    let mut objects: BTreeSet<_> = analysis
+        .dependencies
+        .nodes
+        .iter()
+        .flat_map(|n| &n.objects)
+        .filter(|object| !object.contains('('))
+        .map(|object| PathBuf::from(object.replace('\\', "/")).with_extension("su"))
+        .collect();
+    let firmware = Path::new(&analysis.path);
+    let map_path = analysis
+        .dependencies
+        .map_path
+        .as_deref()
+        .map(Path::new)
+        .or_else(|| build.matching_map(firmware));
+    if let Some(text) = map_path.and_then(|path| std::fs::read_to_string(path).ok()) {
+        objects.extend(map_objects(&text));
+    }
+    let map_parent = map_path.and_then(Path::parent).unwrap_or(&build.root);
+    let mut map_matches = BTreeSet::new();
+    for object in objects {
+        let expected = map_parent.join(&object);
+        let expected = expected.canonicalize().unwrap_or(expected);
+        if paths.contains(&expected) {
+            map_matches.insert(expected);
+            continue;
+        }
+        let expected = build.root.join(&object);
+        let expected = expected.canonicalize().unwrap_or(expected);
+        if paths.contains(&expected) {
+            map_matches.insert(expected);
+            continue;
+        }
+        // Keep directory components and require a unique suffix match when the
+        // map uses paths from a different build location.
+        let suffix_matches: Vec<_> = paths
+            .iter()
+            .filter(|path| object.components().count() > 1 && path.ends_with(&object))
+            .collect();
+        if suffix_matches.len() == 1 {
+            map_matches.insert(suffix_matches[0].clone());
+        }
+    }
+    let stem = firmware
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase();
+    let target_matches: Vec<_> = paths
+        .iter()
+        .filter(|path| {
+            path.strip_prefix(&build.root)
+                .unwrap_or(path)
+                .parent()
+                .is_some_and(|parent| {
+                    parent
+                        .components()
+                        .any(|part| target_name(&part.as_os_str().to_string_lossy()) == stem)
+                })
+        })
+        .cloned()
+        .collect();
+    let provenance: Option<(Vec<PathBuf>, &str)> = if !map_matches.is_empty() {
+        Some((
+            map_matches.into_iter().collect(),
+            "object paths in the ELF's linker map",
+        ))
+    } else if !target_matches.is_empty() {
+        Some((
+            target_matches,
+            "build directories matching the ELF target name",
+        ))
+    } else {
+        None
+    };
+    let analyzed_paths = provenance
+        .as_ref()
+        .map(|(paths, _)| paths.clone())
+        .unwrap_or_else(|| paths.clone());
+    let mut report = analyze_stack_files(analysis, analyzed_paths).map_err(|e| e.to_string())?;
+    let (chosen, reason) = if let Some(provenance) = provenance {
+        provenance
+    } else {
+        let mut symbol_files: BTreeMap<&str, BTreeSet<PathBuf>> = BTreeMap::new();
+        let mut matched_files = BTreeSet::new();
+        for entry in &report.entries {
+            if entry.symbol_candidates.len() != 1 {
+                continue;
+            }
+            let path = PathBuf::from(&entry.report_file);
+            matched_files.insert(path.clone());
+            symbol_files
+                .entry(&entry.symbol_candidates[0])
+                .or_default()
+                .insert(path);
+        }
+        let ambiguous: BTreeSet<_> = symbol_files
+            .values()
+            .filter(|files| files.len() > 1)
+            .flat_map(|files| files.iter().cloned())
+            .collect();
+        // If a whole build directory is ambiguous, its other reports cannot establish provenance.
+        let ambiguous_parents: BTreeSet<_> = ambiguous.iter().filter_map(|p| p.parent()).collect();
+        let chosen = matched_files
+            .into_iter()
+            .filter(|p| {
+                !p.parent()
+                    .is_some_and(|parent| ambiguous_parents.contains(parent))
+            })
+            .collect();
+        (chosen, "unambiguous function matches in the ELF")
+    };
+    let chosen: BTreeSet<_> = chosen.into_iter().collect();
+    report
+        .entries
+        .retain(|entry| chosen.contains(Path::new(&entry.report_file)));
+    if chosen.is_empty() {
+        if !paths.is_empty() {
+            report.warnings.push("Could not confidently select stack reports for this ELF. Check the report files or directories in the left menu.".into());
+        }
+        return Ok((report, None));
+    }
+    let mut selection = StackSelection {
+        paths: chosen.iter().cloned().collect(),
+        ..Default::default()
+    };
+    // Remember complete directories so new reports and subdirectories inherit the choice.
+    let parents: BTreeSet<_> = chosen.iter().filter_map(|p| p.parent()).collect();
+    for parent in parents {
+        if parent != build.root
+            && paths
+                .iter()
+                .filter(|p| p.starts_with(parent))
+                .all(|p| chosen.contains(p))
+        {
+            selection.paths.retain(|p| !p.starts_with(parent));
+            selection.paths.push(parent.to_owned());
+        }
+    }
+    selection.remember_sibling_directories(&paths);
+    selection.paths.sort();
+    report.warnings.push(format!("Stack reports selected automatically using {reason}. Review the checked files in the left menu."));
+    Ok((report, Some(selection)))
+}
+
+/// Read GNU ld input-object rows even when the map was generated without --cref.
+fn map_objects(text: &str) -> BTreeSet<PathBuf> {
+    let mut in_map = false;
+    let mut objects = BTreeSet::new();
+    for line in text.lines().map(str::trim) {
+        if line == "Linker script and memory map" {
+            in_map = true;
+            continue;
+        }
+        if line == "Cross Reference Table" {
+            break;
+        }
+        if !in_map {
+            continue;
+        }
+        let object = if let Some(object) = line.strip_prefix("LOAD ") {
+            object.trim().to_owned()
+        } else {
+            let fields: Vec<_> = line.split_whitespace().collect();
+            let Some(address) = fields.iter().position(|field| field.starts_with("0x")) else {
+                continue;
+            };
+            if fields
+                .get(address + 1)
+                .is_none_or(|field| !field.starts_with("0x"))
+            {
+                continue;
+            }
+            fields[address + 2..].join(" ")
+        };
+        let object = object.replace('\\', "/");
+        if !object.contains('(') && (object.ends_with(".o") || object.ends_with(".obj")) {
+            objects.insert(PathBuf::from(object).with_extension("su"));
+        }
+    }
+    objects
+}
+
+fn target_name(name: &str) -> String {
+    let name = name.to_lowercase();
+    let name = name.strip_suffix(".dir").unwrap_or(&name);
+    name.strip_suffix("-objects")
+        .or_else(|| name.strip_suffix("_objects"))
+        .or_else(|| name.strip_suffix("_elf"))
+        .or_else(|| name.strip_suffix(".elf"))
+        .unwrap_or(name)
+        .to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use firmware_analysis_core::{
+        analyze_path,
+        build::scan_folder,
+        dependencies::{DependencyGraph, DependencyNode},
+    };
+
+    fn setup() -> (tempfile::TempDir, PathBuf, Analysis) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let elf = root.join("app.elf");
+        std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+        let analysis = analyze_path(elf, &Default::default()).unwrap();
+        (dir, root, analysis)
+    }
+
+    fn report(path: &Path, bytes: u64) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, format!("diag.c:22:36:diagnose\t{bytes}\tstatic\n")).unwrap();
+    }
+
+    #[test]
+    fn target_directory_names_disambiguate_identical_function_names() {
+        let (_dir, root, analysis) = setup();
+        let chosen = root.join("CMakeFiles/app-objects.dir/src/diag.su");
+        let other = root.join("CMakeFiles/app-extra-objects.dir/src/diag.su");
+        report(&chosen, 56);
+        report(&other, 96);
+        let (stack, selection) = guess(&analysis, &scan_folder(&root).unwrap()).unwrap();
+        let selection = selection.unwrap();
+        assert!(selection.contains(&chosen));
+        assert!(!selection.contains(&other));
+        assert!(selection.contains(&chosen.parent().unwrap().join("new.su")));
+        assert_eq!(stack.entries.len(), 1);
+        assert_eq!(stack.entries[0].local_bytes, 56);
+    }
+
+    #[test]
+    fn unrelated_unreadable_reports_do_not_block_a_target_directory_guess() {
+        let (_dir, root, analysis) = setup();
+        let chosen = root.join("CMakeFiles/app.dir/diag.su");
+        report(&chosen, 56);
+        std::fs::write(root.join("unrelated.su"), [0xff]).unwrap();
+        let (stack, selection) = guess(&analysis, &scan_folder(&root).unwrap()).unwrap();
+        assert!(selection.unwrap().contains(&chosen));
+        assert_eq!(stack.entries.len(), 1);
+    }
+
+    #[test]
+    fn exact_map_object_paths_override_target_names_and_same_suffixes() {
+        let (_dir, root, mut analysis) = setup();
+        let chosen = root.join("release/objects/diag.su");
+        let same_suffix = root.join("debug/objects/diag.su");
+        let named_target = root.join("CMakeFiles/app.dir/diag.su");
+        report(&chosen, 56);
+        report(&same_suffix, 80);
+        report(&named_target, 96);
+        analysis.dependencies = DependencyGraph {
+            map_path: Some(root.join("release/app.map").display().to_string()),
+            nodes: vec![DependencyNode {
+                id: "test".into(),
+                label: "test".into(),
+                evidence: "test".into(),
+                usage: None,
+                objects: vec!["objects/diag.o".into()],
+            }],
+            ..Default::default()
+        };
+        let (stack, selection) = guess(&analysis, &scan_folder(&root).unwrap()).unwrap();
+        let selection = selection.unwrap();
+        assert!(selection.contains(&chosen));
+        assert!(!selection.contains(&same_suffix));
+        assert!(!selection.contains(&named_target));
+        assert_eq!(stack.entries.len(), 1);
+        assert_eq!(stack.entries[0].local_bytes, 56);
+    }
+
+    #[test]
+    fn map_without_cross_references_selects_linked_objects() {
+        let (_dir, root, analysis) = setup();
+        let chosen = root.join("objects/diag.su");
+        let other = root.join("CMakeFiles/app.dir/diag.su");
+        report(&chosen, 56);
+        report(&other, 96);
+        std::fs::write(root.join("app.map"), "Discarded input sections\n .text 0x0 0x20 other/diag.o\nLinker script and memory map\n .text 0x08000000 0x20 objects/diag.o\n").unwrap();
+        let (stack, selection) = guess(&analysis, &scan_folder(&root).unwrap()).unwrap();
+        let selection = selection.unwrap();
+        assert!(selection.contains(&chosen));
+        assert!(!selection.contains(&other));
+        assert_eq!(stack.entries[0].local_bytes, 56);
+    }
+
+    #[test]
+    fn symbol_fallback_selects_unique_reports_and_leaves_unknown_reports_unchecked() {
+        let (_dir, root, analysis) = setup();
+        let chosen = root.join("reports/diag.su");
+        let unknown = root.join("reports/unknown.su");
+        report(&chosen, 56);
+        std::fs::write(&unknown, "foreign.c:1:1:foreign_function\t24\tstatic\n").unwrap();
+        let (stack, selection) = guess(&analysis, &scan_folder(&root).unwrap()).unwrap();
+        let selection = selection.unwrap();
+        assert!(selection.contains(&chosen));
+        assert!(!selection.contains(&unknown));
+        assert!(selection.contains(&root.join("reports/new.su")));
+        assert_eq!(stack.entries.len(), 1);
+        report(&root.join("reports/duplicate.su"), 96);
+        let (stack, selection) = guess(&analysis, &scan_folder(&root).unwrap()).unwrap();
+        assert!(selection.is_none());
+        assert!(stack.entries.is_empty());
+    }
+}

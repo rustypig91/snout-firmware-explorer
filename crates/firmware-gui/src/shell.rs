@@ -325,13 +325,6 @@ impl Explorer {
                         });
                         if self.selected_file.is_some() && ui.small_button("All files").clicked() { self.selected_file = None; }
                     }
-                    if self.view == View::Stack {
-                        ui.add_enabled_ui(self.receiver.is_none(), |ui| {
-                            if ui.button("Load all build reports").on_hover_text("Load all discovered .su files in the selected build folder. Reports may belong to different targets; check their paths.").clicked() { self.load_build_stack(); }
-                            if ui.button("Open .su...").clicked() { self.pick_stack(false); }
-                            if ui.button("Scan folder...").clicked() { self.pick_stack(true); }
-                        });
-                    }
                     if self.view == View::Compare {
                         let previous = self.comparison_group;
                         ui.selectable_value(&mut self.comparison_group, 2, "Sections");

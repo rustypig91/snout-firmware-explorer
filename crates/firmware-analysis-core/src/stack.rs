@@ -128,11 +128,20 @@ pub fn analyze_stack(analysis: &Analysis, path: impl AsRef<Path>) -> Result<Stac
     analyze_stack_files(analysis, paths)
 }
 
-/// Analyze the explicit reports discovered in a build folder.
+/// Analyze explicit report files or recursively selected report folders.
 pub fn analyze_stack_files(
     analysis: &Analysis,
     mut paths: Vec<PathBuf>,
 ) -> Result<StackReport, Error> {
+    let mut expanded = Vec::new();
+    for path in paths {
+        if path.is_dir() {
+            collect(&path, &mut expanded)?;
+        } else {
+            expanded.push(path);
+        }
+    }
+    paths = expanded;
     paths.sort();
     paths.dedup();
     let mut report = StackReport { schema_version: 1, entries: Vec::new(), warnings: vec!["Local stack comes from compiler reports, which must belong to this build. Dynamic frames may be unbounded. Interrupt overhead and call-chain totals are unknown.".into()],
