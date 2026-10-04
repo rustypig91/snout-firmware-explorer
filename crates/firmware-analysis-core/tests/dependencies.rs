@@ -267,3 +267,18 @@ fn local_name_collision_does_not_make_global_definition_ambiguous() {
         .unwrap();
     assert_eq!(diag.objects, ["lib/diagnostics.a(diag.o)"]);
 }
+
+#[test]
+fn undefined_or_discarded_symbols_cannot_invent_source_unit_dependencies() {
+    // GNU ld emits exactly this row shape for an unresolved weak symbol used
+    // by both objects: the first file is a caller, not a defining object.
+    let text = "Cross Reference Table\nSymbol File\nReset_Handler main.o\ndiagnose diag.o\n  main.o\nmissing_weak diag.o\n  main.o\n  third.o\n";
+    let graph = from_map(&fixture(), text, "weak.map").unwrap();
+    assert_eq!(graph.edges.len(), 1);
+    assert_eq!(graph.edges[0].symbols, ["diagnose"]);
+    assert!(graph.nodes.iter().any(|n| n.id == "object:third.o"));
+    assert!(graph
+        .notes
+        .iter()
+        .any(|n| n.contains("1 symbols without a global ELF definition")));
+}

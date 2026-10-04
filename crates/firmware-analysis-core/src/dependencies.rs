@@ -150,7 +150,7 @@ pub fn from_map(analysis: &Analysis, text: &str, path: &str) -> Result<Dependenc
     let mut graph = units(analysis);
     graph.notes.clear();
     graph.map_path = Some(path.into());
-    graph.notes.push("Arrows mean linker symbol references, including data and function addresses; they are not a function call graph. Cross references may include discarded code. Map matching is not proof of build ownership.".into());
+    graph.notes.push("Arrows mean linker symbol references, including data and function addresses; they are not a function call graph. Cross references may include discarded code. Object-only arrows may also include unresolved weak references: GNU ld lists their users without distinguishing a defining file. Map matching is not proof of build ownership.".into());
     let mut definitions: BTreeMap<&str, BTreeSet<Option<String>>> = BTreeMap::new();
     for (symbol, owner) in analysis.symbols.iter().zip(resolved_owners(analysis)) {
         // --cref reports global symbols only. Static symbols with the same
@@ -206,8 +206,17 @@ pub fn from_map(analysis: &Analysis, text: &str, path: &str) -> Result<Dependenc
         object_ids.insert(object, id);
     }
     let mut edges: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+    let mut omitted = 0;
     for reference in references {
         let to = &object_ids[&reference.definition];
+        // A source-unit arrow requires evidence that this symbol is defined in
+        // the ELF. For undefined weak references GNU ld puts a caller first;
+        // other symbols missing from the ELF may belong to discarded code.
+        // Neither establishes a dependency on the current source unit.
+        if !to.starts_with("object:") && !definitions.contains_key(reference.symbol.as_str()) {
+            omitted += 1;
+            continue;
+        }
         for user in reference.users {
             let from = &object_ids[&user];
             if from != to {
@@ -217,6 +226,9 @@ pub fn from_map(analysis: &Analysis, text: &str, path: &str) -> Result<Dependenc
                     .insert(reference.symbol.clone());
             }
         }
+    }
+    if omitted > 0 {
+        graph.notes.push(format!("{omitted} symbols without a global ELF definition were omitted from source-unit connections; they may be unresolved or discarded."));
     }
     if unresolved > 0 {
         graph.notes.push(format!("{unresolved} objects have no unambiguous source-unit association. They remain separate nodes with unknown memory contribution."));
