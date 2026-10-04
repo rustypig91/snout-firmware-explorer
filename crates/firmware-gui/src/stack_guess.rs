@@ -165,6 +165,22 @@ pub(super) fn guess(analysis: &Analysis, build: &BuildFolder) -> Result<LoadedSt
     let (chosen, reason) = if let Some(provenance) = provenance {
         provenance
     } else {
+        // A cleaned configuration may leave reports without a competing ELF.
+        // Prefer matching reports in the closest shared build subtree, just as
+        // target-directory guesses do, before comparing symbol ownership.
+        if let Some(parent) = firmware.parent() {
+            if let Some(depth) = report
+                .entries
+                .iter()
+                .filter(|entry| !entry.symbol_candidates.is_empty())
+                .map(|entry| common_depth(parent, Path::new(&entry.report_file)))
+                .max()
+            {
+                report
+                    .entries
+                    .retain(|entry| common_depth(parent, Path::new(&entry.report_file)) == depth);
+            }
+        }
         let mut symbol_files: BTreeMap<&str, BTreeSet<PathBuf>> = BTreeMap::new();
         let mut matched_files = BTreeSet::new();
         for entry in &report.entries {
@@ -355,6 +371,31 @@ mod tests {
         assert!(!selection.contains(&other));
         assert_eq!(stack.entries.len(), 1);
         assert_eq!(stack.entries[0].local_bytes, 56);
+    }
+
+    #[test]
+    fn function_guess_prefers_the_same_configuration_after_other_elf_is_cleaned() {
+        let (_dir, root, mut analysis) = setup();
+        let elf = root.join("release/bin/app.elf");
+        std::fs::create_dir_all(elf.parent().unwrap()).unwrap();
+        std::fs::rename(&analysis.path, &elf).unwrap();
+        analysis.path = elf.display().to_string();
+        let chosen = root.join("release/objects/diag.su");
+        let other = root.join("debug/objects/diag.su");
+        report(&chosen, 56);
+        report(&other, 96);
+        for contents in [
+            "main.c:69:5:main\t96\tstatic\n",
+            "diag.c:22:36:diagnose\t96\tstatic\n",
+        ] {
+            std::fs::write(&other, contents).unwrap();
+            let (stack, selection) = guess(&analysis, &scan_folder(&root).unwrap()).unwrap();
+            let selection = selection.unwrap();
+            assert!(selection.contains(&chosen));
+            assert!(!selection.contains(&other));
+            assert_eq!(stack.entries.len(), 1);
+            assert_eq!(stack.entries[0].local_bytes, 56);
+        }
     }
 
     #[test]
