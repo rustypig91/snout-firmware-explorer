@@ -1,0 +1,16 @@
+[package]
+name = "firmware-analysis-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+goblin = "0.10"
+gimli = "0.32"
+addr2line = { version = "0.25", default-features = false, features = ["std"] }
+cpp_demangle = "0.4"
+rustc-demangle = "0.1"
+

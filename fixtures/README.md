@@ -1,0 +1,32 @@
+# Cortex-M test firmware
+
+These tiny files are generated from project-owned C sources for analysis tests. They are not board-bootable firmware and contain no vendor code.
+
+The committed ELF files were generated with xPack GNU Arm GCC 14.2.1-1.1 for Cortex-M3, Thumb, `-O0 -g -gdwarf-4 -fstack-usage`. Two translation units exercise source attribution and local compilation-unit labels. The linker script explicitly places read-only code in Flash, a read-only function in RAM with its load image in Flash, initialized data, BSS, and a 128-byte RAM reservation.
+
+```sh
+python fixtures/generate.py --gcc arm-none-eabi-gcc
+```
+
+Alternatively use Clang with ARM target support and `ld.lld` on PATH:
+
+```sh
+python fixtures/generate.py
+```
+
+Run from the repository root. The script regenerates three ELF files, a matching `.map` for each ELF, and compiler `.su` reports. The committed GNU linker maps let the build-folder example automatically import the 256 KiB Flash and 64 KiB RAM capacities. Clang/LLD also emits maps, but its map format does not support automatic capacity import. Toolchains may produce different code sizes; the committed baseline and CLI test totals refer to the stated GCC version. Debug paths reflect the generation machine and tests deliberately compare suffixes. No downloaded compiler is committed (`fixtures/build/` is ignored).
+
+GNU `arm-none-eabi-size -A` / `arm-none-eabi-readelf -l -S` reference for the committed baseline:
+
+| Section | Bytes | Flash | RAM |
+|---|---:|---:|---:|
+| `.text` | 184 | 184 | 0 |
+| `.rodata` | 32 | 32 | 0 |
+| `.unusual_constants` | 8 | 8 | 0 |
+| `.ram_code` | 28 | 28 | 28 |
+| `.data` | 8 | 8 | 8 |
+| `.bss` | 68 | 0 | 68 |
+| `.reserved` | 128 | 0 | 128 |
+| **Total** | | **260** | **232** |
+
+`cortex-m-grown.elf` adds eight 32-bit sample slots: Flash stays 260 bytes, RAM grows by 32 to 264 bytes. `cortex-m-stripped.elf` has identical load/runtime usage and no debug information or symbol table. The weak callback and its alias share an address and must not double-count storage.
