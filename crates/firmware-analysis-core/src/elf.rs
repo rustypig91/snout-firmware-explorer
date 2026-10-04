@@ -237,7 +237,7 @@ pub fn analyze_bytes(
     }
     let mut load_ranges: Vec<_> = sections
         .iter()
-        .filter(|s| s.usage.flash > 0)
+        .filter(|s| s.load_size > 0)
         .filter_map(|s| s.load_address.map(|a| (a, s.load_size)))
         .collect();
     load_ranges.sort_unstable();

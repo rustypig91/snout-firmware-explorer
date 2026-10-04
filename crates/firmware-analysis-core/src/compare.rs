@@ -76,6 +76,9 @@ pub fn compare(old: &Analysis, new: &Analysis) -> Comparison {
     {
         warnings.push("Symbol/debug availability differs between builds; file and symbol deltas may reflect attribution changes rather than code growth.".into());
     }
+    // Comparisons are standalone reports; retain the input analysis limitations.
+    warnings.extend(old.warnings.iter().map(|w| format!("Older build: {w}")));
+    warnings.extend(new.warnings.iter().map(|w| format!("Current build: {w}")));
     Comparison {
         schema_version: 1,
         old_path: old.path.clone(),

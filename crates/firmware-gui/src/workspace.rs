@@ -260,6 +260,36 @@ pub(super) fn load_stack_reports(
     }
 }
 
+/// Stack candidates must describe the same ELF snapshot as the configured report.
+pub(super) fn configured_report(
+    options: super::AnalysisOptions,
+    mut analysis: Option<super::Analysis>,
+    source: String,
+    build: Option<&firmware_analysis_core::build::BuildFolder>,
+    selection: Option<StackSelection>,
+) -> Result<Loaded, String> {
+    // Layout jobs reread the ELF after a rebuild, so report discovery must also
+    // reflect files added or removed since the last build-folder scan.
+    let build = build
+        .filter(|_| analysis.is_some())
+        .map(|build| scan_folder(&build.root).map(std::sync::Arc::new))
+        .transpose()
+        .map_err(|e| e.to_string())?;
+    let stack = match (&mut analysis, build.as_deref()) {
+        (Some(analysis), Some(build)) => match load_stack_reports(analysis, build, selection) {
+            Ok(stack) => Some(stack),
+            Err(error) => {
+                analysis
+                    .warnings
+                    .push(format!("Stack reports could not be loaded: {error}"));
+                None
+            }
+        },
+        _ => None,
+    };
+    Ok(Loaded::Config(options, analysis, source, stack, build))
+}
+
 fn report_folder_ui(
     ui: &mut egui::Ui,
     folder: &std::path::Path,
@@ -515,6 +545,10 @@ impl Explorer {
     pub(super) fn apply_map(&mut self, path: PathBuf) {
         let dependency_map = self.dependency_map_for_reload();
         let current_path = self.analysis.as_ref().map(|a| a.path.clone());
+        let build = self.build.clone();
+        let reports = current_path
+            .as_ref()
+            .and_then(|p| self.saved_stack_selection(std::path::Path::new(p)));
         self.job(move || {
             let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
             let options = parse_map_regions(&text).map_err(|e| e.to_string())?;
@@ -524,7 +558,7 @@ impl Explorer {
                 Ok::<_, firmware_analysis_core::Error>(a)
             }).transpose().map_err(|e| e.to_string())?;
             if let (Some(analysis), Some(map)) = (&mut analysis, dependency_map) { read_dependency_map(analysis, &map); }
-            Ok(Loaded::Config(options, analysis, path.display().to_string()))
+            configured_report(options, analysis, path.display().to_string(), build.as_deref(), reports)
         });
     }
     pub(super) fn build_browser(&mut self, ctx: &egui::Context) {

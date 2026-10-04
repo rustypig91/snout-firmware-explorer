@@ -15,6 +15,137 @@ fn finish_job(app: &mut Explorer) {
 }
 
 #[test]
+fn changing_layout_reloads_stack_reports_against_the_current_elf() {
+    for use_map in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let elf = root.join("app.elf");
+        let report = root.join("app.su");
+        let layout = root.join(if use_map { "app.map" } else { "layout.json" });
+        std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+        std::fs::write(&report, "diag.c:22:36:diagnose\t24\tstatic\n").unwrap();
+        std::fs::write(
+            &layout,
+            if use_map {
+                "Memory Configuration\nName Origin Length Attributes\nFLASH 0x08000000 0x10000 xr\nRAM 0x20000000 0x10000 xrw\nLinker script and memory map\n"
+            } else {
+                include_str!("../../../examples/cortex-m-memory.json")
+            },
+        )
+        .unwrap();
+        let mut app = Explorer::default();
+        app.scan_build(root);
+        finish_job(&mut app);
+        app.open(elf.clone());
+        finish_job(&mut app);
+        app.select_stack_reports(vec![report.clone()]);
+        finish_job(&mut app);
+        assert_eq!(
+            app.stack.as_ref().unwrap().entries[0]
+                .symbol_candidates
+                .len(),
+            1
+        );
+
+        // A build has changed on disk before the user applies a memory layout.
+        std::fs::write(
+            &elf,
+            include_bytes!("../../../fixtures/build/cortex-m-stripped.elf"),
+        )
+        .unwrap();
+        std::fs::write(&report, "diag.c:22:36:diagnose\t96\tstatic\n").unwrap();
+        if use_map {
+            app.apply_map(layout.clone());
+        } else {
+            app.configure(Some(layout.clone()));
+        }
+        finish_job(&mut app);
+        assert!(app.analysis.as_ref().unwrap().symbols.is_empty());
+        let stack = app.stack.as_ref().unwrap();
+        assert!(stack.entries[0].symbol_candidates.is_empty());
+        assert_eq!(stack.entries[0].local_bytes, 96);
+        assert_eq!(app.saved_stack_reports(&elf), Some(vec![report.clone()]));
+
+        // Failed report reads must not retain matches from the previous ELF snapshot.
+        std::fs::write(&report, [0xff]).unwrap();
+        app.configure(None);
+        finish_job(&mut app);
+        assert!(app.stack.is_none());
+        assert!(app
+            .analysis
+            .as_ref()
+            .unwrap()
+            .warnings
+            .iter()
+            .any(|w| w.contains("Stack reports could not be loaded")));
+        assert_eq!(app.saved_stack_reports(&elf), Some(vec![report]));
+    }
+}
+
+#[test]
+fn changing_layout_rescans_stack_reports_after_a_rebuild() {
+    for use_map in [false, true] {
+        for remove_old in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path().canonicalize().unwrap();
+            let elf = root.join("app.elf");
+            let reports = root.join("reports");
+            std::fs::create_dir(&reports).unwrap();
+            let old_report = reports.join("old.su");
+            let new_report = reports.join("new.su");
+            let layout = root.join(if use_map { "app.map" } else { "layout.json" });
+            std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+            std::fs::write(&old_report, "diag.c:22:36:diagnose\t24\tstatic\n").unwrap();
+            std::fs::write(
+                &layout,
+                if use_map {
+                    "Memory Configuration\nName Origin Length Attributes\nFLASH 0x08000000 0x10000 xr\nRAM 0x20000000 0x10000 xrw\nLinker script and memory map\n"
+                } else {
+                    include_str!("../../../examples/cortex-m-memory.json")
+                },
+            )
+            .unwrap();
+            let mut app = Explorer::default();
+            app.scan_build(root);
+            finish_job(&mut app);
+            app.open(elf.clone());
+            finish_job(&mut app);
+            let selection = workspace::StackSelection {
+                paths: vec![reports.clone()],
+                ..Default::default()
+            };
+            app.select_stack_selection(selection.clone());
+            finish_job(&mut app);
+            assert_eq!(app.stack.as_ref().unwrap().entries.len(), 1);
+
+            std::fs::write(&new_report, "sensor.c:9:1:sensor_init\t96\tstatic\n").unwrap();
+            if remove_old {
+                std::fs::remove_file(&old_report).unwrap();
+            }
+            if use_map {
+                app.apply_map(layout);
+            } else {
+                app.configure(Some(layout));
+            }
+            finish_job(&mut app);
+            let stack = app
+                .stack
+                .as_ref()
+                .expect("deleted reports must not block reload");
+            assert_eq!(stack.entries.len(), if remove_old { 1 } else { 2 });
+            assert!(stack.entries.iter().any(|entry| entry.local_bytes == 96));
+            assert_eq!(app.saved_stack_selection(&elf), Some(selection));
+            let artifacts = &app.build.as_ref().unwrap().artifacts;
+            assert!(artifacts.iter().any(|artifact| artifact.path == new_report));
+            assert_eq!(
+                artifacts.iter().any(|artifact| artifact.path == old_report),
+                !remove_old
+            );
+        }
+    }
+}
+
+#[test]
 fn symbol_navigation_clears_filters_even_when_already_in_symbols() {
     let mut app = Explorer {
         view: View::Symbols,

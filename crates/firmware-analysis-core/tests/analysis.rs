@@ -13,6 +13,23 @@ fn analyze(data: &[u8]) -> Analysis {
 }
 
 #[test]
+fn comparisons_preserve_input_diagnostics_with_build_identity() {
+    let mut old = analyze(ELF);
+    let mut new = analyze(GROWN);
+    old.warnings = vec!["Baseline attribution is incomplete".into()];
+    new.warnings = vec!["Current memory range is uncovered".into()];
+    let report = compare(&old, &new);
+    let json = serde_json::to_value(&report).unwrap();
+    let warnings = json["warnings"].as_array().unwrap();
+    assert!(warnings.contains(&serde_json::json!(
+        "Older build: Baseline attribution is incomplete"
+    )));
+    assert!(warnings.contains(&serde_json::json!(
+        "Current build: Current memory range is uncovered"
+    )));
+}
+
+#[test]
 fn initialized_data_counts_in_both_memories() {
     let a = analyze(ELF);
     let data = a.sections.iter().find(|s| s.name == ".data").unwrap();

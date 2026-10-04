@@ -88,7 +88,13 @@ enum Loaded {
     Text(PathBuf, String),
     Baseline(Analysis),
     SelectedStack(StackReport, workspace::StackSelection),
-    Config(AnalysisOptions, Option<Analysis>, String),
+    Config(
+        AnalysisOptions,
+        Option<Analysis>,
+        String,
+        Option<LoadedStack>,
+        Option<Arc<firmware_analysis_core::build::BuildFolder>>,
+    ),
     Dependencies(Analysis, PathBuf),
 }
 type JobResult = Result<Loaded, String>;
@@ -280,6 +286,10 @@ impl Explorer {
     fn configure(&mut self, path: Option<PathBuf>) {
         let dependency_map = self.dependency_map_for_reload();
         let current_path = self.analysis.as_ref().map(|a| a.path.clone());
+        let build = self.build.clone();
+        let reports = current_path
+            .as_ref()
+            .and_then(|p| self.saved_stack_selection(std::path::Path::new(p)));
         self.job(move || {
             let source = path
                 .as_ref()
@@ -300,7 +310,7 @@ impl Explorer {
             if let (Some(analysis), Some(map)) = (&mut analysis, dependency_map) {
                 workspace::read_dependency_map(analysis, &map);
             }
-            Ok(Loaded::Config(options, analysis, source))
+            workspace::configured_report(options, analysis, source, build.as_deref(), reports)
         });
     }
     fn pick_baseline(&mut self) {
@@ -430,19 +440,7 @@ impl Explorer {
                             self.comparison = None;
                             self.baseline = None;
                         }
-                        self.stack = stack.map(|(report, selection)| {
-                            if let (Some(build), Some(selection)) = (&self.build, selection) {
-                                self.build_settings
-                                    .entry(build.root.clone())
-                                    .or_default()
-                                    .stack_reports
-                                    .insert(
-                                        PathBuf::from(&self.analysis.as_ref().unwrap().path),
-                                        selection,
-                                    );
-                            }
-                            report
-                        });
+                        self.replace_stack(stack);
                         self.selected_file = None;
                         self.selected_region = None;
                         self.overview_section = None;
@@ -483,7 +481,7 @@ impl Explorer {
                         self.stack = Some(s);
                         self.change_view(View::Stack);
                     }
-                    Ok(Loaded::Config(options, analysis, source)) => {
+                    Ok(Loaded::Config(options, analysis, source, stack, build)) => {
                         self.layout_source = source;
                         self.details = None;
                         self.selected_region = None;
@@ -492,6 +490,10 @@ impl Explorer {
                         self.layout_override = Some(options.clone());
                         self.options = options;
                         self.analysis = analysis.map(Arc::new);
+                        if let Some(build) = build {
+                            self.build = Some(build);
+                        }
+                        self.replace_stack(stack);
                         self.graph_view = Default::default();
                         self.preview = None;
                         self.comparison = None;
@@ -528,6 +530,20 @@ impl Explorer {
             }
             _ => {}
         }
+    }
+    fn replace_stack(&mut self, stack: Option<LoadedStack>) {
+        self.stack = stack.map(|(report, selection)| {
+            if let (Some(build), Some(analysis), Some(selection)) =
+                (&self.build, &self.analysis, selection)
+            {
+                self.build_settings
+                    .entry(build.root.clone())
+                    .or_default()
+                    .stack_reports
+                    .insert(PathBuf::from(&analysis.path), selection);
+            }
+            report
+        });
     }
 }
 impl eframe::App for Explorer {

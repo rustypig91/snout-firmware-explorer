@@ -90,12 +90,7 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
                     )?;
                 }
             }
-            for warning in old
-                .warnings
-                .iter()
-                .chain(&new.warnings)
-                .chain(&diff.warnings)
-            {
+            for warning in &diff.warnings {
                 writeln!(out, "Note: {warning}")?;
             }
         }
