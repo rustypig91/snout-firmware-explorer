@@ -267,8 +267,15 @@ pub(super) fn configured_report(
     source: String,
     build: Option<&firmware_analysis_core::build::BuildFolder>,
     selection: Option<StackSelection>,
-) -> Loaded {
-    let stack = match (&mut analysis, build) {
+) -> Result<Loaded, String> {
+    // Layout jobs reread the ELF after a rebuild, so report discovery must also
+    // reflect files added or removed since the last build-folder scan.
+    let build = build
+        .filter(|_| analysis.is_some())
+        .map(|build| scan_folder(&build.root).map(std::sync::Arc::new))
+        .transpose()
+        .map_err(|e| e.to_string())?;
+    let stack = match (&mut analysis, build.as_deref()) {
         (Some(analysis), Some(build)) => match load_stack_reports(analysis, build, selection) {
             Ok(stack) => Some(stack),
             Err(error) => {
@@ -280,7 +287,7 @@ pub(super) fn configured_report(
         },
         _ => None,
     };
-    Loaded::Config(options, analysis, source, stack)
+    Ok(Loaded::Config(options, analysis, source, stack, build))
 }
 
 fn report_folder_ui(
@@ -551,7 +558,7 @@ impl Explorer {
                 Ok::<_, firmware_analysis_core::Error>(a)
             }).transpose().map_err(|e| e.to_string())?;
             if let (Some(analysis), Some(map)) = (&mut analysis, dependency_map) { read_dependency_map(analysis, &map); }
-            Ok(configured_report(options, analysis, path.display().to_string(), build.as_deref(), reports))
+            configured_report(options, analysis, path.display().to_string(), build.as_deref(), reports)
         });
     }
     pub(super) fn build_browser(&mut self, ctx: &egui::Context) {

@@ -46,6 +46,19 @@ read clears the obsolete report, adds an analysis warning, and retains the user'
 saved selection for retry. The regression covers JSON and map application, a
 replacement stripped ELF, changed frame bytes, and an unreadable stack report.
 
+### P2: Layout stack reloads used an obsolete artifact list
+
+PR review found that reloading stack files still used the build-folder scan from
+before the rebuild. New reports inside selected directories were omitted, and
+deleted reports could fail the entire stack reload even when replacement reports
+were present.
+
+Layout jobs now rescan the build folder in the worker before loading stack files
+and apply the new artifact list together with the analysis and stack report.
+Directory selection rules remain intact. A regression failed against the initial
+PR and now covers both JSON and map layouts, adding reports, removing old reports,
+and updating the artifact browser's list.
+
 ### P2: Comparison reports omitted input analysis warnings
 
 The standalone core comparison report retained comparison-specific warnings but
@@ -77,7 +90,7 @@ the issues turn those roadmap items into actionable work.
 
 ## Validation and scope
 
-- `cargo test --workspace --locked`: **170 passed**, zero failures.
+- `cargo test --workspace --locked`: **171 passed**, zero failures.
 - `cargo clippy --workspace --all-targets --locked -- -D warnings`: passed.
 - `cargo fmt --all -- --check`: passed.
 - `git diff --check`: passed.

@@ -93,6 +93,7 @@ enum Loaded {
         Option<Analysis>,
         String,
         Option<LoadedStack>,
+        Option<Arc<firmware_analysis_core::build::BuildFolder>>,
     ),
     Dependencies(Analysis, PathBuf),
 }
@@ -309,13 +310,7 @@ impl Explorer {
             if let (Some(analysis), Some(map)) = (&mut analysis, dependency_map) {
                 workspace::read_dependency_map(analysis, &map);
             }
-            Ok(workspace::configured_report(
-                options,
-                analysis,
-                source,
-                build.as_deref(),
-                reports,
-            ))
+            workspace::configured_report(options, analysis, source, build.as_deref(), reports)
         });
     }
     fn pick_baseline(&mut self) {
@@ -486,7 +481,7 @@ impl Explorer {
                         self.stack = Some(s);
                         self.change_view(View::Stack);
                     }
-                    Ok(Loaded::Config(options, analysis, source, stack)) => {
+                    Ok(Loaded::Config(options, analysis, source, stack, build)) => {
                         self.layout_source = source;
                         self.details = None;
                         self.selected_region = None;
@@ -495,6 +490,9 @@ impl Explorer {
                         self.layout_override = Some(options.clone());
                         self.options = options;
                         self.analysis = analysis.map(Arc::new);
+                        if let Some(build) = build {
+                            self.build = Some(build);
+                        }
                         self.replace_stack(stack);
                         self.graph_view = Default::default();
                         self.preview = None;
