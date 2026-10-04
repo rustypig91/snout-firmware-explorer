@@ -77,6 +77,13 @@ enum Loaded {
     Config(AnalysisOptions, Option<Analysis>, String),
 }
 type JobResult = Result<Loaded, String>;
+#[derive(Clone)]
+struct RememberedFirmware {
+    folder: PathBuf,
+    path: PathBuf,
+    layout: Option<AnalysisOptions>,
+    source: String,
+}
 struct Explorer {
     analysis: Option<Arc<Analysis>>,
     build: Option<Arc<firmware_analysis_core::build::BuildFolder>>,
@@ -99,6 +106,7 @@ struct Explorer {
     tree: bool,
     details: Option<(String, String)>,
     show_notes: bool,
+    show_about: bool,
     visible_rows: usize,
     kind_filter: String,
     comparison_symbols: bool,
@@ -111,6 +119,7 @@ struct Explorer {
     layout_source: String,
     updates: update_ui::Updates,
     pending_restore: Option<(PathBuf, Option<AnalysisOptions>, String)>,
+    remembered_firmware: Option<RememberedFirmware>,
 }
 impl Default for Explorer {
     fn default() -> Self {
@@ -136,6 +145,7 @@ impl Default for Explorer {
             tree: false,
             details: None,
             show_notes: false,
+            show_about: false,
             visible_rows: 0,
             kind_filter: "All".into(),
             comparison_symbols: false,
@@ -147,6 +157,7 @@ impl Default for Explorer {
             top_symbols: Default::default(),
             layout_source: String::new(),
             pending_restore: None,
+            remembered_firmware: None,
             updates: update_ui::Updates::default(),
         }
     }
@@ -290,7 +301,25 @@ impl Explorer {
                         self.artifact_search.clear();
                         self.search.clear();
                         self.visible_rows = 0;
-                        if let Some((path, layout, source)) = self.pending_restore.take() {
+                        let restore = self.pending_restore.take().or_else(|| {
+                            let remembered = self.remembered_firmware.as_ref()?;
+                            let build = self.build.as_ref()?;
+                            (remembered.folder == build.root
+                                && remembered.path.is_file()
+                                && build.artifacts.iter().any(|artifact| {
+                                    artifact.kind
+                                        == firmware_analysis_core::build::ArtifactKind::Firmware
+                                        && artifact.path == remembered.path
+                                }))
+                            .then(|| {
+                                (
+                                    remembered.path.clone(),
+                                    remembered.layout.clone(),
+                                    remembered.source.clone(),
+                                )
+                            })
+                        });
+                        if let Some((path, layout, source)) = restore {
                             self.layout_source = source;
                             self.open_with_layout(path, layout);
                         }
@@ -345,6 +374,14 @@ impl Explorer {
                         self.comparison = None;
                     }
                     Err(error) => self.error = Some(error),
+                }
+                if let (Some(build), Some(analysis)) = (&self.build, &self.analysis) {
+                    self.remembered_firmware = Some(RememberedFirmware {
+                        folder: build.root.clone(),
+                        path: PathBuf::from(&analysis.path),
+                        layout: self.layout_override.clone(),
+                        source: self.layout_source.clone(),
+                    });
                 }
             }
             Some(Err(mpsc::TryRecvError::Disconnected)) => {

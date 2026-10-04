@@ -1,4 +1,4 @@
-use super::{AnalysisOptions, Explorer, Loaded, View};
+use super::{AnalysisOptions, Explorer, Loaded, RememberedFirmware, View};
 use std::path::PathBuf;
 
 fn preferences_path() -> Option<PathBuf> {
@@ -62,15 +62,23 @@ impl Explorer {
         let Ok(data) = std::fs::read(path) else {
             return;
         };
-        let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&data) else {
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&data) else {
             return;
         };
-        if !restore_workspace {
-            value["folder"] = serde_json::Value::Null;
+        if restore_workspace {
+            self.apply_preferences(&value);
+        } else {
+            self.apply_preferences_with_workspace(&value, false);
         }
-        self.apply_preferences(&value);
     }
     pub(super) fn apply_preferences(&mut self, value: &serde_json::Value) {
+        self.apply_preferences_with_workspace(value, true);
+    }
+    pub(super) fn apply_preferences_with_workspace(
+        &mut self,
+        value: &serde_json::Value,
+        restore_workspace: bool,
+    ) {
         if value["version"].as_u64() != Some(1) {
             return;
         }
@@ -91,6 +99,7 @@ impl Explorer {
             .as_str()
             .map(PathBuf::from)
             .filter(|p| p.is_dir())
+            .and_then(|p| p.canonicalize().ok())
         else {
             return;
         };
@@ -98,20 +107,25 @@ impl Explorer {
             .as_str()
             .map(PathBuf::from)
             .filter(|p| p.is_file())
+            .and_then(|p| p.canonicalize().ok())
+            .filter(|p| p.starts_with(&folder))
         {
             let layout: Option<AnalysisOptions> = serde_json::from_value(value["layout"].clone())
                 .ok()
                 .flatten();
             let layout = layout.filter(|l| firmware_analysis_core::validate_options(l).is_ok());
-            self.pending_restore = Some((
-                firmware,
+            self.remembered_firmware = Some(RememberedFirmware {
+                folder: folder.clone(),
+                path: firmware,
                 layout,
-                value["layout_source"]
+                source: value["layout_source"]
                     .as_str()
                     .unwrap_or("Saved layout")
                     .into(),
-            ));
+            });
         }
-        self.scan_build(folder);
+        if restore_workspace {
+            self.scan_build(folder);
+        }
     }
 }

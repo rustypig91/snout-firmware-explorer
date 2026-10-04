@@ -715,6 +715,102 @@ fn refresh_restores_selection_and_layout_and_preserves_report_on_failure() {
 }
 
 #[test]
+fn startup_folder_restores_saved_elf_unless_another_is_explicitly_selected() {
+    let folder = tempfile::tempdir().unwrap();
+    let first = folder.path().join("first.elf");
+    let second = folder.path().join("second.elf");
+    for path in [&first, &second] {
+        std::fs::write(path, include_bytes!("../../../fixtures/cortex-m.elf")).unwrap();
+    }
+    let value = serde_json::json!({
+        "version": 1, "folder": folder.path(), "firmware": first,
+    });
+    for explicit in [None, Some(second.clone())] {
+        let mut app = Explorer::default();
+        app.apply_preferences_with_workspace(&value, false);
+        assert!(app.receiver.is_none());
+        app.open_startup(&startup::Startup {
+            folder: Some(folder.path().to_owned()),
+            elf: explicit.clone(),
+            ..Default::default()
+        });
+        finish_job(&mut app);
+        finish_job(&mut app);
+        assert!(app.error.is_none());
+        assert_eq!(
+            PathBuf::from(&app.analysis.as_ref().unwrap().path),
+            explicit.unwrap_or(first.clone())
+        );
+    }
+}
+
+#[test]
+fn startup_without_a_path_restores_last_folder_even_without_saved_firmware() {
+    let folder = tempfile::tempdir().unwrap();
+    let mut app = Explorer::default();
+    app.apply_preferences(&serde_json::json!({"version": 1, "folder": folder.path()}));
+    app.open_startup(&startup::Startup::default());
+    finish_job(&mut app);
+    assert_eq!(app.build.as_ref().unwrap().root, folder.path());
+    assert!(app.analysis.is_none());
+    assert!(app.receiver.is_none());
+    assert!(app.error.is_none());
+}
+
+#[test]
+fn reopening_same_folder_restores_firmware_and_layout() {
+    let mut app = Explorer::default();
+    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures"));
+    finish_job(&mut app);
+    let folder = app.build.as_ref().unwrap().root.clone();
+    let elf = folder.join("cortex-m.elf");
+    app.open(elf.clone());
+    finish_job(&mut app);
+    app.configure(Some(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/cortex-m-memory.json"),
+    ));
+    finish_job(&mut app);
+    let layout = app.options.clone();
+    // A folder with no selected firmware must not reuse another folder's ELF.
+    let other = tempfile::tempdir().unwrap();
+    app.scan_build(other.path().to_owned());
+    finish_job(&mut app);
+    assert!(app.analysis.is_none());
+    assert!(app.receiver.is_none());
+    app.scan_build(folder.clone());
+    finish_job(&mut app);
+    finish_job(&mut app);
+    assert_eq!(PathBuf::from(&app.analysis.as_ref().unwrap().path), elf);
+    assert_eq!(app.options, layout);
+    // Reopening the currently selected folder also keeps the selected firmware.
+    app.scan_build(folder);
+    finish_job(&mut app);
+    finish_job(&mut app);
+    assert_eq!(PathBuf::from(&app.analysis.as_ref().unwrap().path), elf);
+    assert!(app.error.is_none());
+}
+
+#[test]
+fn reopening_folder_with_missing_saved_elf_leaves_firmware_unselected() {
+    let folder = tempfile::tempdir().unwrap();
+    let elf = folder.path().join("firmware.elf");
+    std::fs::write(&elf, include_bytes!("../../../fixtures/cortex-m.elf")).unwrap();
+    let value = serde_json::json!({"version": 1, "folder": folder.path(), "firmware": elf});
+    let mut app = Explorer::default();
+    app.apply_preferences_with_workspace(&value, false);
+    std::fs::remove_file(elf).unwrap();
+    app.open_startup(&startup::Startup {
+        folder: Some(folder.path().to_owned()),
+        ..Default::default()
+    });
+    finish_job(&mut app);
+    assert!(app.analysis.is_none());
+    assert!(app.receiver.is_none());
+    assert!(app.error.is_none());
+    assert_eq!(app.build.as_ref().unwrap().root, folder.path());
+}
+
+#[test]
 fn preferences_restore_selected_firmware_layout_and_view() {
     let mut original = Explorer::default();
     original.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures"));

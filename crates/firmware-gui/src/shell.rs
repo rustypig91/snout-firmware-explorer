@@ -69,6 +69,7 @@ impl Explorer {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             self.details = None;
             self.show_notes = false;
+            self.show_about = false;
         }
         if self.view == View::Overview
             && ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Extra1))
@@ -151,53 +152,34 @@ impl Explorer {
                                 self.pick_baseline();
                             }
                             ui.separator();
-                            ui.menu_button("Updates", |ui| {
-                                ui.label(format!("Snout v{}", env!("CARGO_PKG_VERSION")));
-                                if ui
-                                    .add_enabled(
-                                        self.updates.idle(),
-                                        egui::Button::new("Check for updates..."),
-                                    )
-                                    .clicked()
-                                {
-                                    self.start_update_check(ctx, true);
-                                    ui.close_menu();
-                                }
-                                if ui
-                                    .checkbox(
-                                        &mut self.updates.check_on_startup,
-                                        "Check on startup",
-                                    )
-                                    .changed()
-                                {
-                                    if let Err(error) = self.save_preferences() {
-                                        self.error = Some(error.to_string());
-                                    }
-                                }
-                            });
-                            ui.menu_button("Layout", |ui| {
-                                ui.label(format!(
-                                    "{} memory regions configured",
-                                    self.options.regions.len()
+                            if ui
+                                .add_enabled(
+                                    self.updates.idle(),
+                                    egui::Button::new("Check for updates"),
+                                )
+                                .on_disabled_hover_text(
+                                    "An update check or installation is in progress",
+                                )
+                                .clicked()
+                            {
+                                self.start_update_check(ctx, true);
+                                ui.close_menu();
+                            }
+                            ui.separator();
+                            if ui
+                                .button("Support developer")
+                                .on_hover_text("Opens Buy Me a Coffee in your browser")
+                                .clicked()
+                            {
+                                ctx.open_url(egui::OpenUrl::new_tab(
+                                    "https://buymeacoffee.com/rustypig91g",
                                 ));
-                                if ui.button("Load memory regions...").clicked() {
-                                    if let Some(path) = rfd::FileDialog::new()
-                                        .add_filter("JSON", &["json"])
-                                        .pick_file()
-                                    {
-                                        self.configure(Some(path));
-                                    }
-                                    ui.close_menu();
-                                }
-                                if ui.button("Discover layout from matching map").clicked() {
-                                    self.discover_layout();
-                                    ui.close_menu();
-                                }
-                                if ui.button("Use ELF inference").clicked() {
-                                    self.configure(None);
-                                    ui.close_menu();
-                                }
-                            });
+                                ui.close_menu();
+                            }
+                            if ui.button("About").clicked() {
+                                self.show_about = true;
+                                ui.close_menu();
+                            }
                         });
                     });
                 });
@@ -266,6 +248,7 @@ impl Explorer {
                     });
                 });
         }
+        self.show_about_window(ctx);
         self.build_browser(ctx);
         if self.tree && matches!(self.view, View::Files | View::Symbols) {
             if let Some(a) = self.analysis.clone() {
@@ -327,5 +310,45 @@ impl Explorer {
                 View::Sections => self.sections(ui, &a), View::MemoryMap => self.memory_map(ui, &a), View::Stack => self.stack_view(ui), View::Compare => self.compare_view(ui),
             });
         });
+    }
+
+    fn show_about_window(&mut self, ctx: &egui::Context) {
+        egui::Window::new("About")
+            .open(&mut self.show_about)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    // Vector geometry from packaging/icons/snout.svg, scaled for the dialog.
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(80.0, 80.0), egui::Sense::hover());
+                    let scale = rect.width() / 256.0;
+                    let point = |x, y| rect.min + egui::vec2(x, y) * scale;
+                    let background = egui::Color32::from_rgb(24, 33, 43);
+                    ui.painter().rect_filled(rect, 48.0 * scale, background);
+                    ui.painter().rect_filled(
+                        egui::Rect::from_min_max(point(48.0, 60.0), point(208.0, 196.0)),
+                        56.0 * scale,
+                        egui::Color32::from_rgb(236, 146, 157),
+                    );
+                    for x in [95.0, 161.0] {
+                        ui.painter().add(egui::Shape::ellipse_filled(
+                            point(x, 128.0),
+                            egui::vec2(18.0, 28.0) * scale,
+                            background,
+                        ));
+                    }
+                    ui.add_space(8.0);
+                    ui.heading("Rusty's Snout - Firmware Explorer");
+                    ui.label(concat!("Version ", env!("CARGO_PKG_VERSION")));
+                    ui.add_space(8.0);
+                    ui.label("A desktop explorer for embedded firmware memory usage.");
+                    ui.add_space(8.0);
+                    ui.hyperlink_to(
+                        "GitHub repository",
+                        "https://github.com/rustypig91/snout-firmware-explorer",
+                    );
+                });
+            });
     }
 }
