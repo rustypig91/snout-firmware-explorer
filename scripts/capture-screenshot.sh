@@ -62,7 +62,12 @@ if [[ -z $window_id ]]; then
   exit 1
 fi
 
-# Allow the fixture scan, analysis and initial layout to settle.
+# Xvfb starts the pointer near the screen center, over the section rows.
+# Park it below the 1280x820 app window on our 1280x900 display so hover
+# highlights and tooltips clear before capture.
+xdotool mousemove --sync 1279 899
+
+# Allow the fixture scan, analysis, pointer-leave repaint and layout to settle.
 sleep 2
 mkdir -p "$(dirname "$output")"
 import -silent -window "$window_id" "PNG:$work_dir/capture.png"
