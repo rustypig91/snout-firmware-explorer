@@ -11,3 +11,7 @@ rfd = "0.16"
 egui_extras = "0.30"
 serde_json.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.11", default-features = false, features = ["async-std"] }
+futures-lite = "2"
+winit = { version = "0.30", default-features = false, features = ["wayland-csd-adwaita"] }

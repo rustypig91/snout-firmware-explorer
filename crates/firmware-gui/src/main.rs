@@ -7,6 +7,8 @@ mod shell;
 #[cfg(test)]
 mod tests;
 mod views;
+#[cfg(target_os = "linux")]
+mod window_theme;
 mod workspace;
 use eframe::egui;
 use firmware_analysis_core::{
@@ -371,6 +373,8 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| {
             shell::configure_style(&cc.egui_ctx);
+            #[cfg(target_os = "linux")]
+            window_theme::apply_startup_theme(cc.egui_ctx.clone());
             let mut app = Explorer::default();
             if let Some(path) = std::env::args_os().nth(1) {
                 app.scan_build(path.into());
