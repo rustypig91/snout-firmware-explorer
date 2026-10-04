@@ -1413,6 +1413,195 @@ fn update_preferences_round_trip_without_an_open_workspace() {
 }
 
 #[test]
+fn local_frame_bars_compare_visible_memory_without_covering_the_numbers() {
+    let analysis = firmware_analysis_core::analyze_bytes(
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        "fixture.elf",
+        &Default::default(),
+    )
+    .unwrap();
+    let mut report = analyze_stack(
+        &analysis,
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/build/CMakeFiles/cortex-m-objects.dir/src/main.c.su"
+        ),
+    )
+    .unwrap();
+    report.entries.truncate(3);
+    for (entry, (name, bytes)) in report.entries.iter_mut().zip([
+        ("largest_frame", 64),
+        ("half_frame", 32),
+        ("zero_frame", 0),
+    ]) {
+        entry.function = name.into();
+        entry.local_bytes = bytes;
+    }
+    let mut app = Explorer {
+        view: View::Stack,
+        analysis: Some(Arc::new(analysis)),
+        stack: Some(report),
+        ..Default::default()
+    };
+    let ctx = egui::Context::default();
+    shell::configure_style(&ctx);
+    let frame = |app: &mut Explorer| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.stack_view(ui));
+            },
+        )
+    };
+    let bars = |output: &egui::FullOutput| {
+        output
+            .shapes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, shape)| match &shape.shape {
+                egui::Shape::Rect(rect) if rect.fill == views::MEMORY_BAR => Some((i, rect.rect)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let output = frame(&mut app);
+    let rects = bars(&output);
+    assert_eq!(rects.len(), 2);
+    let mut widths = vec![];
+    for value in ["64 B", "32 B"] {
+        let (text_index, text) = output
+            .shapes
+            .iter()
+            .enumerate()
+            .find_map(|(i, shape)| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == value => Some((i, text)),
+                _ => None,
+            })
+            .unwrap();
+        let (bar_index, bar) = rects
+            .iter()
+            .find(|(_, bar)| bar.y_range().contains(text.pos.y))
+            .unwrap();
+        assert!(
+            bar_index < &text_index,
+            "Paint the gray bar behind the byte count"
+        );
+        assert_eq!(bar.height(), 23.0);
+        widths.push(bar.width());
+    }
+    assert!((widths[1] / widths[0] - 0.5).abs() < 0.001);
+    app.search = "half_frame".into();
+    let filtered = bars(&frame(&mut app));
+    assert_eq!(filtered.len(), 1);
+    assert!((filtered[0].1.width() - widths[0]).abs() < 0.1);
+    app.search = "zero_frame".into();
+    assert!(bars(&frame(&mut app)).is_empty());
+}
+
+#[test]
+fn memory_bars_scale_size_flash_and_ram_independently_in_each_table() {
+    let mut analysis = firmware_analysis_core::analyze_bytes(
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        "fixture.elf",
+        &Default::default(),
+    )
+    .unwrap();
+    analysis.sections.truncate(2);
+    analysis.symbols.truncate(2);
+    analysis.files.truncate(2);
+    for (i, (size, flash, ram)) in [(64, 8, 256), (32, 16, 128)].into_iter().enumerate() {
+        let name = if i == 0 { "first_item" } else { "second_item" };
+        let usage = firmware_analysis_core::Usage { flash, ram };
+        analysis.sections[i].name = name.into();
+        analysis.sections[i].size = size;
+        analysis.sections[i].usage = usage;
+        analysis.symbols[i].demangled_name = name.into();
+        analysis.symbols[i].size = size;
+        analysis.symbols[i].usage = usage;
+        analysis.files[i].path = format!("{name}.c");
+        analysis.files[i].usage = usage;
+    }
+    let bar_rects = |output: &egui::FullOutput| {
+        output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) if rect.fill == views::MEMORY_BAR => Some(rect.rect),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let bar_for = |output: &egui::FullOutput, value: &str| {
+        let (pos, clip) = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == value => {
+                    Some((text.pos, shape.clip_rect))
+                }
+                _ => None,
+            })
+            .unwrap();
+        *bar_rects(output)
+            .iter()
+            .find(|bar| clip.contains_rect(**bar) && bar.y_range().contains(pos.y))
+            .unwrap()
+    };
+    for view in [View::Sections, View::Symbols, View::Files] {
+        let mut app = Explorer {
+            view,
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        shell::configure_style(&ctx);
+        let frame = |app: &mut Explorer| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200.0, 600.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| match view {
+                        View::Sections => app.sections(ui, &analysis),
+                        View::Symbols => app.symbols(ui, &analysis),
+                        View::Files => app.files(ui, &analysis),
+                        _ => unreachable!(),
+                    });
+                },
+            )
+        };
+        let output = frame(&mut app);
+        let columns = if view == View::Files { 2 } else { 3 };
+        assert_eq!(bar_rects(&output).len(), columns * 2);
+        let mut comparisons = vec![("16 B", "8 B"), ("256 B", "128 B")];
+        if view != View::Files {
+            comparisons.push(("64 B", "32 B"));
+        }
+        for (largest, half) in comparisons {
+            let largest = bar_for(&output, largest);
+            let half = bar_for(&output, half);
+            assert!((largest.left() - half.left()).abs() < 0.01);
+            assert!((half.width() / largest.width() - 0.5).abs() < 0.001);
+        }
+        app.search = "second_item".into();
+        let filtered = frame(&mut app);
+        assert_eq!(bar_rects(&filtered).len(), columns);
+        assert!(
+            (bar_for(&filtered, "128 B").width() - bar_for(&output, "256 B").width()).abs() < 0.01
+        );
+    }
+}
+
+#[test]
 fn stack_view_scopes_rows_to_selected_elf_and_keeps_unresolved_available() {
     let analysis = firmware_analysis_core::analyze_bytes(
         include_bytes!("../../../fixtures/build/cortex-m.elf"),
@@ -1670,7 +1859,7 @@ fn dependency_map_choices_survive_refresh_restart_and_failed_import() {
 }
 
 #[test]
-fn committed_fixture_renders_six_bubbles_and_sixteen_dependency_arrowheads() {
+fn committed_fixture_renders_six_boxes_and_sixteen_dependency_arrowheads() {
     let mut app = Explorer::default();
     app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build"));
     finish_job(&mut app);
@@ -1690,21 +1879,48 @@ fn committed_fixture_renders_six_bubbles_and_sixteen_dependency_arrowheads() {
         },
         |ctx| app.show(ctx),
     );
-    let bubbles = output
+    let boxes: Vec<_> = output
         .shapes
         .iter()
-        .filter(|shape| {
-            matches!(&shape.shape,
-                egui::Shape::Circle(circle) if circle.fill == egui::Color32::from_rgb(40, 100, 140)
-            )
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Rect(card) if card.fill == egui::Color32::from_rgb(40, 100, 140) => {
+                assert!(shape.clip_rect.contains_rect(card.rect));
+                assert!(card.rect.width() < 200.0 && card.rect.height() < 75.0);
+                Some(card.rect)
+            }
+            _ => None,
         })
-        .count();
-    let arrow_color = ctx.style().visuals.text_color().gamma_multiply(0.8);
+        .collect();
+    let mut labels = 0;
+    let mut main_area = None;
+    let mut config_area = None;
+    for shape in &output.shapes {
+        if let egui::Shape::Text(text) = &shape.shape {
+            if text.galley.text().contains("\nFlash ") {
+                let text_rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+                let card = boxes
+                    .iter()
+                    .find(|card| card.contains_rect(text_rect))
+                    .unwrap();
+                assert!(text.galley.job.sections[0].format.font_id.size >= 12.0);
+                if text.galley.text().starts_with("src/main.c\n") {
+                    main_area = Some(card.area());
+                }
+                if text.galley.text().starts_with("src/config.c\n") {
+                    config_area = Some(card.area());
+                }
+                labels += 1;
+            }
+        }
+    }
+    let arrow_color = ctx.style().visuals.text_color().gamma_multiply(0.7);
     let arrows = output.shapes.iter().filter(|shape| matches!(&shape.shape,
         egui::Shape::Path(path) if path.closed && path.points.len() == 3 && path.fill == arrow_color
     )).count();
-    assert_eq!(bubbles, 6);
+    assert_eq!(boxes.len(), 6);
+    assert_eq!(labels, 6);
     assert_eq!(arrows, 16);
+    assert!((main_area.unwrap() / config_area.unwrap() - 346.0 / 144.0).abs() < 0.01);
 }
 
 #[test]

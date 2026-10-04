@@ -6,6 +6,7 @@ use firmware_analysis_core::{format_bytes as bytes, Analysis, FileTree};
 
 pub const ACCENT: egui::Color32 = egui::Color32::from_rgb(113, 185, 219);
 pub(super) const TEXT_SELECTION: egui::Color32 = egui::Color32::from_rgb(48, 105, 163);
+pub(super) const MEMORY_BAR: egui::Color32 = egui::Color32::from_rgba_premultiplied(23, 23, 23, 45);
 pub(super) const FLASH_HELP: &str = "Allocated bytes stored in the load image. Initialized RAM data also needs initial values in Flash. Gaps and programmer-specific overhead are excluded.";
 pub(super) const RAM_HELP: &str = "Static memory required while running. Includes initialized data, zero-filled storage and explicit reservations. Additional heap and stack demand is not automatically known.";
 struct Row {
@@ -13,6 +14,7 @@ struct Row {
     values: Vec<Option<i128>>,
     tip: String,
     action: Option<String>,
+    bar_columns: Vec<usize>,
 }
 impl Row {
     fn new(cells: Vec<String>, numbers: &[(usize, i128)], tip: String) -> Self {
@@ -25,7 +27,13 @@ impl Row {
             values,
             tip,
             action: None,
+            bar_columns: vec![],
         }
+    }
+
+    fn with_bars(mut self, columns: &[usize]) -> Self {
+        self.bar_columns.extend_from_slice(columns);
+        self
     }
 }
 impl Explorer {
@@ -37,6 +45,12 @@ impl Explorer {
     ) -> Option<String> {
         let search = self.search.to_lowercase();
         rows.retain(|r| r.cells.iter().any(|c| c.to_lowercase().contains(&search)));
+        let mut bar_maxima = vec![0; headers.len()];
+        for row in &rows {
+            for &column in &row.bar_columns {
+                bar_maxima[column] = bar_maxima[column].max(row.values[column].unwrap_or(0));
+            }
+        }
         let sort = self.sort_column.min(headers.len() - 1);
         rows.sort_by(|a, b| {
             let order = match (a.values[sort], b.values[sort]) {
@@ -172,6 +186,21 @@ impl Explorer {
                             let mut detail_ui = None;
                             for (index, cell) in item.cells.iter().enumerate() {
                                 row.col(|ui| {
+                                    if item.bar_columns.contains(&index) && bar_maxima[index] > 0 {
+                                        let fraction = item.values[index].unwrap_or(0).max(0)
+                                            as f64
+                                            / bar_maxima[index] as f64;
+                                        let bar = egui::Rect::from_min_size(
+                                            ui.max_rect().min,
+                                            egui::vec2(
+                                                ui.max_rect().width() * fraction as f32,
+                                                23.0,
+                                            ),
+                                        );
+                                        if bar.is_positive() {
+                                            ui.painter().rect_filled(bar, 0.0, MEMORY_BAR);
+                                        }
+                                    }
                                     if index == 0 && open {
                                         let rect = egui::Rect::from_min_size(
                                             ui.max_rect().min + egui::vec2(12.0, 29.0),
@@ -322,7 +351,8 @@ impl Explorer {
                         bytes(f.usage.flash),
                         bytes(f.usage.ram)
                     ),
-                );
+                )
+                .with_bars(&[1, 2]);
                 row.action = Some(f.path.clone());
                 row
             })
@@ -401,6 +431,7 @@ impl Explorer {
                         s.attribution
                     ),
                 )
+                .with_bars(&[1, 2, 3])
             })
             .collect();
         self.table(
@@ -425,7 +456,7 @@ impl Explorer {
     }
     pub(super) fn sections(&mut self, ui: &mut egui::Ui, a: &Analysis) {
         let rows = a.sections.iter().map(|s| Row::new(vec![s.name.clone(), bytes(s.size), bytes(s.usage.flash), bytes(s.usage.ram), format!("{:#x}",s.address), load_address(s.load_address, s.load_size), classification(s.classification).into()], &[(1,s.size.into()),(2,s.usage.flash.into()),(3,s.usage.ram.into()),(4,s.address.into()),(5,s.load_address.unwrap_or(0).into())],
-            format!("Load size: {} B / runtime size: {} B\nAlignment: {} / flags: {:#x}\nAllocated: {} / writable: {} / executable: {}\n{}", s.load_size,s.runtime_size,s.alignment,s.flags,s.allocated,s.writable,s.executable,s.evidence))).collect();
+            format!("Load size: {} B / runtime size: {} B\nAlignment: {} / flags: {:#x}\nAllocated: {} / writable: {} / executable: {}\n{}", s.load_size,s.runtime_size,s.alignment,s.flags,s.allocated,s.writable,s.executable,s.evidence)).with_bars(&[1, 2, 3])).collect();
         self.table(
             ui,
             &[
@@ -695,9 +726,10 @@ impl Explorer {
                         e.symbol_candidates
                     ),
                 )
+                .with_bars(&[1])
             })
             .collect();
-        self.table(ui, &[("Function","Compiler function label"),("Local frame","Compiler reported bytes, not a call-chain estimate"),("Qualifier","static: fixed frame; dynamic,bounded: compiler bound; dynamic: total may be unbounded"),("Source","Location reported by the compiler")], rows);
+        self.table(ui, &[("Function","Compiler function label"),("Local frame","Compiler reported bytes, not a call-chain estimate. Gray bars compare each frame with the largest visible frame (100%)."),("Qualifier","static: fixed frame; dynamic,bounded: compiler bound; dynamic: total may be unbounded"),("Source","Location reported by the compiler")], rows);
     }
     pub(super) fn compare_view(&mut self, ui: &mut egui::Ui) {
         let Some(c) = &self.comparison else {
