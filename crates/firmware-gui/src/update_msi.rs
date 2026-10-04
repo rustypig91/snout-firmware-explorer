@@ -63,6 +63,20 @@ fn owns_executable<T>(
     }
 }
 
+// Interpret native states separately so the fail-closed policy is tested on
+// every platform, even when the Windows Installer API is unavailable.
+fn component_has_path(state: i32) -> Result<bool, String> {
+    match state {
+        3 | 4 => Ok(true), // INSTALLSTATE_LOCAL / INSTALLSTATE_SOURCE
+        // Unknown, disabled, advertised, or absent components have no
+        // installed path. BROKEN (0) is uncertainty, not proof of no owner.
+        -7 | -1 | 1 | 2 => Ok(false),
+        other => Err(format!(
+            "Windows Installer component lookup failed ({other})."
+        )),
+    }
+}
+
 #[cfg(windows)]
 pub(super) fn installed() -> Result<bool, String> {
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -161,18 +175,14 @@ fn installed_at(executable: &Path) -> Result<bool, String> {
                 };
                 match state {
                     -3 => path.resize(length as usize + 1, 0), // INSTALLSTATE_MOREDATA
-                    3 | 4 => {
-                        return Ok(Some(PathBuf::from(OsString::from_wide(
-                            &path[..length as usize],
-                        ))))
-                    }
-                    // Unknown components belong to other products. Absent,
-                    // disabled, or unavailable components cannot own this image.
-                    -7 | -1 | 0 | 1 | 2 => return Ok(None),
                     other => {
-                        return Err(format!(
-                            "Windows Installer component lookup failed ({other})."
-                        ))
+                        return if component_has_path(other)? {
+                            Ok(Some(PathBuf::from(OsString::from_wide(
+                                &path[..length as usize],
+                            ))))
+                        } else {
+                            Ok(None)
+                        };
                     }
                 }
             }
@@ -183,6 +193,35 @@ fn installed_at(executable: &Path) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn broken_registered_component_blocks_replacement_unless_owner_is_confirmed() {
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("firmware-gui.exe");
+        std::fs::write(&executable, b"image").unwrap();
+        for confirmed in [false, true] {
+            let result = owns_executable(
+                &executable,
+                &[42],
+                |index| Ok((index < 2).then_some(index)),
+                |_, component| {
+                    if *component == 0 {
+                        component_has_path(0).map(|_| None) // INSTALLSTATE_BROKEN
+                    } else {
+                        Ok(confirmed.then(|| executable.clone()))
+                    }
+                },
+            );
+            if confirmed {
+                assert_eq!(result, Ok(true));
+            } else {
+                assert!(
+                    result.is_err(),
+                    "broken registration must not permit replacement"
+                );
+            }
+        }
+    }
 
     #[test]
     fn upgrade_code_matches_the_shipped_installer() {
