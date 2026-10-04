@@ -41,6 +41,8 @@ for variant, extra in [('cortex-m', 0), ('cortex-m-grown', 8)]:
         strip_flags = (['-Wl,--strip-all' if args.gcc else '--strip-all']
                        if name == 'cortex-m-stripped' else [])
         subprocess.run([*command, map_flag, *strip_flags, '-o', str(root / f'{name}.elf')], check=True)
+        # Fixture ELFs are data inputs, not host executables.
+        (root / f'{name}.elf').chmod(0o644)
         # GNU ld emits spaces at the ends of fill rows; keep checked-in maps clean.
         mapfile.write_text('\n'.join(line.rstrip() for line in mapfile.read_text().splitlines()) + '\n')
     if variant == 'cortex-m':
