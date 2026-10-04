@@ -112,7 +112,11 @@ pub(super) fn compute(input: &LayoutInput) -> GraphLayout {
             let source_x;
             let target_x;
             if same_lane {
-                source_x = f64::from(lane_right[from.as_str()]) + clearance + index as f64 * 3.0;
+                // Keep parallel routes within the 150-point directory gap,
+                // even for dense graphs. Reserve room for curve controls and
+                // the reciprocal-edge offset applied below.
+                let offset = 60.0 * index as f64 / input.edges.len().max(1) as f64;
+                source_x = f64::from(lane_right[from.as_str()]) + clearance + offset;
                 target_x = source_x;
             } else if source.pos.center().x < target.pos.center().x {
                 source_x = f64::from(lane_right[from.as_str()]) + clearance;
@@ -341,6 +345,47 @@ mod tests {
                         "route crosses unrelated box: {segment:?}"
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn dense_grouped_routes_stay_inside_the_gap_between_directories() {
+        let mut input = input();
+        input.grouped = true;
+        input.nodes = (0..12)
+            .map(|index| NodeSpec {
+                id: format!("a/{index}.c"),
+                directory: "a".into(),
+                size: egui::vec2(100.0, 42.0),
+            })
+            .collect();
+        input.edges = input
+            .nodes
+            .iter()
+            .flat_map(|from| {
+                input
+                    .nodes
+                    .iter()
+                    .filter(move |to| from.id != to.id)
+                    .map(move |to| (from.id.clone(), to.id.clone()))
+            })
+            .collect();
+        input.nodes.push(NodeSpec {
+            id: "b/obstacle.c".into(),
+            directory: "b".into(),
+            size: egui::vec2(100.0, 1500.0),
+        });
+        let geometry = compute(&input);
+        let obstacle = geometry.cards["b/obstacle.c"].shrink(0.1);
+        for edge in &geometry.edges {
+            for segment in edge.points.windows(2) {
+                assert!(
+                    !obstacle.intersects(egui::Rect::from_two_pos(segment[0], segment[1])),
+                    "{} -> {} crosses the next directory: {segment:?}",
+                    edge.from,
+                    edge.to
+                );
             }
         }
     }
