@@ -391,14 +391,17 @@ mod tests {
                         .iter()
                         .map(|p| egui::Pos2::ZERO + p.to_vec2() * scale)
                         .collect();
-                    let head = super::super::arrow_head(&points, scale).unwrap();
-                    let base = head[1].lerp(head[2], 0.5);
-                    assert!((head[0] - base).dot(head[0] - points[points.len() - 2]) > 0.0);
+
                     let scaled_target = egui::Rect::from_min_max(
                         egui::Pos2::ZERO + target.min.to_vec2() * scale,
                         egui::Pos2::ZERO + target.max.to_vec2() * scale,
                     );
-                    assert!(!scaled_target.shrink(0.1).contains(base));
+                    let head = super::super::arrow_head(&points, scale, scaled_target).unwrap();
+                    let base = head[1].lerp(head[2], 0.5);
+                    assert!((head[0] - base).dot(head[0] - points[points.len() - 2]) > 0.0);
+                    assert!(head
+                        .iter()
+                        .all(|point| !scaled_target.shrink(0.1).contains(*point)));
                 }
             }
             let forward = &geometry.edges[0].points;
@@ -571,6 +574,59 @@ mod tests {
                         edge.from,
                         edge.to
                     );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn varied_routes_and_arrowhead_wings_clear_boxes_at_every_zoom() {
+        for seed in 0..20 {
+            for grouped in [false, true] {
+                for vertical in [false, true] {
+                    let mut input = input();
+                    input.grouped = grouped;
+                    input.vertical = vertical;
+                    input.nodes = (0..12)
+                        .map(|i| NodeSpec {
+                            id: format!("{i}"),
+                            directory: format!("dir{}", i / 4),
+                            size: egui::vec2(
+                                70.0 + ((i * 37 + seed * 17) % 200) as f32,
+                                30.0 + ((i * 19 + seed * 11) % 80) as f32,
+                            ),
+                        })
+                        .collect();
+                    input.edges = (0..12)
+                        .flat_map(|i| {
+                            (0..12)
+                                .filter(move |&j| i != j && (i * 31 + j * 17 + seed * 13) % 7 == 0)
+                                .map(move |j| (format!("{i}"), format!("{j}")))
+                        })
+                        .collect();
+                    let geometry = compute(&input);
+                    for edge in &geometry.edges {
+                        for scale in [0.05, 0.2, 1.0, 8.0] {
+                            let points: Vec<_> = edge
+                                .points
+                                .iter()
+                                .map(|p| egui::Pos2::ZERO + p.to_vec2() * scale)
+                                .collect();
+                            let target = geometry.cards[&edge.to];
+                            let target = egui::Rect::from_min_max(
+                                egui::Pos2::ZERO + target.min.to_vec2() * scale,
+                                egui::Pos2::ZERO + target.max.to_vec2() * scale,
+                            );
+                            let head = super::super::arrow_head(&points, scale, target).unwrap();
+                            assert!(head.iter().all(|p| !target.shrink(0.01).contains(*p)), "head inside target seed={seed} grouped={grouped} vertical={vertical} scale={scale}: {} -> {} {head:?} {target:?}", edge.from, edge.to);
+                        }
+                        assert!(
+                            route_is_clear(&edge.points, &geometry.cards),
+                            "seed={seed} grouped={grouped} vertical={vertical}: {} -> {}",
+                            edge.from,
+                            edge.to
+                        );
+                    }
                 }
             }
         }

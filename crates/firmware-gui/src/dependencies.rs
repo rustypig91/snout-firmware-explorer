@@ -97,10 +97,24 @@ fn visible_nodes<'a>(
         .collect()
 }
 
-fn arrow_head(points: &[egui::Pos2], scale: f32) -> Option<[egui::Pos2; 3]> {
+fn arrow_head(points: &[egui::Pos2], scale: f32, target: egui::Rect) -> Option<[egui::Pos2; 3]> {
     let tip = *points.last()?;
     let previous = points.iter().rev().find(|p| p.distance(tip) > 0.01)?;
-    let direction = (tip - *previous).normalized();
+    let mut direction = (tip - *previous).normalized();
+    // Obstacle detours can approach a box almost tangentially. In that case
+    // one wing would lie inside the box and be hidden when cards are painted.
+    let inward = [
+        ((tip.x - target.left()).abs(), egui::Vec2::X),
+        ((tip.x - target.right()).abs(), -egui::Vec2::X),
+        ((tip.y - target.top()).abs(), egui::Vec2::Y),
+        ((tip.y - target.bottom()).abs(), -egui::Vec2::Y),
+    ]
+    .into_iter()
+    .min_by(|a, b| a.0.total_cmp(&b.0))?
+    .1;
+    if direction.dot(inward) < 0.5 {
+        direction = inward;
+    }
     let normal = egui::vec2(-direction.y, direction.x);
     let length = (10.0 * scale).clamp(4.0, 12.0);
     Some([
@@ -364,7 +378,7 @@ impl Explorer {
         let mut distance = 8.0;
         for route in &geometry.edges {
             let points: Vec<_> = route.points.iter().map(|p| screen(*p)).collect();
-            let Some(head) = arrow_head(&points, scale) else {
+            let Some(head) = arrow_head(&points, scale, labels[route.to.as_str()].0) else {
                 continue;
             };
             let edge = route;
