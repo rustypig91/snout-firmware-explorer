@@ -13,7 +13,7 @@ use layout::{
     },
     topo::layout::VisualGraph,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, PartialEq)]
 pub(super) struct NodeSpec {
@@ -85,9 +85,13 @@ pub(super) fn compute(input: &LayoutInput) -> GraphLayout {
         for node in &input.nodes {
             groups.entry(&node.directory).or_default().push(node);
         }
+        let mut lane_right = BTreeMap::new();
         let mut x = 0.0;
         for (directory, nodes) in groups {
             let width = nodes.iter().map(|n| n.size.x).fold(0.0_f32, f32::max);
+            for node in &nodes {
+                lane_right.insert(node.id.as_str(), x + width);
+            }
             headings.push((directory.to_owned(), egui::pos2(x + width / 2.0, -30.0)));
             let mut y = 0.0;
             for node in nodes {
@@ -103,15 +107,33 @@ pub(super) fn compute(input: &LayoutInput) -> GraphLayout {
             let source = vg.element(handles[from]).clone();
             let target = vg.element(handles[to]).clone();
             let mut elements = vec![source.clone()];
-            if (source.pos.center().x - target.pos.center().x).abs() < 1.0 {
-                // Same-lane connections travel outside the directory's boxes.
+            let same_lane = (source.pos.center().x - target.pos.center().x).abs() < 1.0;
+            let clearance = 45.0;
+            let source_x;
+            let target_x;
+            if same_lane {
+                source_x = f64::from(lane_right[from.as_str()]) + clearance + index as f64 * 3.0;
+                target_x = source_x;
+            } else if source.pos.center().x < target.pos.center().x {
+                source_x = f64::from(lane_right[from.as_str()]) + clearance;
+                target_x =
+                    2.0 * target.pos.center().x - f64::from(lane_right[to.as_str()]) - clearance;
+            } else {
+                source_x =
+                    2.0 * source.pos.center().x - f64::from(lane_right[from.as_str()]) - clearance;
+                target_x = f64::from(lane_right[to.as_str()]) + clearance;
+            }
+            let mut waypoints = vec![Point::new(source_x, source.pos.center().y)];
+            if !same_lane {
+                // Cross-directory connections pass above every lane, rather
+                // than disappearing underneath intermediate directory boxes.
+                let y = -80.0 - index as f64 * 3.0;
+                waypoints.extend([Point::new(source_x, y), Point::new(target_x, y)]);
+            }
+            waypoints.push(Point::new(target_x, target.pos.center().y));
+            for point in waypoints {
                 let mut connector = Element::empty_connector(Orientation::LeftToRight);
-                connector.move_to(Point::new(
-                    source.pos.right(false).max(target.pos.right(false))
-                        + 45.0
-                        + index as f64 * 3.0,
-                    (source.pos.center().y + target.pos.center().y) / 2.0,
-                ));
+                connector.move_to(point);
                 elements.push(connector);
             }
             elements.push(target);
@@ -139,12 +161,13 @@ pub(super) fn compute(input: &LayoutInput) -> GraphLayout {
             (id, egui::Rect::from_min_max(pos(min), pos(max)))
         })
         .collect();
+    let edge_pairs: BTreeSet<_> = input.edges.iter().map(|(f, t)| (f, t)).collect();
     let edges: Vec<_> = collector
         .curves
         .into_iter()
         .map(|(index, mut points)| {
             let (from, to) = &input.edges[index];
-            if from != to && input.edges.iter().any(|(f, t)| f == to && t == from) {
+            if from != to && edge_pairs.contains(&(to, from)) {
                 // Reciprocal arrows otherwise share exactly the same curve. Taper
                 // the lane offset to zero at the boxes so endpoints stay attached.
                 let direction = (cards[to].center() - cards[from].center()).normalized();
@@ -288,6 +311,38 @@ mod tests {
         assert!(geometry.edges.is_empty());
         input.nodes.truncate(1);
         assert_eq!(compute(&input).cards.len(), 1);
+    }
+
+    #[test]
+    fn grouped_routes_do_not_cross_intermediate_directory_boxes() {
+        let mut input = input();
+        input.grouped = true;
+        input.nodes.truncate(3);
+        for (node, directory) in input.nodes.iter_mut().zip(["a", "b", "c"]) {
+            node.directory = directory.into();
+        }
+        input.edges = vec![
+            (input.nodes[0].id.clone(), input.nodes[2].id.clone()),
+            (input.nodes[2].id.clone(), input.nodes[0].id.clone()),
+        ];
+        for same_lane in [false, true] {
+            if same_lane {
+                for node in &mut input.nodes {
+                    node.directory = "shared".into();
+                }
+                input.nodes[1].size = egui::vec2(300.0, 80.0);
+            }
+            let geometry = compute(&input);
+            for edge in &geometry.edges {
+                let obstacle = geometry.cards[&input.nodes[1].id].shrink(0.1);
+                for segment in edge.points.windows(2) {
+                    assert!(
+                        !obstacle.intersects(egui::Rect::from_two_pos(segment[0], segment[1])),
+                        "route crosses unrelated box: {segment:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
