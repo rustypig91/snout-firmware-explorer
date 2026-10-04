@@ -64,7 +64,29 @@ pub(super) fn guess(analysis: &Analysis, build: &BuildFolder) -> Result<LoadedSt
         .unwrap_or_default()
         .to_string_lossy()
         .to_lowercase();
-    let mut target_matches: Vec<_> = paths
+    // A same-name ELF in a closer build subtree owns that configuration's
+    // reports. Neither target names nor shared function names can override it.
+    let common_depth = |left: &Path, right: &Path| {
+        left.components()
+            .zip(right.components())
+            .take_while(|(left, right)| left == right)
+            .count()
+    };
+    let fallback_paths: Vec<_> = paths
+        .iter()
+        .filter(|report| {
+            let own_depth = common_depth(firmware.parent().unwrap_or(firmware), report);
+            !build.artifacts.iter().any(|artifact| {
+                artifact.kind == ArtifactKind::Firmware
+                    && artifact.path != firmware
+                    && artifact.path.file_name() == firmware.file_name()
+                    && common_depth(artifact.path.parent().unwrap_or(&artifact.path), report)
+                        > own_depth
+            })
+        })
+        .cloned()
+        .collect();
+    let mut target_matches: Vec<_> = fallback_paths
         .iter()
         .filter(|path| {
             path.strip_prefix(&build.root)
@@ -101,7 +123,7 @@ pub(super) fn guess(analysis: &Analysis, build: &BuildFolder) -> Result<LoadedSt
     let analyzed_paths = provenance
         .as_ref()
         .map(|(paths, _)| paths.clone())
-        .unwrap_or_else(|| paths.clone());
+        .unwrap_or_else(|| fallback_paths.clone());
     let mut report = analyze_stack_files(analysis, analyzed_paths).map_err(|e| e.to_string())?;
     let (chosen, reason) = if let Some(provenance) = provenance {
         provenance
@@ -273,6 +295,35 @@ mod tests {
         assert!(!selection.contains(&other));
         assert_eq!(stack.entries.len(), 1);
         assert_eq!(stack.entries[0].local_bytes, 56);
+    }
+
+    #[test]
+    fn guesses_do_not_borrow_reports_from_another_firmware_configuration() {
+        for directory in ["CMakeFiles/app.dir", "objects"] {
+            let (_dir, root, mut analysis) = setup();
+            let elf = root.join("release/bin/app.elf");
+            std::fs::create_dir_all(elf.parent().unwrap()).unwrap();
+            std::fs::rename(&analysis.path, &elf).unwrap();
+            analysis.path = elf.display().to_string();
+            let other_elf = root.join("debug/bin/app.elf");
+            std::fs::create_dir_all(other_elf.parent().unwrap()).unwrap();
+            std::fs::copy(&elf, &other_elf).unwrap();
+            let other = root.join("debug").join(directory).join("diag.su");
+            report(&other, 96);
+            let (stack, selection) = guess(&analysis, &scan_folder(&root).unwrap()).unwrap();
+            assert!(selection.is_none(), "{directory}");
+            assert!(stack.entries.is_empty());
+
+            // Reports need not be below the ELF's immediate parent (bin/).
+            let chosen = root.join("release").join(directory).join("diag.su");
+            report(&chosen, 56);
+            let (stack, selection) = guess(&analysis, &scan_folder(&root).unwrap()).unwrap();
+            let selection = selection.unwrap();
+            assert!(selection.contains(&chosen));
+            assert!(!selection.contains(&other));
+            assert_eq!(stack.entries.len(), 1);
+            assert_eq!(stack.entries[0].local_bytes, 56);
+        }
     }
 
     #[test]
