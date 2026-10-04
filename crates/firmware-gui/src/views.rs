@@ -606,14 +606,10 @@ impl Explorer {
         let Some(report) = &self.stack else {
             self.visible_rows = 0;
             ui.add_space(15.0);
-            ui.label("Build with -fstack-usage, then rescan the build folder and select firmware to load discovered reports automatically. Use reports from the same firmware build.");
+            ui.label("Build with -fstack-usage, then select report files or directories under Stack usage in the left menu.");
             return;
         };
         if let Some(analysis) = &self.analysis {
-            ui.small(format!(
-                "Stack reports for {}",
-                display_path(&analysis.path)
-            ));
             let matched: std::collections::HashSet<_> = report
                 .entries
                 .iter()
@@ -636,6 +632,28 @@ impl Explorer {
                     }
                 },
             );
+        }
+        for warning in &report.warnings {
+            if warning.starts_with("Multiple report files")
+                || warning.starts_with("Ambiguous reports:")
+                || warning.starts_with("Could not confidently select stack reports")
+                || warning.starts_with("Skipped stack report while guessing:")
+            {
+                ui.colored_label(egui::Color32::YELLOW, warning);
+            }
+        }
+        let mut files_by_symbol: std::collections::HashMap<&str, std::collections::HashSet<&str>> =
+            Default::default();
+        for entry in &report.entries {
+            for symbol in &entry.symbol_candidates {
+                files_by_symbol
+                    .entry(symbol)
+                    .or_default()
+                    .insert(&entry.report_file);
+            }
+        }
+        if files_by_symbol.values().any(|files| files.len() > 1) {
+            ui.colored_label(egui::Color32::YELLOW, "Ambiguous reports: multiple files match the same ELF functions. Choose reports to resolve build ownership.");
         }
         let unresolved = report
             .entries
@@ -668,12 +686,8 @@ impl Explorer {
                             build_relative_path(&e.source_file, build_root),
                             e.source_line
                         ),
-                        e.symbol_candidates.len().to_string(),
                     ],
-                    &[
-                        (1, e.local_bytes.into()),
-                        (4, e.symbol_candidates.len() as i128),
-                    ],
+                    &[(1, e.local_bytes.into())],
                     format!(
                         "{}\n{}\nELF matches: {:?}",
                         build_relative_path(&e.report_file, build_root),
@@ -683,7 +697,7 @@ impl Explorer {
                 )
             })
             .collect();
-        self.table(ui, &[("Function","Compiler function label"),("Local frame","Compiler reported bytes, not a call-chain estimate"),("Qualifier","static: fixed frame; dynamic,bounded: compiler bound; dynamic: total may be unbounded"),("Source","Location reported by the compiler"),("ELF matches","Matched by symbol name or source location. Zero is unresolved; more than one is ambiguous.")], rows);
+        self.table(ui, &[("Function","Compiler function label"),("Local frame","Compiler reported bytes, not a call-chain estimate"),("Qualifier","static: fixed frame; dynamic,bounded: compiler bound; dynamic: total may be unbounded"),("Source","Location reported by the compiler")], rows);
     }
     pub(super) fn compare_view(&mut self, ui: &mut egui::Ui) {
         let Some(c) = &self.comparison else {

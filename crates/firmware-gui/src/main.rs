@@ -1,4 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+mod stack_guess;
 mod startup;
 mod update;
 mod update_ui;
@@ -22,7 +23,7 @@ use eframe::egui;
 use firmware_analysis_core::{
     analyze_path,
     compare::{compare, Comparison},
-    stack::{analyze_stack, StackReport},
+    stack::StackReport,
     Analysis, AnalysisOptions,
 };
 use std::{
@@ -66,10 +67,11 @@ impl View {
         }
     }
 }
+type LoadedStack = (StackReport, Option<workspace::StackSelection>);
 type Refreshed = (
     firmware_analysis_core::build::BuildFolder,
     Analysis,
-    Option<StackReport>,
+    Option<LoadedStack>,
     Option<AnalysisOptions>,
     String,
 );
@@ -78,14 +80,14 @@ enum Loaded {
     Refresh(Box<Refreshed>),
     Firmware(
         Analysis,
-        Option<StackReport>,
+        Option<LoadedStack>,
         Option<AnalysisOptions>,
         String,
     ),
     Build(firmware_analysis_core::build::BuildFolder),
     Text(PathBuf, String),
     Baseline(Analysis),
-    Stack(StackReport),
+    SelectedStack(StackReport, workspace::StackSelection),
     Config(AnalysisOptions, Option<Analysis>, String),
     Dependencies(Analysis, PathBuf),
 }
@@ -103,6 +105,8 @@ struct BuildSettings {
     layouts: std::collections::BTreeMap<PathBuf, SavedLayout>,
     #[serde(default)]
     dependency_maps: std::collections::BTreeMap<PathBuf, PathBuf>,
+    #[serde(default)]
+    stack_reports: std::collections::BTreeMap<PathBuf, workspace::StackSelection>,
 }
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct SavedLayout {
@@ -110,6 +114,7 @@ struct SavedLayout {
     source: String,
 }
 struct Explorer {
+    preferences_file: Option<PathBuf>,
     analysis: Option<Arc<Analysis>>,
     graph_view: dependencies::GraphView,
     build: Option<Arc<firmware_analysis_core::build::BuildFolder>>,
@@ -154,6 +159,7 @@ struct Explorer {
 impl Default for Explorer {
     fn default() -> Self {
         Self {
+            preferences_file: None,
             analysis: None,
             graph_view: Default::default(),
             build: None,
@@ -243,16 +249,25 @@ impl Explorer {
         } else {
             self.saved_dependency_map(&path)
         };
+        let reports = if reset_settings {
+            None
+        } else {
+            self.saved_stack_selection(&path)
+        };
         self.job(move || {
-            let (mut analysis, layout, source) = workspace::analyze_selected(&build, &path, layout, source)?;
-            if let Some(map) = dependency_map { workspace::read_dependency_map(&mut analysis, &map); }
-            let reports = build.artifacts.iter().filter(|a| a.kind == firmware_analysis_core::build::ArtifactKind::StackUsage).map(|a| a.path.clone()).collect();
-            let stack = match firmware_analysis_core::stack::analyze_stack_files(&analysis, reports) {
-                Ok(mut report) => {
-                    report.warnings.push(format!("Reports discovered under {}. This folder may contain multiple targets or configurations; symbol/source matches do not prove build ownership.", build.root.display()));
-                    Some(report)
+            let (mut analysis, layout, source) =
+                workspace::analyze_selected(&build, &path, layout, source)?;
+            if let Some(map) = dependency_map {
+                workspace::read_dependency_map(&mut analysis, &map);
+            }
+            let stack = match workspace::load_stack_reports(&analysis, &build, reports) {
+                Ok(report) => Some(report),
+                Err(e) => {
+                    analysis
+                        .warnings
+                        .push(format!("Stack reports could not be loaded: {e}"));
+                    None
                 }
-                Err(e) => { analysis.warnings.push(format!("Stack reports could not be loaded: {e}")); None }
             };
             let loaded = Loaded::Firmware(analysis, stack, layout, source);
             Ok(if reset_settings {
@@ -302,27 +317,6 @@ impl Explorer {
                         .map_err(|e| e.to_string())
                 });
             }
-        }
-    }
-    fn pick_stack(&mut self, directory: bool) {
-        let path = if directory {
-            rfd::FileDialog::new().pick_folder()
-        } else {
-            rfd::FileDialog::new()
-                .add_filter("Stack usage", &["su"])
-                .pick_file()
-        };
-        if let Some(path) = path {
-            self.scan_stack(path);
-        }
-    }
-    fn scan_stack(&mut self, path: PathBuf) {
-        if let Some(analysis) = self.analysis.clone() {
-            self.job(move || {
-                analyze_stack(&analysis, path)
-                    .map(Loaded::Stack)
-                    .map_err(|e| e.to_string())
-            });
         }
     }
     fn poll(&mut self) {
@@ -436,7 +430,19 @@ impl Explorer {
                             self.comparison = None;
                             self.baseline = None;
                         }
-                        self.stack = stack;
+                        self.stack = stack.map(|(report, selection)| {
+                            if let (Some(build), Some(selection)) = (&self.build, selection) {
+                                self.build_settings
+                                    .entry(build.root.clone())
+                                    .or_default()
+                                    .stack_reports
+                                    .insert(
+                                        PathBuf::from(&self.analysis.as_ref().unwrap().path),
+                                        selection,
+                                    );
+                            }
+                            report
+                        });
                         self.selected_file = None;
                         self.selected_region = None;
                         self.overview_section = None;
@@ -466,7 +472,14 @@ impl Explorer {
                         self.baseline = Some(Arc::new(old));
                         self.change_view(View::Compare);
                     }
-                    Ok(Loaded::Stack(s)) => {
+                    Ok(Loaded::SelectedStack(s, paths)) => {
+                        if let (Some(build), Some(analysis)) = (&self.build, &self.analysis) {
+                            self.build_settings
+                                .entry(build.root.clone())
+                                .or_default()
+                                .stack_reports
+                                .insert(PathBuf::from(&analysis.path), paths);
+                        }
                         self.stack = Some(s);
                         self.change_view(View::Stack);
                     }
@@ -507,6 +520,7 @@ impl Explorer {
                         source: self.layout_source.clone(),
                     });
                 }
+                self.persist_preferences();
             }
             Some(Err(mpsc::TryRecvError::Disconnected)) => {
                 self.receiver = None;
@@ -559,7 +573,10 @@ fn main() -> eframe::Result {
             shell::configure_style(&cc.egui_ctx);
             #[cfg(target_os = "linux")]
             window_theme::apply_startup_theme(cc.egui_ctx.clone());
-            let mut app = Explorer::default();
+            let mut app = Explorer {
+                preferences_file: preferences::preferences_path(),
+                ..Default::default()
+            };
             app.restore_preferences(startup.folder.is_none());
             app.open_startup(&startup);
             if app.updates.check_on_startup && !startup.no_update_check {

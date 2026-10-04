@@ -1,7 +1,7 @@
 use super::{AnalysisOptions, Explorer, Loaded, RememberedFirmware, View};
 use std::path::{Path, PathBuf};
 
-fn preferences_path() -> Option<PathBuf> {
+pub(super) fn preferences_path() -> Option<PathBuf> {
     std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from))
@@ -46,20 +46,20 @@ impl Explorer {
         let layout = self.layout_override.clone();
         let source = layout.as_ref().map(|_| self.layout_source.clone());
         let dependency_map = self.saved_dependency_map(&path);
+        let reports = self.saved_stack_selection(&path);
         self.job(move || {
-            let build = firmware_analysis_core::build::scan_folder(root).map_err(|e| e.to_string())?;
-            let (mut a, layout, source) = super::workspace::analyze_selected(&build, &path, layout, source)?;
-            if let Some(map) = dependency_map { super::workspace::read_dependency_map(&mut a, &map); }
-            let reports = build.artifacts.iter()
-                .filter(|a| a.kind == firmware_analysis_core::build::ArtifactKind::StackUsage)
-                .map(|a| a.path.clone()).collect();
-            let stack = match firmware_analysis_core::stack::analyze_stack_files(&a, reports) {
-                Ok(mut s) => {
-                    s.warnings.push("Reports may span multiple targets or configurations; check their paths and build ownership.".into());
-                    Some(s)
-                }
+            let build =
+                firmware_analysis_core::build::scan_folder(root).map_err(|e| e.to_string())?;
+            let (mut a, layout, source) =
+                super::workspace::analyze_selected(&build, &path, layout, source)?;
+            if let Some(map) = dependency_map {
+                super::workspace::read_dependency_map(&mut a, &map);
+            }
+            let stack = match super::workspace::load_stack_reports(&a, &build, reports) {
+                Ok(s) => Some(s),
                 Err(e) => {
-                    a.warnings.push(format!("Stack reports could not be loaded: {e}"));
+                    a.warnings
+                        .push(format!("Stack reports could not be loaded: {e}"));
                     None
                 }
             };
@@ -71,13 +71,18 @@ impl Explorer {
         serde_json::json!({"version": 1, "build_settings": self.build_settings, "check_updates_on_startup": self.updates.check_on_startup, "skipped_version": self.updates.skipped_version, "folder": self.build.as_ref().map(|b| &b.root), "firmware": self.analysis.as_ref().map(|a| &a.path), "layout": self.layout_override, "layout_source": self.layout_source, "view": self.view.label(), "directories": self.tree, "metric": self.overview_metric.label(), "contributor_ram": self.contributor_ram})
     }
     pub(super) fn save_preferences(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let Some(path) = preferences_path() else {
+        let Some(path) = &self.preferences_file else {
             return Ok(());
         };
-        write_preferences(&path, &self.preference_value())
+        write_preferences(path, &self.preference_value())
+    }
+    pub(super) fn persist_preferences(&mut self) {
+        if let Err(error) = self.save_preferences() {
+            self.error = Some(format!("Could not save workspace preferences: {error}"));
+        }
     }
     pub(super) fn restore_preferences(&mut self, restore_workspace: bool) {
-        let Some(path) = preferences_path() else {
+        let Some(path) = &self.preferences_file else {
             return;
         };
         let Ok(data) = std::fs::read(path) else {
