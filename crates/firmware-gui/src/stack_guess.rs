@@ -35,35 +35,6 @@ pub(super) fn guess(analysis: &Analysis, build: &BuildFolder) -> Result<LoadedSt
         objects.extend(map_objects(&text));
     }
     let map_parent = map_path.and_then(Path::parent).unwrap_or(&build.root);
-    let mut map_matches = BTreeSet::new();
-    for object in objects {
-        let expected = map_parent.join(&object);
-        let expected = expected.canonicalize().unwrap_or(expected);
-        if paths.contains(&expected) {
-            map_matches.insert(expected);
-            continue;
-        }
-        let expected = build.root.join(&object);
-        let expected = expected.canonicalize().unwrap_or(expected);
-        if paths.contains(&expected) {
-            map_matches.insert(expected);
-            continue;
-        }
-        // Keep directory components and require a unique suffix match when the
-        // map uses paths from a different build location.
-        let suffix_matches: Vec<_> = paths
-            .iter()
-            .filter(|path| object.components().count() > 1 && path.ends_with(&object))
-            .collect();
-        if suffix_matches.len() == 1 {
-            map_matches.insert(suffix_matches[0].clone());
-        }
-    }
-    let stem = firmware
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_lowercase();
     // A same-name ELF in a closer build subtree owns that configuration's
     // reports. Neither target names nor shared function names can override it.
     let common_depth = |left: &Path, right: &Path| {
@@ -86,6 +57,36 @@ pub(super) fn guess(analysis: &Analysis, build: &BuildFolder) -> Result<LoadedSt
         })
         .cloned()
         .collect();
+    let mut map_matches = BTreeSet::new();
+    for object in objects {
+        let expected = map_parent.join(&object);
+        let expected = expected.canonicalize().unwrap_or(expected);
+        if paths.contains(&expected) {
+            map_matches.insert(expected);
+            continue;
+        }
+        let expected = build.root.join(&object);
+        let expected = expected.canonicalize().unwrap_or(expected);
+        if paths.contains(&expected) {
+            map_matches.insert(expected);
+            continue;
+        }
+        // Keep directory components and require a unique suffix match when the
+        // map uses paths from a different build location. A suffix alone cannot
+        // override evidence that a report belongs to another configuration.
+        let suffix_matches: Vec<_> = fallback_paths
+            .iter()
+            .filter(|path| object.components().count() > 1 && path.ends_with(&object))
+            .collect();
+        if suffix_matches.len() == 1 {
+            map_matches.insert(suffix_matches[0].clone());
+        }
+    }
+    let stem = firmware
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase();
     let mut target_matches: Vec<_> = fallback_paths
         .iter()
         .filter(|path| {
@@ -335,6 +336,37 @@ mod tests {
         let (stack, selection) = guess(&analysis, &scan_folder(&root).unwrap()).unwrap();
         assert!(selection.unwrap().contains(&chosen));
         assert_eq!(stack.entries.len(), 1);
+    }
+
+    #[test]
+    fn map_suffix_guess_does_not_borrow_another_configurations_reports() {
+        let (_dir, root, mut analysis) = setup();
+        let elf = root.join("release/bin/app.elf");
+        std::fs::create_dir_all(elf.parent().unwrap()).unwrap();
+        std::fs::rename(&analysis.path, &elf).unwrap();
+        analysis.path = elf.display().to_string();
+        let other_elf = root.join("debug/bin/app.elf");
+        std::fs::create_dir_all(other_elf.parent().unwrap()).unwrap();
+        std::fs::copy(&elf, &other_elf).unwrap();
+        let map = root.join("release/app.map");
+        std::fs::write(&map, "Linker script and memory map\nLOAD objects/diag.o\n").unwrap();
+        analysis.dependencies.map_path = Some(map.display().to_string());
+        let other = root.join("debug/objects/diag.su");
+        report(&other, 96);
+
+        let (stack, selection) = guess(&analysis, &scan_folder(&root).unwrap()).unwrap();
+        assert!(selection.is_none());
+        assert!(stack.entries.is_empty());
+
+        // A relocated report is still eligible within the selected configuration.
+        let chosen = root.join("release/relocated/objects/diag.su");
+        report(&chosen, 56);
+        let (stack, selection) = guess(&analysis, &scan_folder(&root).unwrap()).unwrap();
+        let selection = selection.unwrap();
+        assert!(selection.contains(&chosen));
+        assert!(!selection.contains(&other));
+        assert_eq!(stack.entries.len(), 1);
+        assert_eq!(stack.entries[0].local_bytes, 56);
     }
 
     #[test]
