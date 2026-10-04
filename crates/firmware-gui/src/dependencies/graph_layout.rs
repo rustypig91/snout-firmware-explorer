@@ -184,6 +184,23 @@ pub(super) fn compute(input: &LayoutInput) -> GraphLayout {
                     *point += normal * (6.0 * (std::f32::consts::PI * i as f32 / last).sin());
                 }
             }
+            // Cubic controls and reciprocal offsets can overshoot the layout
+            // corridors in dense graphs. Reroute only those connections through
+            // a visibility graph around the boxes, retaining the real endpoints.
+            if !route_is_clear(&points, &cards) {
+                let clearance = if from < to { 8.0 } else { 14.0 };
+                if let Some(route) =
+                    obstacle_route(points[0], *points.last().unwrap(), &cards, clearance)
+                        .or_else(|| obstacle_route(points[0], *points.last().unwrap(), &cards, 1.0))
+                {
+                    let rounded = round_route(&route);
+                    points = if route_is_clear(&rounded, &cards) {
+                        rounded
+                    } else {
+                        route
+                    };
+                }
+            }
             RoutedEdge {
                 from: from.clone(),
                 to: to.clone(),
@@ -211,6 +228,95 @@ pub(super) fn compute(input: &LayoutInput) -> GraphLayout {
         headings,
         bounds: bounds.expand(24.0),
     }
+}
+
+fn segment_crosses_rect(start: egui::Pos2, end: egui::Pos2, rect: egui::Rect) -> bool {
+    if !rect.intersects(egui::Rect::from_two_pos(start, end)) {
+        return false;
+    }
+    if start == end {
+        return rect.contains(start);
+    }
+    let direction = (end - start).normalized();
+    rect.intersects_ray(start, direction) && rect.intersects_ray(end, -direction)
+}
+
+fn route_is_clear(points: &[egui::Pos2], cards: &BTreeMap<String, egui::Rect>) -> bool {
+    cards.values().all(|card| {
+        !points
+            .windows(2)
+            .any(|segment| segment_crosses_rect(segment[0], segment[1], card.shrink(0.1)))
+    })
+}
+
+/// Find the shortest clear path along box corners. This also treats the source
+/// and target as obstacles so the arrow leaves and enters their outside edges.
+fn obstacle_route(
+    start: egui::Pos2,
+    end: egui::Pos2,
+    cards: &BTreeMap<String, egui::Rect>,
+    clearance: f32,
+) -> Option<Vec<egui::Pos2>> {
+    let mut vertices = vec![start, end];
+    for card in cards.values() {
+        let card = card.expand(clearance);
+        vertices.extend([
+            card.left_top(),
+            card.right_top(),
+            card.right_bottom(),
+            card.left_bottom(),
+        ]);
+    }
+    let mut distances = vec![f32::INFINITY; vertices.len()];
+    let mut previous = vec![None; vertices.len()];
+    let mut visited = vec![false; vertices.len()];
+    distances[0] = 0.0;
+    loop {
+        let current = (0..vertices.len())
+            .filter(|&i| !visited[i] && distances[i].is_finite())
+            .min_by(|&a, &b| distances[a].total_cmp(&distances[b]))?;
+        if current == 1 {
+            break;
+        }
+        visited[current] = true;
+        for next in 0..vertices.len() {
+            if visited[next] {
+                continue;
+            }
+            let distance = distances[current] + vertices[current].distance(vertices[next]);
+            if distance < distances[next]
+                && route_is_clear(&[vertices[current], vertices[next]], cards)
+            {
+                distances[next] = distance;
+                previous[next] = Some(current);
+            }
+        }
+    }
+    let mut route = vec![end];
+    let mut current = 1;
+    while current != 0 {
+        current = previous[current]?;
+        route.push(vertices[current]);
+    }
+    route.reverse();
+    Some(route)
+}
+
+fn round_route(route: &[egui::Pos2]) -> Vec<egui::Pos2> {
+    let mut points = vec![route[0]];
+    for corner in route.windows(3) {
+        let radius = 8.0_f32
+            .min(corner[1].distance(corner[0]) / 4.0)
+            .min(corner[1].distance(corner[2]) / 4.0);
+        let entry = corner[1] + (corner[0] - corner[1]).normalized() * radius;
+        let exit = corner[1] + (corner[2] - corner[1]).normalized() * radius;
+        for step in 0..=8 {
+            let t = step as f32 / 8.0;
+            points.push(entry.lerp(corner[1], t).lerp(corner[1].lerp(exit, t), t));
+        }
+    }
+    points.push(*route.last().unwrap());
+    points
 }
 
 #[cfg(test)]
@@ -407,6 +513,67 @@ mod tests {
             .map(|(label, _)| label.as_str())
             .collect();
         assert_eq!(labels, ["project-a/src/drivers", "project-b/src/drivers"]);
+    }
+
+    #[test]
+    fn dense_routes_clear_unrelated_boxes() {
+        for grouped in [false, true] {
+            for vertical in [false, true] {
+                let mut input = input();
+                input.grouped = grouped;
+                input.vertical = vertical;
+                input.nodes = (0..8)
+                    .map(|index| NodeSpec {
+                        id: format!("{index}.c"),
+                        directory: format!("dir{}", index / 3),
+                        size: egui::vec2(100.0 + index as f32 * 5.0, 42.0 + index as f32 * 2.0),
+                    })
+                    .collect();
+                input.edges = input
+                    .nodes
+                    .iter()
+                    .flat_map(|from| {
+                        input
+                            .nodes
+                            .iter()
+                            .filter(move |to| to.id != from.id)
+                            .map(move |to| (from.id.clone(), to.id.clone()))
+                    })
+                    .collect();
+                let geometry = compute(&input);
+                assert_eq!(geometry.edges.len(), input.edges.len());
+                for edge in &geometry.edges {
+                    assert!(geometry.cards[&edge.from]
+                        .expand(0.01)
+                        .contains(edge.points[0]));
+                    assert!(geometry.cards[&edge.to]
+                        .expand(0.01)
+                        .contains(*edge.points.last().unwrap()));
+                    for (id, card) in &geometry.cards {
+                        for segment in edge.points.windows(2) {
+                            assert!(!segment_crosses_rect(segment[0], segment[1], card.shrink(0.1)),
+                                "grouped={grouped} vertical={vertical}: {} -> {} crosses {id} at {segment:?} ({card:?})", edge.from, edge.to);
+                        }
+                    }
+                    let reverse = geometry
+                        .edges
+                        .iter()
+                        .find(|other| other.from == edge.to && other.to == edge.from)
+                        .unwrap();
+                    assert!(
+                        edge.points.len() != reverse.points.len()
+                            || edge
+                                .points
+                                .iter()
+                                .zip(reverse.points.iter().rev())
+                                .any(|(a, b)| a.distance(*b) > 1.0),
+                        "reciprocal routes overlap: {} -> {}",
+                        edge.from,
+                        edge.to
+                    );
+                }
+            }
+        }
     }
 
     #[test]

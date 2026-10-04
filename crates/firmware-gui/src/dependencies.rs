@@ -14,6 +14,7 @@ pub(super) struct GraphView {
     zoom: f32,
     pan: egui::Vec2,
     layout: Option<CachedLayout>,
+    filter: Option<(String, Option<String>)>,
 }
 impl Default for GraphView {
     fn default() -> Self {
@@ -26,6 +27,7 @@ impl Default for GraphView {
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
             layout: None,
+            filter: None,
         }
     }
 }
@@ -151,6 +153,16 @@ impl Explorer {
             ui.label("Sizes include uniquely attributed ELF symbol bytes only. Padding, unowned symbols and units removed by optimization are not assigned to source units. Object-only nodes have unknown size.");
         });
         let nodes = visible_nodes(graph, &self.graph_view, &self.search);
+        let filter = (
+            self.search.clone(),
+            if self.graph_view.focused {
+                self.graph_view.selected.clone()
+            } else {
+                None
+            },
+        );
+        let filter_changed = self.graph_view.filter.as_ref() != Some(&filter);
+        self.graph_view.filter = Some(filter);
         self.visible_rows = nodes.len();
         if nodes.is_empty() {
             ui.weak("No compilation units match. Stripped firmware may have no unit ownership information.");
@@ -158,7 +170,7 @@ impl Explorer {
         }
         ui.horizontal_top(|ui| {
             let size = egui::vec2((ui.available_width() - 295.0).max(180.0), ui.available_height().max(200.0));
-            self.graph_canvas(ui, graph, &nodes, size);
+            self.graph_canvas(ui, graph, &nodes, size, filter_changed);
             ui.vertical(|ui| {
                 ui.set_width(280.0);
                 egui::ScrollArea::vertical().id_salt("graph_inspector").show(ui, |ui| {
@@ -211,6 +223,7 @@ impl Explorer {
         graph: &DependencyGraph,
         nodes: &[&firmware_analysis_core::dependencies::DependencyNode],
         size: egui::Vec2,
+        filter_changed: bool,
     ) {
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
         let painter = ui.painter_at(rect);
@@ -300,6 +313,8 @@ impl Explorer {
         if layout_changed {
             let geometry = graph_layout::compute(&input);
             self.graph_view.layout = Some(CachedLayout { input, geometry });
+        }
+        if layout_changed || filter_changed {
             self.graph_view.zoom = 1.0;
             self.graph_view.pan = egui::Vec2::ZERO;
         }
@@ -312,7 +327,7 @@ impl Explorer {
         }
         // A newly fitted graph should not inherit smooth-scroll inertia from
         // the previous layout when a filter or memory mode changes.
-        if response.hovered() && !layout_changed {
+        if response.hovered() && !layout_changed && !filter_changed {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
                 let old_zoom = self.graph_view.zoom;
@@ -554,6 +569,77 @@ mod tests {
         };
         assert_eq!(ids(&focused, "spi.c"), ["app/main.c", "drivers/spi.c"]);
         assert!(ids(&focused, "unused").is_empty());
+    }
+
+    #[test]
+    fn filter_changes_refit_even_when_the_visible_graph_is_unchanged() {
+        let mut analysis = firmware_analysis_core::analyze_bytes(
+            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            "test.elf",
+            &Default::default(),
+        )
+        .unwrap();
+        analysis.dependencies = graph();
+        analysis.dependencies.nodes.truncate(2);
+        let mut app = Explorer::default();
+        let ctx = egui::Context::default();
+        let frame = |app: &mut Explorer| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1100.0, 700.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default()
+                        .show(ctx, |ui| app.dependency_view(ui, &analysis));
+                },
+            )
+        };
+        let _ = frame(&mut app);
+        let cached_points = app.graph_view.layout.as_ref().unwrap().geometry.edges[0]
+            .points
+            .as_ptr();
+        for search in ["spi.c", "main.c", ""] {
+            app.graph_view.zoom = 2.0;
+            app.graph_view.pan = egui::vec2(150.0, 80.0);
+            app.search = search.into();
+            let _ = frame(&mut app);
+            assert_eq!(app.visible_rows, 2);
+            assert_eq!(app.graph_view.zoom, 1.0);
+            assert_eq!(app.graph_view.pan, egui::Vec2::ZERO);
+            assert_eq!(
+                app.graph_view.layout.as_ref().unwrap().geometry.edges[0]
+                    .points
+                    .as_ptr(),
+                cached_points
+            );
+        }
+        app.graph_view.zoom = 2.0;
+        app.graph_view.pan = egui::vec2(150.0, 80.0);
+        let _ = frame(&mut app);
+        assert_eq!(app.graph_view.zoom, 2.0);
+        assert_eq!(app.graph_view.pan, egui::vec2(150.0, 80.0));
+        app.graph_view.focused = true;
+        for selected in ["app/main.c", "drivers/spi.c"] {
+            app.graph_view.zoom = 2.0;
+            app.graph_view.pan = egui::vec2(150.0, 80.0);
+            app.graph_view.selected = Some(selected.into());
+            let _ = frame(&mut app);
+            assert_eq!(app.visible_rows, 2);
+            assert_eq!(app.graph_view.zoom, 1.0);
+            assert_eq!(app.graph_view.pan, egui::Vec2::ZERO);
+        }
+        app.graph_view.zoom = 2.0;
+        app.search = "no match".into();
+        let _ = frame(&mut app);
+        assert_eq!(app.visible_rows, 0);
+        app.search.clear();
+        let _ = frame(&mut app);
+        assert_eq!(app.visible_rows, 2);
+        assert_eq!(app.graph_view.zoom, 1.0);
     }
 
     #[test]
