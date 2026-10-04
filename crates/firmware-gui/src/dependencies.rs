@@ -104,6 +104,30 @@ fn layout(
     (positions, headings)
 }
 
+/// Keep arrowheads visible at every zoom level and outside the dependency node.
+fn dependency_arrow(
+    from: egui::Pos2,
+    to: egui::Pos2,
+    from_radius: f32,
+    to_radius: f32,
+) -> Option<(egui::Pos2, [egui::Pos2; 3])> {
+    let delta = to - from;
+    let distance = delta.length();
+    if distance <= from_radius + to_radius + 16.0 {
+        return None;
+    }
+    let direction = delta / distance;
+    let perpendicular = egui::vec2(-direction.y, direction.x);
+    // Opposing references get separate lanes so both directions remain visible.
+    let offset = perpendicular * 5.0;
+    let start = from + direction * (from_radius + 4.0) + offset;
+    let tip = to - direction * (to_radius + 6.0) + offset;
+    let length = 11.0_f32.min((tip - start).length() * 0.4);
+    let base = tip - direction * length;
+    let half_width = perpendicular * (length * 0.55);
+    Some((start, [tip, base + half_width, base - half_width]))
+}
+
 impl Explorer {
     pub(super) fn dependency_view(&mut self, ui: &mut egui::Ui, analysis: &Analysis) {
         let graph = &analysis.dependencies;
@@ -123,7 +147,7 @@ impl Explorer {
                 self.graph_view.pan = egui::Vec2::ZERO;
             }
         });
-        ui.small("Arrow: uses → defines · Node size: attributed symbol bytes · Drag to pan; scroll to zoom");
+        ui.small("Arrows point to dependencies (uses → defines) · Node size: attributed symbol bytes · Drag to pan; scroll to zoom");
         if let Some(path) = &graph.map_path {
             ui.small(format!("Cross references: {path}"));
         }
@@ -149,7 +173,8 @@ impl Explorer {
                     if let Some((from, to)) = &self.graph_view.edge {
                         if let Some(edge) = graph.edges.iter().find(|e| &e.from == from && &e.to == to) {
                             ui.heading("Symbol references");
-                            for id in [from, to] {
+                            for (index, id) in [from, to].into_iter().enumerate() {
+                                if index == 1 { ui.small("uses symbols defined by ↓"); }
                                 if let Some(node) = graph.nodes.iter().find(|n| &n.id == id) { ui.label(&node.label); }
                             }
                             ui.separator();
@@ -255,13 +280,15 @@ impl Explorer {
             };
             let from = screen(*from);
             let to = screen(*to);
-            let direction = (to - from).normalized();
-            let start = from + direction * radii[edge.from.as_str()];
-            let end = to - direction * radii[edge.to.as_str()];
-            // Offset reciprocal edges so each arrow remains individually selectable.
-            let normal = egui::vec2(-direction.y, direction.x) * 5.0;
-            let start = start + normal;
-            let end = end + normal;
+            let Some((start, head)) = dependency_arrow(
+                from,
+                to,
+                radii[edge.from.as_str()].max(3.0),
+                radii[edge.to.as_str()].max(3.0),
+            ) else {
+                continue;
+            };
+            let end = head[0];
             let highlighted = self
                 .graph_view
                 .edge
@@ -275,13 +302,17 @@ impl Explorer {
             let color = if highlighted {
                 ui.visuals().selection.stroke.color
             } else {
-                ui.visuals().weak_text_color().gamma_multiply(0.6)
+                ui.visuals().text_color().gamma_multiply(0.8)
             };
-            painter.arrow(
-                start,
-                end - start,
-                egui::Stroke::new(if highlighted { 2.0_f32 } else { 1.0_f32 }, color),
+            painter.line_segment(
+                [start, head[1].lerp(head[2], 0.5)],
+                egui::Stroke::new(if highlighted { 2.5_f32 } else { 1.5_f32 }, color),
             );
+            painter.add(egui::Shape::convex_polygon(
+                head.to_vec(),
+                color,
+                egui::Stroke::NONE,
+            ));
             if let Some(pointer) = pointer {
                 let delta = end - start;
                 let t = ((pointer - start).dot(delta) / delta.length_sq().max(1.0)).clamp(0.0, 1.0);
@@ -416,6 +447,24 @@ mod tests {
             map_path: Some("app.map".into()),
             notes: vec![],
         }
+    }
+
+    #[test]
+    fn solid_arrowheads_point_toward_dependencies_at_different_zoom_levels() {
+        for scale in [0.1, 1.0, 8.0] {
+            let from = egui::pos2(20.0, 40.0);
+            let to = from + egui::vec2(400.0, 100.0) * scale;
+            let direction = (to - from).normalized();
+            let (_, head) = dependency_arrow(from, to, 24.0 * scale, 47.0 * scale).unwrap();
+            let base = head[1].lerp(head[2], 0.5);
+            assert!((head[0] - base).dot(direction) > 0.0);
+            assert!(head[0].distance(to) > 47.0 * scale);
+            assert!(head[0].distance(to) < head[0].distance(from));
+            assert!(head[0].distance(base) <= 11.01);
+            let (_, reversed) = dependency_arrow(to, from, 47.0 * scale, 24.0 * scale).unwrap();
+            assert!(reversed[0].distance(from) < reversed[0].distance(to));
+        }
+        assert!(dependency_arrow(egui::Pos2::ZERO, egui::Pos2::ZERO, 10.0, 10.0).is_none());
     }
 
     #[test]
