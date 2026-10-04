@@ -27,6 +27,11 @@ repairs.
    ```
 
    Substitute the custom destination when applicable.
+   Also probe a hard link to the installed executable on the same volume (create
+   it with `New-Item -ItemType HardLink -Path <alias> -Target <installed-exe>`).
+   Expect ownership `true` for the alias; an independent copy of the same file
+   must return `false`. Remove the alias after the probe. This checks file
+   identity rather than canonical path spelling.
    Also temporarily move `License.rtf` out of the MSI installation folder and
    repeat the probe and update-dialog check. Expect ownership `true` and
    **Download MSI installer** even with the ancillary component missing; restore

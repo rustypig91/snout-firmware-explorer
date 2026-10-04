@@ -14,7 +14,7 @@ fn owns_executable<T>(
     if products.is_empty() {
         return Ok(false);
     }
-    let executable = executable.canonicalize().map_err(|e| e.to_string())?;
+    let executable = same_file::Handle::from_path(executable).map_err(|e| e.to_string())?;
     let mut lookup_error = None;
     let mut index = 0;
     while let Some(id) = component(index)? {
@@ -34,7 +34,10 @@ fn owns_executable<T>(
                 }
                 // Preserve uncertainty, but keep looking: a missing license
                 // must not mask a later confirmed executable component.
-                let resolved = match path.canonicalize() {
+                // Compare file identity, not path spelling: Windows volume
+                // aliases and hard links can resolve to the same running image
+                // while still having different canonical paths.
+                let resolved = match same_file::Handle::from_path(&path) {
                     Ok(resolved) => resolved,
                     Err(error) => {
                         lookup_error.get_or_insert_with(|| {
@@ -239,6 +242,32 @@ mod tests {
             |_, _| Err("component failure".into())
         )
         .is_err());
+    }
+
+    #[test]
+    fn executable_alias_is_owned_but_an_independent_copy_is_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let registered = dir.path().join("firmware-gui.exe");
+        let alias = dir.path().join("alias.exe");
+        let copy = dir.path().join("portable.exe");
+        std::fs::write(&registered, b"image").unwrap();
+        std::fs::hard_link(&registered, &alias).unwrap();
+        std::fs::copy(&registered, &copy).unwrap();
+        assert_ne!(
+            registered.canonicalize().unwrap(),
+            alias.canonicalize().unwrap()
+        );
+        for (image, expected) in [(&alias, true), (&copy, false)] {
+            assert_eq!(
+                owns_executable(
+                    image,
+                    &[42],
+                    |index| Ok((index == 0).then_some(0)),
+                    |_, _| Ok(Some(registered.clone())),
+                ),
+                Ok(expected)
+            );
+        }
     }
 
     #[test]

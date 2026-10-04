@@ -1134,6 +1134,7 @@ dependencies = [
  "futures-lite",
  "layout-rs",
  "rfd",
+ "same-file",
  "self-replace",
  "serde",
  "serde_json",
