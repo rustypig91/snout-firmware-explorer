@@ -78,7 +78,7 @@ pub fn msi_download_url(version: &str) -> Result<String, String> {
 }
 
 fn destination() -> Result<(PathBuf, Format), String> {
-    if let Some(reason) = super::manual_update_reason() {
+    if let Some(reason) = super::replacement_block_reason() {
         return Err(reason);
     }
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -245,7 +245,7 @@ pub fn spawn_download(version: String, wake: Wake) -> std::io::Result<Receiver<I
 
 impl PreparedUpdate {
     fn install(self) -> Result<InstallOutcome, String> {
-        if let Some(reason) = super::manual_update_reason() {
+        if let Some(reason) = super::replacement_block_reason() {
             return Err(reason);
         }
         if self.format == Format::WindowsMsi {

@@ -30,9 +30,19 @@ pub fn msi_installation() -> Result<bool, String> {
     Ok(false)
 }
 
-/// Used by both the UI and workers: ownership failures must never permit replacement.
+/// Cached policy for drawing the update UI without enumerating MSI every frame.
 pub fn manual_update_reason() -> Option<String> {
     manual_update_message(is_debian_installation(), msi_installation())
+}
+
+/// Workers must recheck registration: MSI ownership can change while the app runs,
+/// including between the release check, download, and replacement.
+fn replacement_block_reason() -> Option<String> {
+    #[cfg(windows)]
+    let msi = msi::installed();
+    #[cfg(not(windows))]
+    let msi = Ok(false);
+    manual_update_message(is_debian_installation(), msi)
 }
 
 fn manual_update_message(debian: bool, msi: Result<bool, String>) -> Option<String> {

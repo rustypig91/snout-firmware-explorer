@@ -27,6 +27,11 @@ repairs.
    ```
 
    Substitute the custom destination when applicable.
+   Also temporarily move `License.rtf` out of the MSI installation folder and
+   repeat the probe and update-dialog check. Expect ownership `true` and
+   **Download MSI installer** even with the ancillary component missing; restore
+   the license afterward. A separate portable copy must still block replacement
+   if that missing registered path leaves its ownership uncertain.
 3. Close Snout, download and run the newer MSI, approving elevation. Verify
    **About** reports the new version and Windows Installed Apps shows exactly
    one Snout MSI entry with the new version. Run the ownership probe again.

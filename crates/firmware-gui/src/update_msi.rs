@@ -15,23 +15,37 @@ fn owns_executable<T>(
         return Ok(false);
     }
     let executable = executable.canonicalize().map_err(|e| e.to_string())?;
+    let mut lookup_error = None;
     let mut index = 0;
     while let Some(id) = component(index)? {
         for product in products {
-            if let Some(path) = component_path(product, &id)? {
+            let path = match component_path(product, &id) {
+                Ok(path) => path,
+                Err(error) => {
+                    lookup_error.get_or_insert(error);
+                    continue;
+                }
+            };
+            if let Some(path) = path {
                 // MSI also returns registry key paths (for example, "02:\\...").
                 // Only absolute filesystem paths can own the running image.
                 if !path.is_absolute() {
                     continue;
                 }
-                // A registered file that cannot be resolved is uncertain
-                // ownership, not evidence that this copy is portable.
-                let resolved = path.canonicalize().map_err(|error| {
-                    format!(
-                        "Windows Installer component path lookup failed for {}: {error}.",
-                        path.display()
-                    )
-                })?;
+                // Preserve uncertainty, but keep looking: a missing license
+                // must not mask a later confirmed executable component.
+                let resolved = match path.canonicalize() {
+                    Ok(resolved) => resolved,
+                    Err(error) => {
+                        lookup_error.get_or_insert_with(|| {
+                            format!(
+                                "Windows Installer component path lookup failed for {}: {error}.",
+                                path.display()
+                            )
+                        });
+                        continue;
+                    }
+                };
                 if resolved == executable {
                     return Ok(true);
                 }
@@ -39,7 +53,11 @@ fn owns_executable<T>(
         }
         index += 1;
     }
-    Ok(false)
+    // An unresolved registered file is not evidence that this copy is portable.
+    match lookup_error {
+        Some(error) => Err(error),
+        None => Ok(false),
+    }
 }
 
 #[cfg(windows)]
@@ -217,10 +235,57 @@ mod tests {
         assert!(owns_executable(
             &installed,
             &[42],
-            |_| Ok(Some(0)),
+            |index| Ok((index == 0).then_some(0)),
             |_, _| Err("component failure".into())
         )
         .is_err());
+    }
+
+    #[test]
+    fn missing_license_does_not_mask_registered_executable() {
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("firmware-gui.exe");
+        std::fs::write(&executable, b"image").unwrap();
+        let missing = dir.path().join("License.rtf");
+        // MSI component enumeration has no guaranteed order. A damaged
+        // ancillary component must not hide positive executable ownership.
+        for missing_first in [false, true] {
+            let result = owns_executable(
+                &executable,
+                &[42],
+                |index| Ok((index < 2).then_some(index)),
+                |_, component| {
+                    Ok(Some(if (*component == 0) == missing_first {
+                        missing.clone()
+                    } else {
+                        executable.clone()
+                    }))
+                },
+            );
+            assert_eq!(result, Ok(true));
+        }
+    }
+
+    #[test]
+    fn failed_component_lookup_does_not_mask_confirmed_ownership() {
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("firmware-gui.exe");
+        std::fs::write(&executable, b"image").unwrap();
+        assert_eq!(
+            owns_executable(
+                &executable,
+                &[42],
+                |index| Ok((index < 2).then_some(index)),
+                |_, component| {
+                    if *component == 0 {
+                        Err("component failure".into())
+                    } else {
+                        Ok(Some(executable.clone()))
+                    }
+                },
+            ),
+            Ok(true)
+        );
     }
 
     #[test]
