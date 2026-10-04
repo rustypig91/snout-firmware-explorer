@@ -171,7 +171,9 @@ impl StackSelection {
                             .any(|p| p.starts_with(parent) && self.contains(p))
                         {
                             // An entirely unchecked folder also excludes future reports.
-                            self.paths.retain(|p| !p.starts_with(parent));
+                            // The directory exclusion overrides ancestor/equal rules.
+                            // Keep more specific choices for reports currently absent
+                            // from the scan so they are restored when those files return.
                             // Keep file exceptions even when their reports have disappeared.
                             // Re-enabling automatic siblings must not reselect those files.
                             self.excluded.push(parent.to_owned());
@@ -813,6 +815,24 @@ mod tests {
         assert!(selected.contains(&first));
         assert!(!selected.contains(&missing));
         assert!(selected.contains(&root.join("new.su")));
+    }
+
+    #[test]
+    fn missing_checked_sibling_stays_selected_when_last_visible_file_is_unchecked() {
+        let root = PathBuf::from("build");
+        let first = root.join("a.su");
+        let missing = root.join("b.su");
+        let mut selected = StackSelection::default();
+        let paths = [first.clone(), missing.clone()];
+        selected.set(&first, true, &paths);
+        selected.set(&missing, true, &paths);
+        selected.set(&first, false, std::slice::from_ref(&first));
+        assert!(!selected.contains(&first));
+        assert!(selected.contains(&missing));
+        assert!(!selected.contains(&root.join("new.su")));
+        let restored: StackSelection =
+            serde_json::from_value(serde_json::to_value(&selected).unwrap()).unwrap();
+        assert!(restored.contains(&missing));
     }
 
     #[test]
