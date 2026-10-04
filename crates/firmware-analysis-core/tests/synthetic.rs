@@ -152,3 +152,27 @@ fn relocatable_objects_are_not_reported_as_final_firmware() {
         .to_string()
         .contains("relocatable"));
 }
+
+#[test]
+fn overlapping_load_payloads_are_rejected_even_in_configured_ram() {
+    use firmware_analysis_core::{MemoryKind, MemoryRegion};
+    let mut data = include_bytes!("../../../fixtures/build/cortex-m.elf").to_vec();
+    let elf = goblin::elf::Elf::parse(&data).unwrap();
+    let second = elf.header.e_phoff as usize + elf.header.e_phentsize as usize;
+    // Keep disjoint runtime sections, but overlap the first segment's load image.
+    put(&mut data, second + 12, 0x08000000, 4, false);
+    for kind in [MemoryKind::Flash, MemoryKind::Ram] {
+        let options = AnalysisOptions {
+            regions: vec![MemoryRegion {
+                name: "load storage".into(),
+                start: 0x08000000,
+                size: 0x10000,
+                kind,
+            }],
+        };
+        assert!(analyze_bytes(&data, "load overlay", &options)
+            .unwrap_err()
+            .to_string()
+            .contains("Overlapping load payloads"));
+    }
+}
