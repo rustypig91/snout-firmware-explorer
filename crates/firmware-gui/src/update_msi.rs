@@ -68,10 +68,12 @@ fn owns_executable<T>(
 fn component_has_path(state: i32) -> Result<bool, String> {
     match state {
         3 | 4 => Ok(true), // INSTALLSTATE_LOCAL / INSTALLSTATE_SOURCE
-        // Unknown, disabled, or advertised components have no installed path.
+        // Disabled or advertised components have no installed path.
         // ABSENT (2) can mean a registered key-path file is missing. Like
         // BROKEN (0), it is uncertainty, not proof that this copy is unowned.
-        -7 | -1 | 1 => Ok(false),
+        // UNKNOWN (-1) is also inconsistent after client registration was
+        // confirmed; it must not silently allow executable replacement.
+        -7 | 1 => Ok(false),
         other => Err(format!(
             "Windows Installer component lookup failed ({other})."
         )),
@@ -248,6 +250,35 @@ mod tests {
                 assert!(
                     result.is_err(),
                     "broken registration must not permit replacement"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_registered_component_blocks_replacement_unless_owner_is_confirmed() {
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("firmware-gui.exe");
+        std::fs::write(&executable, b"image").unwrap();
+        for confirmed in [false, true] {
+            let result = owns_executable(
+                &executable,
+                &[42],
+                |index| Ok((index < 2).then_some(index)),
+                |_, component| {
+                    if *component == 0 {
+                        component_has_path(-1).map(|_| None) // INSTALLSTATE_UNKNOWN
+                    } else {
+                        Ok(confirmed.then(|| executable.clone()))
+                    }
+                },
+            );
+            if confirmed {
+                assert_eq!(result, Ok(true));
+            } else {
+                assert!(
+                    result.is_err(),
+                    "unknown registered components must not permit replacement"
                 );
             }
         }
