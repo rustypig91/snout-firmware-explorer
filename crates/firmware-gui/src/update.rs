@@ -3,7 +3,11 @@
 
 #[path = "update_install.rs"]
 mod install;
-pub use install::{spawn_download, spawn_install, InstallEvent, InstallOutcome};
+pub use install::{msi_download_url, spawn_download, spawn_install, InstallEvent, InstallOutcome};
+
+#[cfg(any(windows, test))]
+#[path = "update_msi.rs"]
+mod msi;
 
 use super::Wake;
 use crossbeam_channel::Receiver;
@@ -12,6 +16,45 @@ use std::time::Duration;
 /// Package installations must be updated through their package manager.
 pub const PACKAGE_UPDATE_MESSAGE: &str =
     "In-app installation is disabled for Debian package installations. Install the latest .deb package using your package manager.";
+
+pub const MSI_UPDATE_MESSAGE: &str =
+    "This copy is managed by Windows Installer. Download and run the latest MSI to upgrade Snout and preserve its installation and uninstall registration.";
+
+pub fn msi_installation() -> Result<bool, String> {
+    #[cfg(windows)]
+    {
+        static INSTALLED: std::sync::OnceLock<Result<bool, String>> = std::sync::OnceLock::new();
+        INSTALLED.get_or_init(msi::installed).clone()
+    }
+    #[cfg(not(windows))]
+    Ok(false)
+}
+
+/// Cached policy for drawing the update UI without enumerating MSI every frame.
+pub fn manual_update_reason() -> Option<String> {
+    manual_update_message(is_debian_installation(), msi_installation())
+}
+
+/// Workers must recheck registration: MSI ownership can change while the app runs,
+/// including between the release check, download, and replacement.
+fn replacement_block_reason() -> Option<String> {
+    #[cfg(windows)]
+    let msi = msi::installed();
+    #[cfg(not(windows))]
+    let msi = Ok(false);
+    manual_update_message(is_debian_installation(), msi)
+}
+
+fn manual_update_message(debian: bool, msi: Result<bool, String>) -> Option<String> {
+    if debian {
+        return Some(PACKAGE_UPDATE_MESSAGE.into());
+    }
+    match msi {
+        Ok(true) => Some(MSI_UPDATE_MESSAGE.into()),
+        Ok(false) => None,
+        Err(error) => Some(format!("{error} In-app installation is disabled. Use the downloads page to update with your original installer.")),
+    }
+}
 
 /// Cache package ownership so drawing the UI never repeatedly reads the disk.
 pub fn is_debian_installation() -> bool {
@@ -200,6 +243,8 @@ pub fn spawn_check(wake: Wake) -> std::io::Result<Receiver<CheckResult>> {
     std::thread::Builder::new()
         .name("update-check".into())
         .spawn(move || {
+            // Ownership enumeration is cached off the UI thread before the notice arrives.
+            let _ = msi_installation();
             let _ = tx.send(fetch_latest());
             wake.signal();
         })?;
@@ -209,6 +254,22 @@ pub fn spawn_check(wake: Wake) -> std::io::Result<Receiver<CheckResult>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_installations_and_lookup_failures_block_replacement() {
+        assert_eq!(
+            manual_update_message(false, Ok(true)).as_deref(),
+            Some(MSI_UPDATE_MESSAGE)
+        );
+        assert_eq!(
+            manual_update_message(true, Ok(false)).as_deref(),
+            Some(PACKAGE_UPDATE_MESSAGE)
+        );
+        assert_eq!(manual_update_message(false, Ok(false)), None);
+        assert!(manual_update_message(false, Err("registry failure".into()))
+            .unwrap()
+            .contains("In-app installation is disabled"));
+    }
 
     #[test]
     fn debian_ownership_requires_the_running_executable_in_the_package() {

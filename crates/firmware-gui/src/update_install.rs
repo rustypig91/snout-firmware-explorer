@@ -15,6 +15,7 @@ enum Format {
     Binary,
     AppImage,
     WindowsSetup,
+    WindowsMsi,
 }
 
 #[derive(Debug)]
@@ -54,6 +55,9 @@ fn asset_name(version: &str, os: &str, arch: &str, format: Format) -> Result<Str
         ("windows", "x86_64", Format::WindowsSetup) => {
             Ok(format!("snout-v{version}-x86_64-setup.exe"))
         }
+        ("windows", "x86_64", Format::WindowsMsi) => {
+            Ok(format!("snout-v{version}-x86_64-pc-windows-msvc.msi"))
+        }
         ("windows", "x86_64", Format::Binary) => {
             Ok(format!("snout-v{version}-x86_64-pc-windows-msvc.exe"))
         }
@@ -65,9 +69,17 @@ fn asset_name(version: &str, os: &str, arch: &str, format: Format) -> Result<Str
     }
 }
 
+pub fn msi_download_url(version: &str) -> Result<String, String> {
+    let name = asset_name(version, "windows", "x86_64", Format::WindowsMsi)?;
+    let version = version.strip_prefix('v').unwrap_or(version);
+    Ok(format!(
+        "https://github.com/{GITHUB_REPO}/releases/download/v{version}/{name}"
+    ))
+}
+
 fn destination() -> Result<(PathBuf, Format), String> {
-    if super::is_debian_installation() {
-        return Err(super::PACKAGE_UPDATE_MESSAGE.into());
+    if let Some(reason) = super::replacement_block_reason() {
+        return Err(reason);
     }
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
     if cfg!(target_os = "linux") {
@@ -233,8 +245,11 @@ pub fn spawn_download(version: String, wake: Wake) -> std::io::Result<Receiver<I
 
 impl PreparedUpdate {
     fn install(self) -> Result<InstallOutcome, String> {
-        if super::is_debian_installation() {
-            return Err(super::PACKAGE_UPDATE_MESSAGE.into());
+        if let Some(reason) = super::replacement_block_reason() {
+            return Err(reason);
+        }
+        if self.format == Format::WindowsMsi {
+            return Err(super::MSI_UPDATE_MESSAGE.into());
         }
         if self.format == Format::WindowsSetup {
             return self.launch_setup();
@@ -436,6 +451,24 @@ mod tests {
     }
 
     #[test]
+    fn msi_updates_cannot_enter_binary_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let installed = tempfile::tempdir().unwrap();
+        let target = installed.path().join("firmware-gui.exe");
+        let file = directory.path().join("update.msi");
+        std::fs::write(&target, b"original").unwrap();
+        std::fs::write(&file, b"installer").unwrap();
+        let update = PreparedUpdate {
+            directory,
+            file,
+            target: target.clone(),
+            format: Format::WindowsMsi,
+        };
+        assert!(update.install().is_err());
+        assert_eq!(std::fs::read(target).unwrap(), b"original");
+    }
+
+    #[test]
     fn portable_update_replaces_only_the_isolated_running_copy() {
         let directory = tempfile::tempdir().unwrap();
         let executable = std::env::current_exe().unwrap();
@@ -547,6 +580,12 @@ function Remove-Item { param($LiteralPath, [switch]$Recurse, [switch]$Force, $Er
 
     #[test]
     fn matches_release_artifacts_and_rejects_other_platforms() {
+        assert_eq!(
+            msi_download_url("v1.2.3").unwrap(),
+            "https://github.com/rustypig91/snout-firmware-explorer/releases/download/v1.2.3/snout-v1.2.3-x86_64-pc-windows-msvc.msi"
+        );
+        assert_eq!(msi_download_url("1.2.3"), msi_download_url("v1.2.3"));
+        assert!(msi_download_url("../evil").is_err());
         assert_eq!(
             asset_name("v1.2.3", "windows", "x86_64", Format::WindowsSetup).unwrap(),
             "snout-v1.2.3-x86_64-setup.exe"

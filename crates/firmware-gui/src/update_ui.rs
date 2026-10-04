@@ -150,14 +150,14 @@ impl Explorer {
                             "{version} is available. You are running v{}.",
                             env!("CARGO_PKG_VERSION")
                         ));
-                        let packaged = update::is_debian_installation();
-                        ui.label(if packaged {
-                            update::PACKAGE_UPDATE_MESSAGE
-                        } else {
-                            "Update will download, install, and restart Snout."
-                        });
+                        let manual_reason = update::manual_update_reason();
+                        ui.label(
+                            manual_reason
+                                .as_deref()
+                                .unwrap_or("Update will download, install, and restart Snout."),
+                        );
                         ui.horizontal(|ui| {
-                            if !packaged
+                            if manual_reason.is_none()
                                 && ui
                                     .add_enabled(
                                         self.updates.idle() && self.receiver.is_none(),
@@ -166,6 +166,13 @@ impl Explorer {
                                     .clicked()
                             {
                                 download = Some(version.clone());
+                            }
+                            if update::msi_installation() == Ok(true) {
+                                if let Ok(msi_url) = update::msi_download_url(version) {
+                                    if ui.button("Download MSI installer").clicked() {
+                                        ctx.open_url(egui::OpenUrl::new_tab(msi_url));
+                                    }
+                                }
                             }
                             if ui.button("Downloads page").clicked() {
                                 ctx.open_url(egui::OpenUrl::new_tab(url));
