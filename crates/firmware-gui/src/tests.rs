@@ -101,8 +101,8 @@ fn overview_explains_reservations_and_links_growth_to_section_comparison() {
             .iter()
             .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == text))
     };
-    assert!(has_text("Flash: 380 B used | Capacity unknown"));
-    assert!(has_text("RAM: 264 B used | Capacity unknown"));
+    assert!(has_text("Flash: 1.45 KiB used | Capacity unknown"));
+    assert!(has_text("RAM: 388 B used | Capacity unknown"));
     assert!(!has_text("Flash payload"));
     assert!(!has_text("Static RAM"));
     assert!(has_text("RAM code: 28 B"));
@@ -270,7 +270,7 @@ fn stripped_firmware_shows_unresolved_uppercase_stack_reports() {
     )
     .unwrap();
     let report = analyze_stack(&analysis, folder.path()).unwrap();
-    assert_eq!(report.entries.len(), 4);
+    assert_eq!(report.entries.len(), 7);
     let mut app = Explorer {
         analysis: Some(Arc::new(analysis)),
         stack: Some(report),
@@ -280,7 +280,7 @@ fn stripped_firmware_shows_unresolved_uppercase_stack_reports() {
     let _ = ctx.run(egui::RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| app.stack_view(ui));
     });
-    assert_eq!(app.visible_rows, 4);
+    assert_eq!(app.visible_rows, 7);
 }
 
 #[test]
@@ -1401,7 +1401,7 @@ fn stack_view_scopes_rows_to_selected_elf_and_keeps_unresolved_available() {
         ),
     )
     .unwrap();
-    assert_eq!(report.entries.len(), 4);
+    assert_eq!(report.entries.len(), 7);
     assert!(report
         .entries
         .iter()
@@ -1416,7 +1416,7 @@ fn stack_view_scopes_rows_to_selected_elf_and_keeps_unresolved_available() {
         ..Default::default()
     };
     let ctx = egui::Context::default();
-    for (show_unresolved, expected) in [(false, 4), (true, 5)] {
+    for (show_unresolved, expected) in [(false, 7), (true, 8)] {
         app.stack_show_unresolved = show_unresolved;
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| app.stack_view(ui));
@@ -1626,13 +1626,13 @@ fn dependency_map_choices_survive_refresh_restart_and_failed_import() {
 }
 
 #[test]
-fn committed_fixture_renders_three_bubbles_and_five_dependency_arrowheads() {
+fn committed_fixture_renders_six_bubbles_and_sixteen_dependency_arrowheads() {
     let mut app = Explorer::default();
     app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures"));
     finish_job(&mut app);
     app.open(app.build.as_ref().unwrap().root.join("cortex-m.elf"));
     finish_job(&mut app);
-    assert_eq!(app.analysis.as_ref().unwrap().dependencies.edges.len(), 5);
+    assert_eq!(app.analysis.as_ref().unwrap().dependencies.edges.len(), 16);
     app.change_view(View::Dependencies);
     let ctx = egui::Context::default();
     shell::configure_style(&ctx);
@@ -1659,6 +1659,6 @@ fn committed_fixture_renders_three_bubbles_and_five_dependency_arrowheads() {
     let arrows = output.shapes.iter().filter(|shape| matches!(&shape.shape,
         egui::Shape::Path(path) if path.closed && path.points.len() == 3 && path.fill == arrow_color
     )).count();
-    assert_eq!(bubbles, 3);
-    assert_eq!(arrows, 5);
+    assert_eq!(bubbles, 6);
+    assert_eq!(arrows, 16);
 }

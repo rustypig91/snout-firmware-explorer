@@ -185,22 +185,33 @@ fn matching_cross_references_load_even_with_explicit_memory_layout() {
 }
 
 #[test]
-fn committed_fixtures_have_three_units_and_real_cross_dependencies() {
+fn committed_fixtures_have_six_units_and_real_cross_dependencies() {
     let build =
         scan_folder(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")).unwrap();
     for name in ["cortex-m", "cortex-m-grown"] {
         let analysis =
             analyze_build_firmware(&build, &build.root.join(format!("{name}.elf")), None).unwrap();
         let graph = &analysis.dependencies;
-        assert_eq!(graph.nodes.len(), 3);
+        assert_eq!(graph.nodes.len(), 6);
         assert!(graph.nodes.iter().all(|n| n.usage.is_some()));
-        assert_eq!(graph.edges.len(), 5);
+        assert_eq!(graph.edges.len(), 16);
         for (from, to, symbol) in [
             ("main.c", "diag.c", "diagnose"),
             ("main.c", "telemetry.c", "telemetry_collect"),
             ("diag.c", "telemetry.c", "telemetry_scale"),
             ("telemetry.c", "diag.c", "diagnose"),
             ("telemetry.c", "main.c", "ram_function"),
+            ("main.c", "sensor.c", "sensor_sample"),
+            ("main.c", "config.c", "config_get"),
+            ("main.c", "transport.c", "transport_flush"),
+            ("sensor.c", "config.c", "config_get"),
+            ("diag.c", "config.c", "config_alarm_threshold"),
+            ("diag.c", "transport.c", "transport_pending"),
+            ("telemetry.c", "config.c", "config_checksum_seed"),
+            ("telemetry.c", "transport.c", "transport_enqueue"),
+            ("transport.c", "config.c", "config_baudrate"),
+            ("transport.c", "telemetry.c", "telemetry_checksum"),
+            ("transport.c", "diag.c", "diagnostics_record_fault"),
         ] {
             let from = &graph
                 .nodes
@@ -219,17 +230,22 @@ fn committed_fixtures_have_three_units_and_real_cross_dependencies() {
                 .iter()
                 .find(|e| &e.from == from && &e.to == to)
                 .unwrap();
-            assert_eq!(edge.symbols, [symbol]);
+            assert!(edge.symbols.iter().any(|name| name == symbol));
         }
         let stack = firmware_analysis_core::stack::analyze_stack(&analysis, &build.root).unwrap();
+        assert_eq!(stack.entries.len(), 24);
+        assert!(stack
+            .entries
+            .iter()
+            .all(|entry| entry.symbol_candidates.len() == 1));
         assert!(stack.entries.iter().any(
             |entry| entry.function == "telemetry_collect" && entry.symbol_candidates.len() == 1
         ));
     }
     let stripped =
         analyze_build_firmware(&build, &build.root.join("cortex-m-stripped.elf"), None).unwrap();
-    assert_eq!(stripped.dependencies.nodes.len(), 3);
-    assert_eq!(stripped.dependencies.edges.len(), 5);
+    assert_eq!(stripped.dependencies.nodes.len(), 6);
+    assert_eq!(stripped.dependencies.edges.len(), 16);
     assert!(stripped
         .dependencies
         .nodes
