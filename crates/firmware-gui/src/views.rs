@@ -634,7 +634,11 @@ impl Explorer {
             );
         }
         for warning in &report.warnings {
-            if warning.starts_with("Multiple report files") {
+            if warning.starts_with("Multiple report files")
+                || warning.starts_with("Ambiguous reports:")
+                || warning.starts_with("Could not confidently select stack reports")
+                || warning.starts_with("Skipped stack report while guessing:")
+            {
                 ui.colored_label(egui::Color32::YELLOW, warning);
             }
         }

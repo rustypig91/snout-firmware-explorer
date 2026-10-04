@@ -183,6 +183,9 @@ pub(super) fn guess(analysis: &Analysis, build: &BuildFolder) -> Result<LoadedSt
             .filter(|files| files.len() > 1)
             .flat_map(|files| files.iter().cloned())
             .collect();
+        if !ambiguous.is_empty() {
+            report.warnings.push("Ambiguous reports: multiple files match the same ELF functions. Choose reports in the left menu to resolve build ownership.".into());
+        }
         // If a whole build directory is ambiguous, its other reports cannot establish provenance.
         let ambiguous_parents: BTreeSet<_> = ambiguous.iter().filter_map(|p| p.parent()).collect();
         let chosen = matched_files
@@ -504,5 +507,23 @@ mod tests {
         let (stack, selection) = guess(&analysis, &scan_folder(&root).unwrap()).unwrap();
         assert!(selection.is_none());
         assert!(stack.entries.is_empty());
+        assert!(stack
+            .warnings
+            .iter()
+            .any(|warning| warning.starts_with("Ambiguous reports:")));
+        let mut app = crate::Explorer {
+            analysis: Some(std::sync::Arc::new(analysis)),
+            stack: Some(stack),
+            ..Default::default()
+        };
+        let ctx = crate::egui::Context::default();
+        let output = ctx.run(Default::default(), |ctx| {
+            crate::egui::CentralPanel::default().show(ctx, |ui| app.stack_view(ui));
+        });
+        assert!(output.shapes.iter().any(|shape| matches!(
+            &shape.shape,
+            crate::egui::Shape::Text(text)
+                if text.galley.text().starts_with("Ambiguous reports:")
+        )));
     }
 }
