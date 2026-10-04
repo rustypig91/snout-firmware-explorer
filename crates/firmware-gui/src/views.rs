@@ -1,4 +1,4 @@
-use super::display::display_path;
+use super::display::{build_relative_path, display_path};
 use super::{Explorer, View};
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
@@ -211,13 +211,15 @@ impl Explorer {
                                             egui::Layout::left_to_right(egui::Align::Center)
                                         },
                                         |ui| {
-                                            let display = if self.view == View::Files && index == 0
-                                            {
+                                            let path_cell = (self.view == View::Files
+                                                && index == 0)
+                                                || (self.view == View::Stack && index == 3);
+                                            let display = if path_cell {
                                                 path_tail(ui, cell)
                                             } else {
                                                 cell.clone()
                                             };
-                                            let label = if numeric || index == 0 {
+                                            let label = if numeric || index == 0 || path_cell {
                                                 RichText::new(display).monospace()
                                             } else {
                                                 RichText::new(display)
@@ -295,13 +297,14 @@ impl Explorer {
         }
     }
     pub(super) fn files(&mut self, ui: &mut egui::Ui, a: &Analysis) {
+        let build_root = self.build.as_ref().map(|build| build.root.as_path());
         let rows = a
             .files
             .iter()
             .map(|f| {
                 let mut row = Row::new(
                     vec![
-                        display_path(&f.path).into_owned(),
+                        build_relative_path(&f.path, build_root),
                         bytes(f.usage.flash),
                         bytes(f.usage.ram),
                         f.symbol_count.to_string(),
@@ -314,7 +317,7 @@ impl Explorer {
                     ],
                     format!(
                         "{}\n{}\nFlash: {} / RAM: {}",
-                        display_path(&f.path),
+                        build_relative_path(&f.path, build_root),
                         f.attribution,
                         bytes(f.usage.flash),
                         bytes(f.usage.ram)
@@ -649,6 +652,7 @@ impl Explorer {
             );
         }
         ui.weak("Expand a frame for evidence").on_hover_text("Multiple ELF candidates are ambiguous. Each expanded row includes matching evidence and its report path.");
+        let build_root = self.build.as_ref().map(|build| build.root.as_path());
         let rows = report
             .entries
             .iter()
@@ -659,7 +663,11 @@ impl Explorer {
                         e.function.clone(),
                         bytes(e.local_bytes),
                         e.qualifier.clone(),
-                        format!("{}:{}", display_path(&e.source_file), e.source_line),
+                        format!(
+                            "{}:{}",
+                            build_relative_path(&e.source_file, build_root),
+                            e.source_line
+                        ),
                         e.symbol_candidates.len().to_string(),
                     ],
                     &[
@@ -668,7 +676,7 @@ impl Explorer {
                     ],
                     format!(
                         "{}\n{}\nELF matches: {:?}",
-                        display_path(&e.report_file),
+                        build_relative_path(&e.report_file, build_root),
                         e.evidence,
                         e.symbol_candidates
                     ),

@@ -244,6 +244,17 @@ pub fn analyze_build_firmware(
         }
     }
     let mut analysis = analyze_path(path, &options)?;
+    if let Some(map) = build.matching_map(path) {
+        match fs::read_to_string(map) {
+            Ok(text) => {
+                crate::dependencies::import_map(&mut analysis, &text, &map.display().to_string())
+            }
+            Err(e) => analysis
+                .dependencies
+                .notes
+                .push(format!("{}: {e}", map.display())),
+        }
+    }
     analysis.warnings.extend(notes);
     Ok(analysis)
 }

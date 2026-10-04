@@ -8,10 +8,10 @@ Install a current stable Rust toolchain. Windows builds need the Visual Studio C
 
 ```sh
 cargo build --workspace --locked
-cargo run -p firmware-gui -- fixtures --elf cortex-m.elf
+cargo run -p firmware-gui -- fixtures/build --elf cortex-m.elf
 ```
 
-Pass `--elf FILE` to select firmware automatically after the folder scan. Relative file paths are resolved inside the supplied build folder. You can also open an ELF directly: `firmware-gui fixtures/cortex-m.elf`. With no path, Snout opens the last build folder and restores the saved workspace. Opening the same build folder without an explicit ELF selection restores the last selected firmware if it is still present. An explicit ELF selection takes priority; a missing saved ELF leaves the folder open for selection.
+Pass `--elf FILE` to select firmware automatically after the folder scan. Relative file paths are resolved inside the supplied build folder. You can also open an ELF directly: `firmware-gui fixtures/build/cortex-m.elf`. With no path, Snout opens the last build folder and restores the saved workspace. Opening the same build folder without an explicit ELF selection restores the last selected firmware if it is still present. An explicit ELF selection takes priority; a missing saved ELF leaves the folder open for selection.
 
 Select **Open build folder**, press Ctrl+O, or drag a folder into the window. The application recursively scans for linked ELF images (including `.elf`, `.axf`, `.out` and extensionless images), linker maps (`.map`), stack reports (`.su`), and valid memory-layout JSON files. The **Build files** sidebar lists the discovered artifacts with relative paths and a search field. Select a firmware image to analyze it. Selecting a supporting file opens its contents in **Overview** and keeps the selected firmware active. Other tabs continue to show the selected firmware. Rescan the folder after rebuilding.
 
@@ -19,17 +19,24 @@ Selecting firmware automatically imports memory-region capacities from a unique 
 
 All discovered `.su` reports load automatically when firmware is selected. Reports can span several targets or configurations if the selected folder does; the Stack view defaults to entries with candidates in the selected ELF and preserves report paths and matching evidence. Enable **Show unresolved reports** to inspect entries that could not be associated. Functions without matching reports are counted with unknown local stack size. Select an individual `.su` file to inspect only that report, or use **Load all build reports** to restore the complete set. No build ownership or call-chain totals are invented.
 
-Compact tabs switch between Overview, Files, Symbols, Sections, Memory map, Stack and Compare. Overview shows separate Flash, RAM and all-section bar breakdowns, firmware identity, configured capacity, largest contributors and analysis status. Click a breakdown row to drill down from section to compilation unit, then to functions and data symbols. Other / unconnected contains symbols without a known unit and uncovered bytes. Units use DWARF ownership where available, falling back to ELF compilation-unit labels. Use Back or the mouse Back button to move up one level. Function arguments do not have separately measured section sizes. Symbol bars count unique bytes, with aliases and zero-sized labels retained in the legend. Tables support search and sorting, with right-aligned numeric columns. Click a row to expand its details directly underneath; click it again to collapse. Expanded file rows include a button to inspect their symbols. Enable Directories for an optional source tree sidebar. The footer shows memory totals, row counts and expandable analysis notes; Escape collapses the expanded row and notes. Firmware stays local. The CLI continues to accept individual ELF paths.
+Compact tabs switch between Overview, Files, Symbols, Sections, Memory map, Dependencies, Stack and Compare. Overview shows separate Flash, RAM and all-section bar breakdowns, firmware identity, configured capacity, largest contributors and analysis status. Click a breakdown row to drill down from section to compilation unit, then to functions and data symbols. Other / unconnected contains symbols without a known unit and uncovered bytes. Units use DWARF ownership where available, falling back to ELF compilation-unit labels. Use Back or the mouse Back button to move up one level. Function arguments do not have separately measured section sizes. Symbol bars count unique bytes, with aliases and zero-sized labels retained in the legend. Tables support search and sorting, with right-aligned numeric columns. Click a row to expand its details directly underneath; click it again to collapse. Expanded file rows include a button to inspect their symbols. Enable Directories for an optional source tree sidebar. The footer shows memory totals, row counts and expandable analysis notes; Escape collapses the expanded row and notes. Firmware stays local. The CLI continues to accept individual ELF paths.
+
+
+The **Dependencies** tab shows a compilation-unit graph with selectable nodes and arrows, pan/zoom, directory grouping, search, a focused neighborhood view, and Flash/RAM node sizing. Arrows run from a unit using a symbol to the unit defining it; selecting an arrow lists the connecting symbols. Sizes count attributed symbol bytes, excluding padding and unknown ownership. DWARF compilation-unit ownership takes priority over ELF unit labels; source locations in headers do not create units.
+
+To supply connections, generate a GNU ld linker map with `-Wl,-Map,app.map,--cref,--no-demangle`. A unique matching map loads automatically with firmware. Alternatively, select a map in **Build files** and choose **Use cross references from this map**. Explicit dependency-map choices are saved per firmware independently of memory layouts and reread on F5 and restart. Failed explicit imports preserve the current report; an unavailable saved map leaves source nodes visible with a note and no stale connections.
+
+Cross references include functions, global data, and function addresses, and may include discarded code; they do not prove runtime calls. Source-unit connections require a global ELF definition of the connecting symbol; symbols missing from the ELF are omitted because they may be unresolved or discarded. Object-only graphs cannot distinguish unresolved weak references from definitions in GNU ld cross-reference tables, so their arrows need verification. Object/archive paths associate with source units only through exact ELF symbol definitions with one consistent unit owner. Ambiguous or unknown objects remain separate nodes with unknown memory contribution. LTO and stripped builds can limit source association. Without cross references, the graph shows known units and explains that connections are unavailable; an isolated node is not proof of independence. The committed Cortex-M fixtures include six source units and sixteen connections, including reciprocal dependencies; open `fixtures/build/cortex-m.elf` from the build folder to explore them. Weak aliases can inherit ownership from an exact function range with one known unit; conflicting owners remain ambiguous. ELF-only CLI JSON includes unit nodes in the additive `dependencies` field; automatic map import applies to build-folder analysis.
 
 
 ```sh
-cargo run -p firmware-cli -- analyze fixtures/cortex-m.elf
-cargo run -p firmware-cli -- files fixtures/cortex-m.elf
-cargo run -p firmware-cli -- symbols fixtures/cortex-m.elf
-cargo run -p firmware-cli -- diff fixtures/cortex-m.elf fixtures/cortex-m-grown.elf
-cargo run -p firmware-cli -- stack fixtures/cortex-m.elf --stack-usage fixtures/
-cargo run -p firmware-cli -- analyze fixtures/cortex-m.elf --format json
-cargo run -p firmware-cli -- analyze fixtures/cortex-m.elf --config examples/cortex-m-memory.json
+cargo run -p firmware-cli -- analyze fixtures/build/cortex-m.elf
+cargo run -p firmware-cli -- files fixtures/build/cortex-m.elf
+cargo run -p firmware-cli -- symbols fixtures/build/cortex-m.elf
+cargo run -p firmware-cli -- diff fixtures/build/cortex-m.elf fixtures/build/cortex-m-grown.elf
+cargo run -p firmware-cli -- stack fixtures/build/cortex-m.elf --stack-usage fixtures/build/CMakeFiles/cortex-m-objects.dir/src
+cargo run -p firmware-cli -- analyze fixtures/build/cortex-m.elf --format json
+cargo run -p firmware-cli -- analyze fixtures/build/cortex-m.elf --config examples/cortex-m-memory.json
 ```
 
 For optimized standalone executables:
@@ -44,12 +51,12 @@ Executables are `target/release/firmware-gui` and `target/release/firmware-explo
 
 The [build workflow](.github/workflows/build.yml) follows Pigtail's Windows/Linux release workflow. Run it manually on a branch, or label a PR `build`, `build-linux`, or `build-windows` to produce downloadable artifacts. Pushing `v<workspace-version>` publishes a GitHub release; the workflow rejects tags that do not match `Cargo.toml`.
 
-Release assets include portable archives containing the GUI and CLI, standalone GUI executables for the updater, Windows MSI and Setup installers, a Debian package, and an AppImage. Linux builds also capture `snout-screenshot.png` using the regular app with `fixtures/cortex-m.elf` selected. There is no demo build. The screenshot runs in an isolated Xvfb session with fresh preferences and update checks disabled.
+Release assets include portable archives containing the GUI and CLI, standalone GUI executables for the updater, Windows MSI and Setup installers, a Debian package, and an AppImage. Linux builds also capture `snout-screenshot.png` using the regular app with `fixtures/build/cortex-m.elf` selected. There is no demo build. The screenshot runs in an isolated Xvfb session with fresh preferences and update checks disabled.
 
 Build packages locally using `bash scripts/build-release.sh` on x86_64 Debian/Ubuntu or `scripts\build-release.cmd` from a Windows developer shell. Output goes to `target/release-assets/<target>/`. The Linux script needs the desktop build packages listed above, plus `curl`, `pkg-config`, and `dpkg-dev`; packaging downloads linuxdeploy and installs cargo-deb if needed. Windows requires Rust, the C++ Build Tools and Windows SDK; the script downloads portable WiX and Inno Setup. To capture a screenshot locally, install `xvfb xauth xdotool imagemagick`, then run:
 
 ```sh
-bash scripts/capture-screenshot.sh target/release/firmware-gui target/snout-screenshot.png fixtures/cortex-m.elf
+bash scripts/capture-screenshot.sh target/release/firmware-gui target/snout-screenshot.png fixtures/build/cortex-m.elf
 ```
 
 Snout checks GitHub releases at startup. **Menu → Check for updates** provides a manual check. **Support developer** opens Buy Me a Coffee, and **About** shows the app version and repository link. Startup checks stay quiet on network errors, when up to date, or for a skipped version. Download and installation begin only when you press **Update**, and the download's published size and SHA-256 digest are verified before installation. Workspace preferences are saved before installing and restored after restarting. Portable binaries update in place, AppImages replace the original AppImage, and Windows Setup installations reuse their existing installation scope. Debian installations use the package manager instead. `--no-update-check` suppresses the startup request for one launch.
@@ -121,7 +128,7 @@ Windows tests and builds were run locally. CI is configured for Windows and Linu
 
 This is the first implementation milestone, not a claim of universal firmware support.
 
-1. **Attribution:** extend DWARF definition support and add GNU linker MAP object/archive ownership. Map import currently reads region capacities only. Variable attribution supports direct address expressions; location lists, TLS, complex expressions and definitions requiring reference resolution remain unsupported. Global variables without a matching supported definition remain unattributed. Compressed and split/external DWARF are not supported.
+1. **Attribution:** extend DWARF definition support and add GNU linker MAP object/archive ownership. Map import reads region capacities and GNU ld symbol cross references for the dependency graph; section/object memory accounting is not yet imported. Variable attribution supports direct address expressions; location lists, TLS, complex expressions and definitions requiring reference resolution remain unsupported. Global variables without a matching supported definition remain unattributed. Compressed and split/external DWARF are not supported.
 2. **Memory layouts:** add saved target profiles, explicit unknown memory roles, overlay policies and segment-only fallback. Relocatable objects, overlapping allocated/load ranges, TLS and sectionless ELFs currently return clear unsupported errors. HEX/BIN analysis and standalone MAP symbol/section analysis are not supported. Dynamic-symbol-only attribution is not yet implemented.
 3. **Comparisons:** normalize source roots across build machines, improve duplicate/renamed symbol matching and introduce simple CI budgets. Matching currently uses file label, section and mangled symbol name, with duplicate identities aggregated. Differences in attribution or debug availability can affect per-file/symbol deltas.
 4. **Stack:** import evidenced call graphs and represent recursion, indirect calls, assembly, interrupts and missing data before estimating call chains. The model reserves these uncertainty categories. CFA/disassembly, RTOS task stacks and runtime high-water marks are later inputs.

@@ -232,7 +232,7 @@ mod tests {
         for fixture in ["cortex-m.elf", "cortex-m-stripped.elf"] {
             let a = firmware_analysis_core::analyze_path(
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../fixtures")
+                    .join("../../fixtures/build")
                     .join(fixture),
                 &Default::default(),
             )
@@ -273,7 +273,7 @@ mod tests {
         ] {
             let a = firmware_analysis_core::analyze_path(
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../fixtures")
+                    .join("../../fixtures/build")
                     .join(fixture),
                 &Default::default(),
             )
@@ -310,7 +310,8 @@ mod tests {
     #[test]
     fn unknown_ownership_is_not_inferred_from_source_filename() {
         let mut a = firmware_analysis_core::analyze_path(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/cortex-m.elf"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../fixtures/build/cortex-m.elf"),
             &Default::default(),
         )
         .unwrap();

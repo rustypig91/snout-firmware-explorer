@@ -5,6 +5,7 @@ mod update_ui;
 mod wake;
 use wake::Wake;
 static RESTART_PATH: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+mod dependencies;
 mod display;
 mod insights;
 mod overview;
@@ -37,16 +38,18 @@ enum View {
     Symbols,
     Sections,
     MemoryMap,
+    Dependencies,
     Stack,
     Compare,
 }
 impl View {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::Overview,
         Self::Files,
         Self::Symbols,
         Self::Sections,
         Self::MemoryMap,
+        Self::Dependencies,
         Self::Stack,
         Self::Compare,
     ];
@@ -57,6 +60,7 @@ impl View {
             Self::Symbols => "Symbols",
             Self::Sections => "Sections",
             Self::MemoryMap => "Memory map",
+            Self::Dependencies => "Dependencies",
             Self::Stack => "Stack",
             Self::Compare => "Compare",
         }
@@ -83,6 +87,7 @@ enum Loaded {
     Baseline(Analysis),
     Stack(StackReport),
     Config(AnalysisOptions, Option<Analysis>, String),
+    Dependencies(Analysis, PathBuf),
 }
 type JobResult = Result<Loaded, String>;
 #[derive(Clone)]
@@ -96,6 +101,8 @@ struct RememberedFirmware {
 struct BuildSettings {
     firmware: Option<PathBuf>,
     layouts: std::collections::BTreeMap<PathBuf, SavedLayout>,
+    #[serde(default)]
+    dependency_maps: std::collections::BTreeMap<PathBuf, PathBuf>,
 }
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct SavedLayout {
@@ -104,6 +111,7 @@ struct SavedLayout {
 }
 struct Explorer {
     analysis: Option<Arc<Analysis>>,
+    graph_view: dependencies::GraphView,
     build: Option<Arc<firmware_analysis_core::build::BuildFolder>>,
     artifact_search: String,
     preview: Option<(PathBuf, String)>,
@@ -147,6 +155,7 @@ impl Default for Explorer {
     fn default() -> Self {
         Self {
             analysis: None,
+            graph_view: Default::default(),
             build: None,
             artifact_search: String::new(),
             preview: None,
@@ -229,8 +238,14 @@ impl Explorer {
                 .map(|saved| saved.source.clone())
                 .unwrap_or_else(|| self.layout_source.clone())
         });
+        let dependency_map = if reset_settings {
+            None
+        } else {
+            self.saved_dependency_map(&path)
+        };
         self.job(move || {
             let (mut analysis, layout, source) = workspace::analyze_selected(&build, &path, layout, source)?;
+            if let Some(map) = dependency_map { workspace::read_dependency_map(&mut analysis, &map); }
             let reports = build.artifacts.iter().filter(|a| a.kind == firmware_analysis_core::build::ArtifactKind::StackUsage).map(|a| a.path.clone()).collect();
             let stack = match firmware_analysis_core::stack::analyze_stack_files(&analysis, reports) {
                 Ok(mut report) => {
@@ -248,6 +263,7 @@ impl Explorer {
         });
     }
     fn configure(&mut self, path: Option<PathBuf>) {
+        let dependency_map = self.dependency_map_for_reload();
         let current_path = self.analysis.as_ref().map(|a| a.path.clone());
         self.job(move || {
             let source = path
@@ -262,10 +278,13 @@ impl Explorer {
                 None => AnalysisOptions::default(),
             };
             firmware_analysis_core::validate_options(&options).map_err(|e| e.to_string())?;
-            let analysis = current_path
+            let mut analysis = current_path
                 .map(|p| analyze_path(p, &options))
                 .transpose()
                 .map_err(|e| e.to_string())?;
+            if let (Some(analysis), Some(map)) = (&mut analysis, dependency_map) {
+                workspace::read_dependency_map(analysis, &map);
+            }
             Ok(Loaded::Config(options, analysis, source))
         });
     }
@@ -334,6 +353,7 @@ impl Explorer {
                     Ok(Loaded::Build(build)) => {
                         self.build = Some(Arc::new(build));
                         self.analysis = None;
+                        self.graph_view = Default::default();
                         self.preview = None;
                         self.options = AnalysisOptions::default();
                         self.layout_override = None;
@@ -406,6 +426,7 @@ impl Explorer {
                         self.options = a.options.clone();
                         self.preview = None;
                         self.analysis = Some(Arc::new(a));
+                        self.graph_view = Default::default();
                         if refreshed {
                             self.comparison = self
                                 .baseline
@@ -426,6 +447,19 @@ impl Explorer {
                         self.details = None;
                         self.visible_rows = 0;
                     }
+                    Ok(Loaded::Dependencies(analysis, map)) => {
+                        if let Some(build) = &self.build {
+                            self.build_settings
+                                .entry(build.root.clone())
+                                .or_default()
+                                .dependency_maps
+                                .insert(PathBuf::from(&analysis.path), map);
+                        }
+                        self.analysis = Some(Arc::new(analysis));
+                        self.graph_view = Default::default();
+                        self.preview = None;
+                        self.change_view(View::Dependencies);
+                    }
                     Ok(Loaded::Baseline(old)) => {
                         self.comparison =
                             self.analysis.as_ref().map(|current| compare(&old, current));
@@ -445,6 +479,7 @@ impl Explorer {
                         self.layout_override = Some(options.clone());
                         self.options = options;
                         self.analysis = analysis.map(Arc::new);
+                        self.graph_view = Default::default();
                         self.preview = None;
                         self.comparison = None;
                         self.baseline = None;

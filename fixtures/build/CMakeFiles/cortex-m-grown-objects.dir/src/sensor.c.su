@@ -1,0 +1,3 @@
+/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/sensor.c:9:6:sensor_init	24	static
+/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/sensor.c:20:17:sensor_read_raw	16	static
+/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/sensor.c:27:10:sensor_sample	32	static

@@ -347,7 +347,7 @@ impl Explorer {
             }
             ui.push_id(self.view.label(), |ui| match self.view {
                 View::Overview => self.overview(ui, &a), View::Files => self.files(ui, &a), View::Symbols => self.symbols(ui, &a),
-                View::Sections => self.sections(ui, &a), View::MemoryMap => self.memory_map(ui, &a), View::Stack => self.stack_view(ui), View::Compare => self.compare_view(ui),
+                View::Sections => self.sections(ui, &a), View::MemoryMap => self.memory_map(ui, &a), View::Dependencies => self.dependency_view(ui, &a), View::Stack => self.stack_view(ui), View::Compare => self.compare_view(ui),
             });
         });
     }

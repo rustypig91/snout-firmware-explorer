@@ -1,6 +1,6 @@
 use std::process::{Command, Output, Stdio};
 fn fixture(name: &str) -> String {
-    format!("{}/../../fixtures/{name}", env!("CARGO_MANIFEST_DIR"))
+    format!("{}/../../fixtures/build/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 fn run(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_firmware-explorer"))
@@ -20,7 +20,7 @@ fn analysis_commands_emit_versioned_json() {
         );
         let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(json["schema_version"], 1);
-        assert_eq!(json["totals"]["flash"], 260);
+        assert_eq!(json["totals"]["flash"], 1484);
         assert!(json["warnings"].is_array());
     }
 }
@@ -44,7 +44,7 @@ fn stack_command_exposes_uncertainty() {
         "stack",
         &fixture("cortex-m.elf"),
         "--stack-usage",
-        &fixture("cortex-m-main.su"),
+        &fixture("CMakeFiles/cortex-m-objects.dir/src/main.c.su"),
         "--format",
         "json",
     ]);
@@ -55,7 +55,7 @@ fn stack_command_exposes_uncertainty() {
 }
 #[test]
 fn bad_input_exits_with_an_actionable_error() {
-    let output = run(&["analyze", &fixture("src/main.c")]);
+    let output = run(&["analyze", &fixture("../src/main.c")]);
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     let error = String::from_utf8_lossy(&output.stderr);
@@ -91,6 +91,6 @@ fn configured_layout_and_text_output_work() {
     let output = run(&["analyze", &fixture("cortex-m.elf"), "--config", &config]);
     assert!(output.status.success());
     let text = String::from_utf8(output.stdout).unwrap();
-    assert!(text.contains("260 B"));
-    assert!(text.contains("232 B"));
+    assert!(text.contains("1.45 KiB"));
+    assert!(text.contains("356 B"));
 }

@@ -4,9 +4,9 @@ use firmware_analysis_core::{
 
 fn fixture(stripped: bool) -> firmware_analysis_core::Analysis {
     let data: &[u8] = if stripped {
-        include_bytes!("../../../fixtures/cortex-m-stripped.elf")
+        include_bytes!("../../../fixtures/build/cortex-m-stripped.elf")
     } else {
-        include_bytes!("../../../fixtures/cortex-m.elf")
+        include_bytes!("../../../fixtures/build/cortex-m.elf")
     };
     analyze_bytes(data, "fixture", &AnalysisOptions::default()).unwrap()
 }

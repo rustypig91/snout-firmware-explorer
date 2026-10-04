@@ -2,6 +2,7 @@
 mod aggregate;
 pub mod build;
 pub mod compare;
+pub mod dependencies;
 mod dwarf;
 mod elf;
 mod model;

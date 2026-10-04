@@ -12,7 +12,7 @@ impl Drop for ReportFile {
 #[test]
 fn parent_relative_sources_keep_stack_candidates_without_matching_other_absolute_sources() {
     let analysis = analyze_bytes(
-        include_bytes!("../../../fixtures/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
         "fixture",
         &AnalysisOptions::default(),
     )

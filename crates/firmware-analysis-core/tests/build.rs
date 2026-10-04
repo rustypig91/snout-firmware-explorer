@@ -8,7 +8,7 @@ const MAP: &str = "Memory Configuration\n\nName             Origin             L
 #[test]
 fn committed_fixtures_import_matching_map_capacities() {
     let dir = Temp::new();
-    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build");
     for name in ["cortex-m", "cortex-m-grown", "cortex-m-stripped"] {
         for extension in ["elf", "map"] {
             let file = format!("{name}.{extension}");
@@ -66,7 +66,7 @@ fn scans_nested_artifacts_and_uses_map_capacities() {
     fs::create_dir_all(dir.0.join("objects")).unwrap();
     fs::write(
         dir.0.join("app.elf"),
-        include_bytes!("../../../fixtures/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
     )
     .unwrap();
     fs::write(dir.0.join("app.map"), MAP).unwrap();
@@ -137,7 +137,7 @@ fn unsupported_or_invalid_maps_do_not_block_firmware() {
     let dir = Temp::new();
     fs::write(
         dir.0.join("app.elf"),
-        include_bytes!("../../../fixtures/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
     )
     .unwrap();
     fs::write(dir.0.join("app.map"), "unsupported map").unwrap();
@@ -148,4 +148,110 @@ fn unsupported_or_invalid_maps_do_not_block_firmware() {
         .warnings
         .iter()
         .any(|w| w.contains("capacity remains unknown")));
+}
+
+#[test]
+fn matching_cross_references_load_even_with_explicit_memory_layout() {
+    let dir = Temp::new();
+    fs::write(
+        dir.0.join("app.elf"),
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+    )
+    .unwrap();
+    fs::write(dir.0.join("app.map"), format!("{MAP}\nCross Reference Table\nSymbol File\nReset_Handler  main.o\ndiagnose  diag.o\n  main.o\n")).unwrap();
+    let build = scan_folder(&dir.0).unwrap();
+    for options in [None, Some(Default::default())] {
+        let analysis = analyze_build_firmware(
+            &build,
+            build.root.join("app.elf").as_path(),
+            options.as_ref(),
+        )
+        .unwrap();
+        assert_eq!(analysis.dependencies.edges.len(), 1);
+        assert_eq!(analysis.dependencies.edges[0].symbols, ["diagnose"]);
+        assert!(analysis
+            .dependencies
+            .map_path
+            .as_ref()
+            .unwrap()
+            .ends_with("app.map"));
+    }
+    // A matching filename does not make an unsupported map into dependency evidence.
+    fs::write(dir.0.join("app.map"), MAP).unwrap();
+    let analysis = analyze_build_firmware(&build, &build.root.join("app.elf"), None).unwrap();
+    assert!(analysis.dependencies.edges.is_empty());
+    assert!(analysis.dependencies.map_path.is_none());
+    assert!(!analysis.dependencies.nodes.is_empty());
+}
+
+#[test]
+fn committed_fixtures_have_six_units_and_real_cross_dependencies() {
+    let build = scan_folder(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build"))
+        .unwrap();
+    for name in ["cortex-m", "cortex-m-grown"] {
+        let analysis =
+            analyze_build_firmware(&build, &build.root.join(format!("{name}.elf")), None).unwrap();
+        let graph = &analysis.dependencies;
+        assert_eq!(graph.nodes.len(), 6);
+        assert!(graph.nodes.iter().all(|n| n.usage.is_some()));
+        assert_eq!(graph.edges.len(), 16);
+        for (from, to, symbol) in [
+            ("main.c", "diag.c", "diagnose"),
+            ("main.c", "telemetry.c", "telemetry_collect"),
+            ("diag.c", "telemetry.c", "telemetry_scale"),
+            ("telemetry.c", "diag.c", "diagnose"),
+            ("telemetry.c", "main.c", "ram_function"),
+            ("main.c", "sensor.c", "sensor_sample"),
+            ("main.c", "config.c", "config_get"),
+            ("main.c", "transport.c", "transport_flush"),
+            ("sensor.c", "config.c", "config_get"),
+            ("diag.c", "config.c", "config_alarm_threshold"),
+            ("diag.c", "transport.c", "transport_pending"),
+            ("telemetry.c", "config.c", "config_checksum_seed"),
+            ("telemetry.c", "transport.c", "transport_enqueue"),
+            ("transport.c", "config.c", "config_baudrate"),
+            ("transport.c", "telemetry.c", "telemetry_checksum"),
+            ("transport.c", "diag.c", "diagnostics_record_fault"),
+        ] {
+            let from = &graph
+                .nodes
+                .iter()
+                .find(|n| n.label.ends_with(from))
+                .unwrap()
+                .id;
+            let to = &graph
+                .nodes
+                .iter()
+                .find(|n| n.label.ends_with(to))
+                .unwrap()
+                .id;
+            let edge = graph
+                .edges
+                .iter()
+                .find(|e| &e.from == from && &e.to == to)
+                .unwrap();
+            assert!(edge.symbols.iter().any(|name| name == symbol));
+        }
+        let reports = build
+            .root
+            .join(format!("CMakeFiles/{name}-objects.dir/src"));
+        let stack = firmware_analysis_core::stack::analyze_stack(&analysis, &reports).unwrap();
+        assert_eq!(stack.entries.len(), 24);
+        assert!(stack
+            .entries
+            .iter()
+            .all(|entry| entry.symbol_candidates.len() == 1));
+        assert!(stack.entries.iter().any(
+            |entry| entry.function == "telemetry_collect" && entry.symbol_candidates.len() == 1
+        ));
+    }
+    let stripped =
+        analyze_build_firmware(&build, &build.root.join("cortex-m-stripped.elf"), None).unwrap();
+    assert_eq!(stripped.dependencies.nodes.len(), 6);
+    assert_eq!(stripped.dependencies.edges.len(), 16);
+    assert!(stripped
+        .dependencies
+        .nodes
+        .iter()
+        .all(|n| n.usage.is_none()));
 }

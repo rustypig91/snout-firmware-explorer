@@ -5,9 +5,9 @@ use firmware_analysis_core::{
     Analysis, AnalysisOptions, Classification, MemoryKind, MemoryRegion,
 };
 
-const ELF: &[u8] = include_bytes!("../../../fixtures/cortex-m.elf");
-const GROWN: &[u8] = include_bytes!("../../../fixtures/cortex-m-grown.elf");
-const STRIPPED: &[u8] = include_bytes!("../../../fixtures/cortex-m-stripped.elf");
+const ELF: &[u8] = include_bytes!("../../../fixtures/build/cortex-m.elf");
+const GROWN: &[u8] = include_bytes!("../../../fixtures/build/cortex-m-grown.elf");
+const STRIPPED: &[u8] = include_bytes!("../../../fixtures/build/cortex-m-stripped.elf");
 fn analyze(data: &[u8]) -> Analysis {
     analyze_bytes(data, "fixture.elf", &AnalysisOptions::default()).unwrap()
 }
@@ -16,11 +16,11 @@ fn analyze(data: &[u8]) -> Analysis {
 fn initialized_data_counts_in_both_memories() {
     let a = analyze(ELF);
     let data = a.sections.iter().find(|s| s.name == ".data").unwrap();
-    assert_eq!(data.size, 8);
-    assert_eq!(data.load_size, 8);
-    assert_eq!(data.runtime_size, 8);
-    assert_eq!(data.usage.flash, 8);
-    assert_eq!(data.usage.ram, 8);
+    assert_eq!(data.size, 24);
+    assert_eq!(data.load_size, 24);
+    assert_eq!(data.runtime_size, 24);
+    assert_eq!(data.usage.flash, 24);
+    assert_eq!(data.usage.ram, 24);
     assert!(data.load_address.unwrap() < data.address);
     assert_eq!(data.classification, Classification::InitializedRam);
 }
@@ -139,19 +139,26 @@ fn dwarf_file_groups_merge_without_changing_memory_totals() {
     let a = analyze(ELF);
     assert_eq!(
         a.files.len(),
-        3,
-        "Two source files plus unattributed storage"
+        7,
+        "Six source files plus unattributed storage"
     );
-    for (name, flash, ram) in [("main.c", 164, 100), ("diag.c", 92, 4)] {
+    for (name, flash, ram) in [
+        ("main.c", 346, 108),
+        ("config.c", 144, 0),
+        ("sensor.c", 268, 28),
+        ("diag.c", 212, 8),
+        ("telemetry.c", 232, 4),
+        ("transport.c", 280, 80),
+    ] {
         let files: Vec<_> = a.files.iter().filter(|f| f.path.ends_with(name)).collect();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].usage.flash, flash);
         assert_eq!(files[0].usage.ram, ram);
         assert!(files[0].path.contains("fixtures/src/"));
     }
-    assert_eq!(a.totals.flash, 260);
-    assert_eq!(a.totals.ram, 232);
-    assert_eq!(a.unattributed.flash, 4);
+    assert_eq!(a.totals.flash, 1484);
+    assert_eq!(a.totals.ram, 356);
+    assert_eq!(a.unattributed.flash, 2);
     assert_eq!(a.unattributed.ram, 128);
     for name in [
         "private_state",
@@ -358,7 +365,7 @@ fn compiler_stack_reports_are_matched_without_invented_call_edges() {
         &a,
         concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/cortex-m-main.su"
+            "/../../fixtures/build/CMakeFiles/cortex-m-objects.dir/src/main.c.su"
         ),
     )
     .unwrap();
@@ -394,7 +401,7 @@ fn stack_matching_preserves_overload_ambiguity_and_rejects_conflicting_sources()
     a.symbols.push(overload);
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../fixtures/cortex-m-main.su"
+        "/../../fixtures/build/CMakeFiles/cortex-m-objects.dir/src/main.c.su"
     );
     let report = analyze_stack(&a, path).unwrap();
     let cpp = report
