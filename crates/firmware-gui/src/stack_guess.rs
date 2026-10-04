@@ -101,11 +101,17 @@ pub(super) fn guess(analysis: &Analysis, build: &BuildFolder) -> Result<LoadedSt
         })
         .cloned()
         .collect();
-    // A scan root can contain the same target in several build configurations.
-    // Prefer reports alongside the ELF when that subtree has matching targets.
+    // A scan root can contain the same target in several build configurations,
+    // even after another configuration's ELF has been cleaned. Object folders
+    // may be siblings of bin/, so compare shared ancestors rather than requiring
+    // reports below the ELF's immediate parent.
     if let Some(parent) = firmware.parent() {
-        if target_matches.iter().any(|path| path.starts_with(parent)) {
-            target_matches.retain(|path| path.starts_with(parent));
+        if let Some(depth) = target_matches
+            .iter()
+            .map(|path| common_depth(parent, path))
+            .max()
+        {
+            target_matches.retain(|path| common_depth(parent, path) == depth);
         }
     }
     let provenance: Option<(Vec<PathBuf>, &str)> = if !map_matches.is_empty() {
@@ -320,6 +326,26 @@ mod tests {
         let other = root.join("debug/CMakeFiles/app.dir/diag.su");
         report(&chosen, 56);
         report(&other, 96);
+        let (stack, selection) = guess(&analysis, &scan_folder(&root).unwrap()).unwrap();
+        let selection = selection.unwrap();
+        assert!(selection.contains(&chosen));
+        assert!(!selection.contains(&other));
+        assert_eq!(stack.entries.len(), 1);
+        assert_eq!(stack.entries[0].local_bytes, 56);
+    }
+
+    #[test]
+    fn target_directory_guess_prefers_sibling_objects_in_the_same_configuration() {
+        let (_dir, root, mut analysis) = setup();
+        let elf = root.join("release/bin/app.elf");
+        std::fs::create_dir_all(elf.parent().unwrap()).unwrap();
+        std::fs::rename(&analysis.path, &elf).unwrap();
+        analysis.path = elf.display().to_string();
+        let chosen = root.join("release/CMakeFiles/app.dir/diag.su");
+        let other = root.join("debug/CMakeFiles/app.dir/diag.su");
+        report(&chosen, 56);
+        report(&other, 96);
+        // The debug ELF may have been cleaned while its reports remain.
         let (stack, selection) = guess(&analysis, &scan_folder(&root).unwrap()).unwrap();
         let selection = selection.unwrap();
         assert!(selection.contains(&chosen));
