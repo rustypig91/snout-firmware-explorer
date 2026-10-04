@@ -6,7 +6,7 @@ use firmware_analysis_core::{
 
 fn fixture() -> Analysis {
     analyze_bytes(
-        include_bytes!("../../../fixtures/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
         "firmware.elf",
         &Default::default(),
     )
@@ -126,7 +126,7 @@ fn ambiguous_duplicate_definitions_and_mixed_object_owners_are_not_guessed() {
 #[test]
 fn stripped_elf_keeps_object_graph_without_source_or_size_claims() {
     let analysis = analyze_bytes(
-        include_bytes!("../../../fixtures/cortex-m-stripped.elf"),
+        include_bytes!("../../../fixtures/build/cortex-m-stripped.elf"),
         "stripped.elf",
         &Default::default(),
     )

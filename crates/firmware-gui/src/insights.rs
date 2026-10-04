@@ -50,7 +50,7 @@ mod tests {
         for name in ["cortex-m-grown.elf", "cortex-m-stripped.elf"] {
             let a = firmware_analysis_core::analyze_path(
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../fixtures")
+                    .join("../../fixtures/build")
                     .join(name),
                 &Default::default(),
             )

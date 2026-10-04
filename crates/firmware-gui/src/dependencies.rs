@@ -493,7 +493,7 @@ mod tests {
     #[test]
     fn graph_nodes_arrows_and_zoom_respond_to_pointer_input() {
         let mut analysis = firmware_analysis_core::analyze_bytes(
-            include_bytes!("../../../fixtures/cortex-m.elf"),
+            include_bytes!("../../../fixtures/build/cortex-m.elf"),
             "test.elf",
             &Default::default(),
         )

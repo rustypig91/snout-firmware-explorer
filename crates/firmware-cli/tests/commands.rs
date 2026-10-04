@@ -1,6 +1,6 @@
 use std::process::{Command, Output, Stdio};
 fn fixture(name: &str) -> String {
-    format!("{}/../../fixtures/{name}", env!("CARGO_MANIFEST_DIR"))
+    format!("{}/../../fixtures/build/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 fn run(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_firmware-explorer"))
@@ -44,7 +44,7 @@ fn stack_command_exposes_uncertainty() {
         "stack",
         &fixture("cortex-m.elf"),
         "--stack-usage",
-        &fixture("cortex-m-main.su"),
+        &fixture("CMakeFiles/cortex-m-objects.dir/src/main.c.su"),
         "--format",
         "json",
     ]);
@@ -55,7 +55,7 @@ fn stack_command_exposes_uncertainty() {
 }
 #[test]
 fn bad_input_exits_with_an_actionable_error() {
-    let output = run(&["analyze", &fixture("src/main.c")]);
+    let output = run(&["analyze", &fixture("../src/main.c")]);
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     let error = String::from_utf8_lossy(&output.stderr);

@@ -8,7 +8,7 @@ const MAP: &str = "Memory Configuration\n\nName             Origin             L
 #[test]
 fn committed_fixtures_import_matching_map_capacities() {
     let dir = Temp::new();
-    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build");
     for name in ["cortex-m", "cortex-m-grown", "cortex-m-stripped"] {
         for extension in ["elf", "map"] {
             let file = format!("{name}.{extension}");
@@ -66,7 +66,7 @@ fn scans_nested_artifacts_and_uses_map_capacities() {
     fs::create_dir_all(dir.0.join("objects")).unwrap();
     fs::write(
         dir.0.join("app.elf"),
-        include_bytes!("../../../fixtures/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
     )
     .unwrap();
     fs::write(dir.0.join("app.map"), MAP).unwrap();
@@ -137,7 +137,7 @@ fn unsupported_or_invalid_maps_do_not_block_firmware() {
     let dir = Temp::new();
     fs::write(
         dir.0.join("app.elf"),
-        include_bytes!("../../../fixtures/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
     )
     .unwrap();
     fs::write(dir.0.join("app.map"), "unsupported map").unwrap();
@@ -155,7 +155,7 @@ fn matching_cross_references_load_even_with_explicit_memory_layout() {
     let dir = Temp::new();
     fs::write(
         dir.0.join("app.elf"),
-        include_bytes!("../../../fixtures/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
     )
     .unwrap();
     fs::write(dir.0.join("app.map"), format!("{MAP}\nCross Reference Table\nSymbol File\nReset_Handler  main.o\ndiagnose  diag.o\n  main.o\n")).unwrap();
@@ -186,8 +186,8 @@ fn matching_cross_references_load_even_with_explicit_memory_layout() {
 
 #[test]
 fn committed_fixtures_have_six_units_and_real_cross_dependencies() {
-    let build =
-        scan_folder(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")).unwrap();
+    let build = scan_folder(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build"))
+        .unwrap();
     for name in ["cortex-m", "cortex-m-grown"] {
         let analysis =
             analyze_build_firmware(&build, &build.root.join(format!("{name}.elf")), None).unwrap();
@@ -232,7 +232,10 @@ fn committed_fixtures_have_six_units_and_real_cross_dependencies() {
                 .unwrap();
             assert!(edge.symbols.iter().any(|name| name == symbol));
         }
-        let stack = firmware_analysis_core::stack::analyze_stack(&analysis, &build.root).unwrap();
+        let reports = build
+            .root
+            .join(format!("CMakeFiles/{name}-objects.dir/src"));
+        let stack = firmware_analysis_core::stack::analyze_stack(&analysis, &reports).unwrap();
         assert_eq!(stack.entries.len(), 24);
         assert!(stack
             .entries

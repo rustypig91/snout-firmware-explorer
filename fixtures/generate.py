@@ -1,10 +1,10 @@
-"""Regenerate the sensor-monitor fixtures using GNU Arm GCC or Clang + LLD.
+"""Regenerate the committed CMake sensor-monitor build using GNU Arm GCC or Clang.
 
 Run from the repository root:
     python fixtures/generate.py --gcc arm-none-eabi-gcc
 
-Tests use committed artifacts and require no ARM toolchain. GNU ld maps also
-provide memory capacities and the dependency graph's symbol cross references.
+Tests use committed artifacts and require no ARM toolchain. CMake, Ninja, and
+an ARM-capable compiler are required only when regenerating the fixture build.
 """
 
 import argparse
@@ -15,7 +15,7 @@ import subprocess
 root = Path(__file__).resolve().parent
 parser = argparse.ArgumentParser()
 parser.add_argument(
-    "--gcc", help="GNU Arm GCC executable; otherwise use clang + ld.lld"
+    "--gcc", help="GNU Arm GCC executable; otherwise use clang with ARM target support"
 )
 args = parser.parse_args()
 compiler = args.gcc or shutil.which("clang")
@@ -24,93 +24,27 @@ if not compiler:
 compiler = str(Path(shutil.which(compiler) or compiler).resolve())
 
 build = root / "build"
-build.mkdir(exist_ok=True)
-flags = [
-    "-mcpu=cortex-m3",
-    "-mthumb",
-    "-ffreestanding",
-    "-fno-builtin",
-    "-fno-common",
-    "-fno-unwind-tables",
-    "-fno-asynchronous-unwind-tables",
-    "-O0",
-    "-g",
-    "-gdwarf-4",
-    "-fstack-usage",
-    "-Wall",
-    "-Wextra",
-    "-Werror",
-]
-if not args.gcc:
-    flags += ["--target=arm-none-eabi"]
+subprocess.run(
+    [
+        "cmake",
+        "-S",
+        str(root),
+        "-B",
+        str(build),
+        "-G",
+        "Ninja",
+        f"-DCMAKE_TOOLCHAIN_FILE={root / 'cmake' / 'arm-none-eabi.cmake'}",
+        f"-DFIXTURE_C_COMPILER={compiler}",
+    ],
+    check=True,
+)
+subprocess.run(["cmake", "--build", str(build)], check=True)
 
-sources = ["main", "config", "sensor", "diag", "telemetry", "transport"]
-for variant, extra in [("cortex-m", 0), ("cortex-m-grown", 8)]:
-    objects = []
-    for source in sources:
-        obj = build / f"{variant}-{source}.o"
-        subprocess.run(
-            [
-                compiler,
-                *flags,
-                f"-DEXTRA={extra}",
-                "-c",
-                f"fixtures/src/{source}.c",
-                "-o",
-                str(obj),
-            ],
-            check=True,
-        )
-        objects.append(str(obj))
+# Preserve clean text/file modes in the committed artifact snapshot.
+for name in ["cortex-m", "cortex-m-grown", "cortex-m-stripped"]:
+    (build / f"{name}.elf").chmod(0o644)
+    mapfile = build / f"{name}.map"
+    lines = (line.rstrip() for line in mapfile.read_text().splitlines())
+    mapfile.write_text("\n".join(lines) + "\n")
 
-    if args.gcc:
-        command = [
-            compiler,
-            "-mcpu=cortex-m3",
-            "-mthumb",
-            "-nostdlib",
-            "-Wl,--build-id=none",
-            "-Wl,--cref,--no-demangle",
-            "-Wl,-T,fixtures/src/cortex-m.ld",
-            *objects,
-        ]
-    else:
-        linker = shutil.which("ld.lld") or str(
-            Path(compiler).with_name("ld.lld.exe")
-        )
-        command = [
-            linker,
-            "-T",
-            "fixtures/src/cortex-m.ld",
-            "--build-id=none",
-            *objects,
-        ]
-
-    # The stripped ELF comes from the same baseline objects, preserving layout.
-    names = [variant, "cortex-m-stripped"] if variant == "cortex-m" else [variant]
-    for name in names:
-        mapfile = root / f"{name}.map"
-        map_flag = f"-Wl,-Map,{mapfile}" if args.gcc else f"-Map={mapfile}"
-        strip_flags = []
-        if name == "cortex-m-stripped":
-            strip_flags = ["-Wl,--strip-all" if args.gcc else "--strip-all"]
-
-        elf = root / f"{name}.elf"
-        subprocess.run(
-            [*command, map_flag, *strip_flags, "-o", str(elf)], check=True
-        )
-        # Fixture ELFs are data inputs, not host executables.
-        elf.chmod(0o644)
-        # GNU ld adds trailing spaces to fill rows; keep committed maps clean.
-        lines = (line.rstrip() for line in mapfile.read_text().splitlines())
-        mapfile.write_text("\n".join(lines) + "\n")
-
-    # Keep one report set in the example folder; recursive scans would otherwise
-    # load baseline and grown intermediate reports as additional copies.
-    for source in sources:
-        su = build / f"{variant}-{source}.su"
-        if variant == "cortex-m":
-            shutil.copyfile(su, root / su.name)
-        su.unlink()
-
-print("Generated sensor-monitor ELF, linker-map, and stack-usage fixtures.")
+print("Generated CMake sensor-monitor build in fixtures/build/.")
