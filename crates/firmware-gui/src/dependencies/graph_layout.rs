@@ -1,0 +1,378 @@
+//! In-process DOT-style layout, with geometry retained for egui hit testing.
+use super::egui;
+use layout::{
+    core::{
+        base::Orientation,
+        format::{ClipHandle, RenderBackend},
+        geometry::Point,
+        style::StyleAttr,
+    },
+    std_shapes::{
+        render::render_arrow,
+        shapes::{Arrow, Element, ShapeKind},
+    },
+    topo::layout::VisualGraph,
+};
+use std::collections::BTreeMap;
+
+#[derive(Clone, PartialEq)]
+pub(super) struct NodeSpec {
+    pub id: String,
+    pub directory: String,
+    pub size: egui::Vec2,
+}
+
+#[derive(PartialEq)]
+pub(super) struct LayoutInput {
+    pub nodes: Vec<NodeSpec>,
+    pub edges: Vec<(String, String)>,
+    pub grouped: bool,
+    pub ram: bool,
+    pub vertical: bool,
+}
+
+pub(super) struct RoutedEdge {
+    pub from: String,
+    pub to: String,
+    /// Always ordered from the referencing unit to the defining unit.
+    pub points: Vec<egui::Pos2>,
+}
+
+pub(super) struct GraphLayout {
+    pub cards: BTreeMap<String, egui::Rect>,
+    pub edges: Vec<RoutedEdge>,
+    pub headings: Vec<(String, egui::Pos2)>,
+    pub bounds: egui::Rect,
+}
+
+pub(super) struct CachedLayout {
+    pub input: LayoutInput,
+    pub geometry: GraphLayout,
+}
+
+/// Area is proportional to bytes above the text-sized floor. The largest box
+/// uses 2.5 times the minimum area, keeping the whole graph compact.
+pub(super) fn card_size(minimum: egui::Vec2, bytes: u64, maximum: u64) -> egui::Vec2 {
+    let relative = bytes as f64 / maximum.max(1) as f64;
+    minimum * (2.5 * relative).max(1.0).sqrt() as f32
+}
+
+pub(super) fn compute(input: &LayoutInput) -> GraphLayout {
+    let orientation = if input.vertical && !input.grouped {
+        Orientation::TopToBottom
+    } else {
+        Orientation::LeftToRight
+    };
+    let mut vg = VisualGraph::new(orientation);
+    // Avoid the library's expensive diagnostic DAG checks on every insertion.
+    vg.dag.set_validate(false);
+    let mut handles = BTreeMap::new();
+    for node in &input.nodes {
+        let element = Element::create(
+            ShapeKind::new_box(""),
+            StyleAttr::simple(),
+            orientation,
+            Point::new(node.size.x.into(), node.size.y.into()),
+        );
+        handles.insert(node.id.clone(), vg.add_node(element));
+    }
+    let mut collector = CurveCollector::default();
+    let mut headings = vec![];
+    if input.grouped {
+        // Directory lanes are an explicit alternative to dependency ranks. The
+        // library still supplies connection points and curves for these boxes.
+        let mut groups: BTreeMap<&str, Vec<&NodeSpec>> = BTreeMap::new();
+        for node in &input.nodes {
+            groups.entry(&node.directory).or_default().push(node);
+        }
+        let mut x = 0.0;
+        for (directory, nodes) in groups {
+            let width = nodes.iter().map(|n| n.size.x).fold(0.0_f32, f32::max);
+            headings.push((directory.to_owned(), egui::pos2(x + width / 2.0, -30.0)));
+            let mut y = 0.0;
+            for node in nodes {
+                vg.element_mut(handles[&node.id]).move_to(Point::new(
+                    (x + width / 2.0).into(),
+                    (y + node.size.y / 2.0).into(),
+                ));
+                y += node.size.y + 60.0;
+            }
+            x += width + 150.0;
+        }
+        for (index, (from, to)) in input.edges.iter().enumerate() {
+            let source = vg.element(handles[from]).clone();
+            let target = vg.element(handles[to]).clone();
+            let mut elements = vec![source.clone()];
+            if (source.pos.center().x - target.pos.center().x).abs() < 1.0 {
+                // Same-lane connections travel outside the directory's boxes.
+                let mut connector = Element::empty_connector(Orientation::LeftToRight);
+                connector.move_to(Point::new(
+                    source.pos.right(false).max(target.pos.right(false))
+                        + 45.0
+                        + index as f64 * 3.0,
+                    (source.pos.center().y + target.pos.center().y) / 2.0,
+                ));
+                elements.push(connector);
+            }
+            elements.push(target);
+            render_arrow(
+                &mut collector,
+                false,
+                &elements,
+                &Arrow::simple_with_properties("", index.to_string()),
+            );
+        }
+    } else if !input.nodes.is_empty() {
+        for (index, (from, to)) in input.edges.iter().enumerate() {
+            vg.add_edge(
+                Arrow::simple_with_properties("", index.to_string()),
+                handles[from],
+                handles[to],
+            );
+        }
+        vg.do_it(false, false, false, &mut collector);
+    }
+    let cards: BTreeMap<_, _> = handles
+        .into_iter()
+        .map(|(id, handle)| {
+            let (min, max) = vg.pos(handle).bbox(false);
+            (id, egui::Rect::from_min_max(pos(min), pos(max)))
+        })
+        .collect();
+    let edges: Vec<_> = collector
+        .curves
+        .into_iter()
+        .map(|(index, mut points)| {
+            let (from, to) = &input.edges[index];
+            if from != to && input.edges.iter().any(|(f, t)| f == to && t == from) {
+                // Reciprocal arrows otherwise share exactly the same curve. Taper
+                // the lane offset to zero at the boxes so endpoints stay attached.
+                let direction = (cards[to].center() - cards[from].center()).normalized();
+                let normal = egui::vec2(-direction.y, direction.x);
+                let last = points.len().saturating_sub(1).max(1) as f32;
+                for (i, point) in points.iter_mut().enumerate() {
+                    *point += normal * (6.0 * (std::f32::consts::PI * i as f32 / last).sin());
+                }
+            }
+            RoutedEdge {
+                from: from.clone(),
+                to: to.clone(),
+                points,
+            }
+        })
+        .collect();
+    let mut bounds = cards
+        .values()
+        .fold(egui::Rect::NOTHING, |b, card| b.union(*card));
+    for edge in &edges {
+        for point in &edge.points {
+            bounds.extend_with(*point);
+        }
+    }
+    for (label, center) in &headings {
+        let displayed = super::short_path(label, []);
+        bounds = bounds.union(egui::Rect::from_center_size(
+            *center,
+            egui::vec2(displayed.chars().count() as f32 * 8.0, 24.0),
+        ));
+    }
+    GraphLayout {
+        cards,
+        edges,
+        headings,
+        bounds: bounds.expand(24.0),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn input() -> LayoutInput {
+        LayoutInput {
+            nodes: [
+                "app/main.c",
+                "drivers/spi.c",
+                "drivers/config.c",
+                "isolated.c",
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(index, id)| NodeSpec {
+                id: id.into(),
+                directory: id
+                    .rsplit_once('/')
+                    .map(|p| p.0)
+                    .unwrap_or("[no directory]")
+                    .into(),
+                size: card_size(egui::vec2(100.0, 42.0), index as u64 * 100, 300),
+            })
+            .collect(),
+            edges: [
+                ("app/main.c", "drivers/spi.c"),
+                ("drivers/spi.c", "drivers/config.c"),
+                ("drivers/config.c", "app/main.c"),
+                ("drivers/spi.c", "app/main.c"),
+            ]
+            .into_iter()
+            .map(|(f, t)| (f.into(), t.into()))
+            .collect(),
+            grouped: false,
+            ram: false,
+            vertical: false,
+        }
+    }
+
+    #[test]
+    fn cyclic_and_reciprocal_routes_preserve_identity_direction_and_clear_boxes() {
+        for (grouped, vertical) in [(false, false), (false, true), (true, false)] {
+            let mut input = input();
+            input.grouped = grouped;
+            input.vertical = vertical;
+            let geometry = compute(&input);
+            assert_eq!(geometry.cards.len(), input.nodes.len());
+            assert_eq!(geometry.edges.len(), input.edges.len());
+            for (i, card) in geometry.cards.values().enumerate() {
+                assert!(card.is_positive() && card.is_finite());
+                assert!(geometry.bounds.contains_rect(*card));
+                for other in geometry.cards.values().skip(i + 1) {
+                    assert!(!card.intersects(*other));
+                }
+            }
+            for edge in &geometry.edges {
+                assert!(input.edges.contains(&(edge.from.clone(), edge.to.clone())));
+                let source = geometry.cards[&edge.from];
+                let target = geometry.cards[&edge.to];
+                assert!(source.expand(0.01).contains(edge.points[0]));
+                assert!(target.expand(0.01).contains(*edge.points.last().unwrap()));
+                for point in &edge.points {
+                    assert!(point.x.is_finite() && point.y.is_finite());
+                    assert!(geometry.bounds.contains(*point));
+                }
+                // Both tips and their bases remain outside the target's interior.
+                for scale in [0.2, 1.0, 8.0] {
+                    let points: Vec<_> = edge
+                        .points
+                        .iter()
+                        .map(|p| egui::Pos2::ZERO + p.to_vec2() * scale)
+                        .collect();
+                    let head = super::super::arrow_head(&points, scale).unwrap();
+                    let base = head[1].lerp(head[2], 0.5);
+                    assert!((head[0] - base).dot(head[0] - points[points.len() - 2]) > 0.0);
+                    let scaled_target = egui::Rect::from_min_max(
+                        egui::Pos2::ZERO + target.min.to_vec2() * scale,
+                        egui::Pos2::ZERO + target.max.to_vec2() * scale,
+                    );
+                    assert!(!scaled_target.shrink(0.1).contains(base));
+                }
+            }
+            let forward = &geometry.edges[0].points;
+            let reverse = &geometry.edges[3].points;
+            assert!(forward[forward.len() / 2].distance(reverse[reverse.len() / 2]) > 1.0);
+            assert_eq!(geometry.headings.len(), if grouped { 3 } else { 0 });
+        }
+    }
+
+    #[test]
+    fn chain_flows_left_to_right_and_disconnected_graphs_are_supported() {
+        let mut input = input();
+        input.edges.truncate(2);
+        let geometry = compute(&input);
+        assert!(geometry.cards["app/main.c"].right() < geometry.cards["drivers/spi.c"].left());
+        assert!(
+            geometry.cards["drivers/spi.c"].right() < geometry.cards["drivers/config.c"].left()
+        );
+        input.edges.clear();
+        let geometry = compute(&input);
+        assert_eq!(geometry.cards.len(), 4);
+        assert!(geometry.edges.is_empty());
+        input.nodes.truncate(1);
+        assert_eq!(compute(&input).cards.len(), 1);
+    }
+
+    #[test]
+    fn memory_sizing_is_monotonic_bounded_and_handles_zero_usage() {
+        let minimum = egui::vec2(100.0, 42.0);
+        let mut previous = minimum;
+        for bytes in [0, 1, 100, 10_000, 1_000_000, u64::MAX] {
+            let size = card_size(minimum, bytes, u64::MAX);
+            assert!(size.x >= previous.x && size.y >= previous.y);
+            assert!(size.x <= minimum.x * 1.59 && size.y <= minimum.y * 1.59);
+            previous = size;
+        }
+        assert_eq!(card_size(minimum, 0, 0), minimum);
+        let largest = card_size(minimum, 346, 346);
+        let smallest = card_size(minimum, 144, 346);
+        let area = |size: egui::Vec2| size.x * size.y;
+        assert!((area(largest) / area(smallest) - 346.0 / 144.0).abs() < 0.001);
+        assert!(largest.x < 160.0 && largest.y < 67.0);
+    }
+}
+
+fn pos(point: Point) -> egui::Pos2 {
+    egui::pos2(point.x as f32, point.y as f32)
+}
+
+#[derive(Default)]
+struct CurveCollector {
+    curves: Vec<(usize, Vec<egui::Pos2>)>,
+}
+
+impl RenderBackend for CurveCollector {
+    fn draw_arrow(
+        &mut self,
+        path: &[(Point, Point)],
+        _: bool,
+        head: (bool, bool),
+        _: &StyleAttr,
+        properties: Option<String>,
+        _: &str,
+    ) {
+        // Match the library SVG backend's initial cubic and subsequent smooth
+        // cubic segments; use the same samples for painting and hit testing.
+        let mut points = vec![];
+        let mut start = pos(path[0].0);
+        let mut control1 = pos(path[0].1);
+        for segment in path.iter().skip(1) {
+            let control2 = pos(segment.0);
+            let end = pos(segment.1);
+            for i in 0..=24 {
+                if i == 0 && !points.is_empty() {
+                    continue;
+                }
+                let t = i as f32 / 24.0;
+                let u = 1.0 - t;
+                points.push(
+                    egui::Pos2::ZERO
+                        + start.to_vec2() * u.powi(3)
+                        + control1.to_vec2() * (3.0 * u * u * t)
+                        + control2.to_vec2() * (3.0 * u * t * t)
+                        + end.to_vec2() * t.powi(3),
+                );
+            }
+            start = end;
+            control1 = end + (end - control2);
+        }
+        // layout-rs reverses cyclic edges internally; restore the real direction.
+        if head.0 {
+            points.reverse();
+        }
+        self.curves
+            .push((properties.unwrap().parse().unwrap(), points));
+    }
+    fn draw_rect(
+        &mut self,
+        _: Point,
+        _: Point,
+        _: &StyleAttr,
+        _: Option<String>,
+        _: Option<ClipHandle>,
+    ) {
+    }
+    fn draw_line(&mut self, _: Point, _: Point, _: &StyleAttr, _: Option<String>) {}
+    fn draw_circle(&mut self, _: Point, _: Point, _: &StyleAttr, _: Option<String>) {}
+    fn draw_text(&mut self, _: Point, _: &str, _: &StyleAttr) {}
+    fn create_clip(&mut self, _: Point, _: Point, _: usize) -> ClipHandle {
+        0
+    }
+}
