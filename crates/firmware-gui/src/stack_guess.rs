@@ -64,7 +64,7 @@ pub(super) fn guess(analysis: &Analysis, build: &BuildFolder) -> Result<LoadedSt
         .unwrap_or_default()
         .to_string_lossy()
         .to_lowercase();
-    let target_matches: Vec<_> = paths
+    let mut target_matches: Vec<_> = paths
         .iter()
         .filter(|path| {
             path.strip_prefix(&build.root)
@@ -78,6 +78,13 @@ pub(super) fn guess(analysis: &Analysis, build: &BuildFolder) -> Result<LoadedSt
         })
         .cloned()
         .collect();
+    // A scan root can contain the same target in several build configurations.
+    // Prefer reports alongside the ELF when that subtree has matching targets.
+    if let Some(parent) = firmware.parent() {
+        if target_matches.iter().any(|path| path.starts_with(parent)) {
+            target_matches.retain(|path| path.starts_with(parent));
+        }
+    }
     let provenance: Option<(Vec<PathBuf>, &str)> = if !map_matches.is_empty() {
         Some((
             map_matches.into_iter().collect(),
@@ -245,6 +252,25 @@ mod tests {
         assert!(selection.contains(&chosen));
         assert!(!selection.contains(&other));
         assert!(selection.contains(&chosen.parent().unwrap().join("new.su")));
+        assert_eq!(stack.entries.len(), 1);
+        assert_eq!(stack.entries[0].local_bytes, 56);
+    }
+
+    #[test]
+    fn target_directory_guess_stays_with_the_elf_build_configuration() {
+        let (_dir, root, mut analysis) = setup();
+        let elf = root.join("release/app.elf");
+        std::fs::create_dir_all(elf.parent().unwrap()).unwrap();
+        std::fs::rename(&analysis.path, &elf).unwrap();
+        analysis.path = elf.display().to_string();
+        let chosen = root.join("release/CMakeFiles/app.dir/diag.su");
+        let other = root.join("debug/CMakeFiles/app.dir/diag.su");
+        report(&chosen, 56);
+        report(&other, 96);
+        let (stack, selection) = guess(&analysis, &scan_folder(&root).unwrap()).unwrap();
+        let selection = selection.unwrap();
+        assert!(selection.contains(&chosen));
+        assert!(!selection.contains(&other));
         assert_eq!(stack.entries.len(), 1);
         assert_eq!(stack.entries[0].local_bytes, 56);
     }

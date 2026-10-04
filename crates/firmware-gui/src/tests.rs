@@ -2071,3 +2071,25 @@ fn automatic_stack_choices_are_saved_per_elf_and_manual_choices_take_precedence(
     finish_job(&mut restored);
     assert_eq!(restored.stack.as_ref().unwrap().entries[0].local_bytes, 96);
 }
+
+#[test]
+fn failed_stack_selection_does_not_display_the_previous_selection_report() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let elf = root.join("app.elf");
+    std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+    let valid = root.join("diag.su");
+    std::fs::write(&valid, "diag.c:22:36:diagnose\t56\tstatic\n").unwrap();
+    let mut app = Explorer::default();
+    app.scan_build(root.clone());
+    finish_job(&mut app);
+    app.open(elf.clone());
+    finish_job(&mut app);
+    assert_eq!(app.stack.as_ref().unwrap().entries.len(), 1);
+    std::fs::write(&valid, [0xff]).unwrap();
+    app.select_stack_reports(vec![valid.clone()]);
+    finish_job(&mut app);
+    assert!(app.error.is_some());
+    assert_eq!(app.saved_stack_reports(&elf), Some(vec![valid]));
+    assert!(app.stack.is_none());
+}

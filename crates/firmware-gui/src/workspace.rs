@@ -172,7 +172,8 @@ impl StackSelection {
                         {
                             // An entirely unchecked folder also excludes future reports.
                             self.paths.retain(|p| !p.starts_with(parent));
-                            self.excluded.retain(|p| !p.starts_with(parent));
+                            // Keep file exceptions even when their reports have disappeared.
+                            // Re-enabling automatic siblings must not reselect those files.
                             self.excluded.push(parent.to_owned());
                         }
                     }
@@ -370,6 +371,8 @@ impl Explorer {
             .or_default()
             .stack_reports
             .insert(PathBuf::from(&analysis.path), selection.clone());
+        // The old report no longer represents the saved selection, including on failure.
+        self.stack = None;
         // Save the user's intent before analysis, even if the app closes during the job.
         self.job(move || {
             let paths = selection.report_paths(&build)?;
@@ -796,6 +799,20 @@ mod tests {
         assert!(selected.paths.contains(&root.join("objects")));
         assert!(selected.contains(&paths[2]));
         assert!(selected.contains(&root.join("objects/nested/new.su")));
+    }
+
+    #[test]
+    fn missing_unchecked_sibling_stays_excluded_after_reselecting_the_last_file() {
+        let root = PathBuf::from("build");
+        let first = root.join("a.su");
+        let missing = root.join("b.su");
+        let mut selected = StackSelection::default();
+        selected.set(&first, true, &[first.clone(), missing.clone()]);
+        selected.set(&first, false, std::slice::from_ref(&first));
+        selected.set(&first, true, std::slice::from_ref(&first));
+        assert!(selected.contains(&first));
+        assert!(!selected.contains(&missing));
+        assert!(selected.contains(&root.join("new.su")));
     }
 
     #[test]
