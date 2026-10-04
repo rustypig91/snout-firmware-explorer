@@ -183,3 +183,56 @@ fn matching_cross_references_load_even_with_explicit_memory_layout() {
     assert!(analysis.dependencies.map_path.is_none());
     assert!(!analysis.dependencies.nodes.is_empty());
 }
+
+#[test]
+fn committed_fixtures_have_three_units_and_real_cross_dependencies() {
+    let build =
+        scan_folder(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")).unwrap();
+    for name in ["cortex-m", "cortex-m-grown"] {
+        let analysis =
+            analyze_build_firmware(&build, &build.root.join(format!("{name}.elf")), None).unwrap();
+        let graph = &analysis.dependencies;
+        assert_eq!(graph.nodes.len(), 3);
+        assert!(graph.nodes.iter().all(|n| n.usage.is_some()));
+        assert_eq!(graph.edges.len(), 5);
+        for (from, to, symbol) in [
+            ("main.c", "diag.c", "diagnose"),
+            ("main.c", "telemetry.c", "telemetry_collect"),
+            ("diag.c", "telemetry.c", "telemetry_scale"),
+            ("telemetry.c", "diag.c", "diagnose"),
+            ("telemetry.c", "main.c", "ram_function"),
+        ] {
+            let from = &graph
+                .nodes
+                .iter()
+                .find(|n| n.label.ends_with(from))
+                .unwrap()
+                .id;
+            let to = &graph
+                .nodes
+                .iter()
+                .find(|n| n.label.ends_with(to))
+                .unwrap()
+                .id;
+            let edge = graph
+                .edges
+                .iter()
+                .find(|e| &e.from == from && &e.to == to)
+                .unwrap();
+            assert_eq!(edge.symbols, [symbol]);
+        }
+        let stack = firmware_analysis_core::stack::analyze_stack(&analysis, &build.root).unwrap();
+        assert!(stack.entries.iter().any(
+            |entry| entry.function == "telemetry_collect" && entry.symbol_candidates.len() == 1
+        ));
+    }
+    let stripped =
+        analyze_build_firmware(&build, &build.root.join("cortex-m-stripped.elf"), None).unwrap();
+    assert_eq!(stripped.dependencies.nodes.len(), 3);
+    assert_eq!(stripped.dependencies.edges.len(), 5);
+    assert!(stripped
+        .dependencies
+        .nodes
+        .iter()
+        .all(|n| n.usage.is_none()));
+}

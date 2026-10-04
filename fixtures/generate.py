@@ -22,9 +22,10 @@ flags = ['-mcpu=cortex-m3', '-mthumb', '-ffreestanding', '-fno-builtin', '-fno-c
          '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '-O0', '-g', '-gdwarf-4', '-fstack-usage']
 if not args.gcc:
     flags += ['--target=arm-none-eabi']
+sources = ['main', 'diag', 'telemetry']
 for variant, extra in [('cortex-m', 0), ('cortex-m-grown', 8)]:
     objects = []
-    for source in ['main', 'diag']:
+    for source in sources:
         obj = build / f'{variant}-{source}.o'
         subprocess.run([compiler, *flags, f'-DEXTRA={extra}', '-c', f'fixtures/src/{source}.c', '-o', str(obj)], check=True)
         objects.append(str(obj))
@@ -40,7 +41,10 @@ for variant, extra in [('cortex-m', 0), ('cortex-m-grown', 8)]:
         strip_flags = (['-Wl,--strip-all' if args.gcc else '--strip-all']
                        if name == 'cortex-m-stripped' else [])
         subprocess.run([*command, map_flag, *strip_flags, '-o', str(root / f'{name}.elf')], check=True)
+        # GNU ld emits spaces at the ends of fill rows; keep checked-in maps clean.
+        mapfile.write_text('\n'.join(line.rstrip() for line in mapfile.read_text().splitlines()) + '\n')
     if variant == 'cortex-m':
-        for su in build.glob(f'{variant}-*.su'):
+        for source in sources:
+            su = build / f'{variant}-{source}.su'
             shutil.copyfile(su, root / su.name)
 print('Generated ELF, linker map, and compiler stack-usage fixtures.')

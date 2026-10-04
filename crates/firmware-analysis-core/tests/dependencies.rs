@@ -171,3 +171,45 @@ fn long_symbols_and_same_basename_objects_keep_distinct_identities() {
     assert!(graph.nodes.iter().any(|n| n.id == "object:second/main.o"));
     assert_eq!(graph.edges[0].symbols, [symbol]);
 }
+
+#[test]
+fn weak_aliases_use_exact_function_ranges_and_reject_conflicting_owners() {
+    let mut analysis = fixture();
+    let symbol = analysis
+        .symbols
+        .iter()
+        .find(|s| s.name == "weak_callback")
+        .unwrap()
+        .clone();
+    let text = "Cross Reference Table\nSymbol File\ncallback_alias  main.o\nReset_Handler  main.o\ndiagnose  diag.o\n  main.o\n";
+    let graph = from_map(&analysis, text, "alias.map").unwrap();
+    let main = graph
+        .nodes
+        .iter()
+        .find(|n| n.label.ends_with("/main.c"))
+        .unwrap();
+    assert_eq!(main.objects, ["main.o"]);
+    let expected_flash: u64 = analysis
+        .symbols
+        .iter()
+        .filter(|s| {
+            s.source_file
+                .as_ref()
+                .is_some_and(|file| file.ends_with("main.c"))
+        })
+        .map(|s| s.usage.flash)
+        .sum();
+    assert_eq!(main.usage.unwrap().flash, expected_flash);
+    let mut conflicting = symbol;
+    conflicting.name = "folded_function".into();
+    conflicting.dwarf_compilation_unit = Some("other/unit.c".into());
+    analysis.symbols.push(conflicting);
+    let graph = from_map(&analysis, text, "ambiguous-alias.map").unwrap();
+    assert!(graph
+        .nodes
+        .iter()
+        .find(|n| n.label == "main.o")
+        .unwrap()
+        .usage
+        .is_none());
+}

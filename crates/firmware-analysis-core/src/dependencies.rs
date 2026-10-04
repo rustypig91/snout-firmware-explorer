@@ -39,11 +39,43 @@ fn owner(symbol: &Symbol) -> Option<(String, String, &'static str)> {
     }
 }
 
+/// A weak alias can inherit a unit only when its exact function range has one
+/// known owner. Distinct owners at a folded address remain ambiguous.
+fn resolved_owners(analysis: &Analysis) -> Vec<Option<(String, String, &'static str)>> {
+    let mut ranges: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
+    for symbol in &analysis.symbols {
+        if symbol.kind == "Function" && symbol.size > 0 {
+            if let Some(unit) = owner(symbol) {
+                ranges
+                    .entry((symbol.section_index, symbol.normalized_address, symbol.size))
+                    .or_default()
+                    .insert(unit);
+            }
+        }
+    }
+    analysis
+        .symbols
+        .iter()
+        .map(|symbol| {
+            owner(symbol).or_else(|| {
+                if !symbol.weak || symbol.kind != "Function" || symbol.size == 0 {
+                    return None;
+                }
+                ranges
+                    .get(&(symbol.section_index, symbol.normalized_address, symbol.size))
+                    .filter(|units| units.len() == 1)
+                    .and_then(|units| units.first())
+                    .cloned()
+            })
+        })
+        .collect()
+}
+
 /// Source locations in headers are deliberately not used as compilation-unit identities.
 pub fn units(analysis: &Analysis) -> DependencyGraph {
     let mut nodes = BTreeMap::new();
-    for symbol in &analysis.symbols {
-        let Some((id, label, evidence)) = owner(symbol) else {
+    for (symbol, owner) in analysis.symbols.iter().zip(resolved_owners(analysis)) {
+        let Some((id, label, evidence)) = owner else {
             continue;
         };
         let node = nodes.entry(id.clone()).or_insert_with(|| DependencyNode {
@@ -119,21 +151,23 @@ pub fn from_map(analysis: &Analysis, text: &str, path: &str) -> Result<Dependenc
     graph.notes.clear();
     graph.map_path = Some(path.into());
     graph.notes.push("Arrows mean linker symbol references, including data and function addresses; they are not a function call graph. Cross references may include discarded code. Map matching is not proof of build ownership.".into());
-    let mut definitions: BTreeMap<&str, Vec<&Symbol>> = BTreeMap::new();
-    for symbol in &analysis.symbols {
-        definitions.entry(&symbol.name).or_default().push(symbol);
+    let mut definitions: BTreeMap<&str, BTreeSet<Option<String>>> = BTreeMap::new();
+    for (symbol, owner) in analysis.symbols.iter().zip(resolved_owners(analysis)) {
+        definitions
+            .entry(&symbol.name)
+            .or_default()
+            .insert(owner.map(|unit| unit.0));
     }
     let mut candidates: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut objects = BTreeSet::new();
     for reference in &references {
         objects.insert(reference.definition.clone());
         objects.extend(reference.users.iter().cloned());
-        if let Some(symbols) = definitions.get(reference.symbol.as_str()) {
-            let owners: BTreeSet<_> = symbols.iter().map(|s| owner(s).map(|o| o.0)).collect();
+        if let Some(owners) = definitions.get(reference.symbol.as_str()) {
             // An unknown or ambiguous definition prevents association of this object.
             let entry = candidates.entry(reference.definition.clone()).or_default();
             if owners.len() == 1 && !owners.contains(&None) {
-                entry.insert(owners.into_iter().next().flatten().unwrap());
+                entry.insert(owners.first().unwrap().as_ref().unwrap().clone());
             } else {
                 entry.insert(String::new());
             }

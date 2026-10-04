@@ -20,7 +20,7 @@ fn analysis_commands_emit_versioned_json() {
         );
         let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(json["schema_version"], 1);
-        assert_eq!(json["totals"]["flash"], 260);
+        assert_eq!(json["totals"]["flash"], 380);
         assert!(json["warnings"].is_array());
     }
 }
@@ -91,6 +91,6 @@ fn configured_layout_and_text_output_work() {
     let output = run(&["analyze", &fixture("cortex-m.elf"), "--config", &config]);
     assert!(output.status.success());
     let text = String::from_utf8(output.stdout).unwrap();
-    assert!(text.contains("260 B"));
+    assert!(text.contains("380 B"));
     assert!(text.contains("232 B"));
 }

@@ -7,6 +7,7 @@ volatile unsigned samples[16 + EXTRA];
 const unsigned baudrate_table[] = {9600, 19200, 38400, 115200};
 static volatile unsigned private_state;
 extern unsigned diagnose(unsigned);
+extern unsigned telemetry_collect(unsigned);
 __attribute__((section(".ram_code"), noinline))
 unsigned ram_function(unsigned value) { return value * 3 + 1; }
 __attribute__((weak, noinline))
@@ -16,6 +17,7 @@ __attribute__((noinline)) unsigned cpp_function(unsigned) __asm__("_Z12cpp_funct
 unsigned cpp_function(unsigned value) { return value + initialized; }
 void Reset_Handler(void) {
     samples[0] = diagnose(ram_function(initialized));
+    samples[1] = telemetry_collect(initialized);
     weak_callback();
     for (;;) { private_state++; }
 }

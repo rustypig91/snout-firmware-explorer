@@ -1,3 +1,5 @@
+extern unsigned telemetry_scale(unsigned);
+
 static volatile unsigned diagnostic_count = 7;
 static const unsigned limits[] = {12, 24, 48, 96};
 __attribute__((section(".unusual_constants"), used))
@@ -7,5 +9,5 @@ unsigned diagnose(unsigned value) {
     volatile unsigned scratch[8];
     scratch[0] = limits[value & 3];
     diagnostic_count += scratch[0];
-    return diagnostic_count;
+    return telemetry_scale(diagnostic_count);
 }

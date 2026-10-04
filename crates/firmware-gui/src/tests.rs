@@ -101,7 +101,7 @@ fn overview_explains_reservations_and_links_growth_to_section_comparison() {
             .iter()
             .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == text))
     };
-    assert!(has_text("Flash: 260 B used | Capacity unknown"));
+    assert!(has_text("Flash: 380 B used | Capacity unknown"));
     assert!(has_text("RAM: 264 B used | Capacity unknown"));
     assert!(!has_text("Flash payload"));
     assert!(!has_text("Static RAM"));
@@ -1623,4 +1623,42 @@ fn dependency_map_choices_survive_refresh_restart_and_failed_import() {
     restored.reset_build_settings();
     finish_job(&mut restored);
     assert_eq!(restored.saved_dependency_map(&firmware), None);
+}
+
+#[test]
+fn committed_fixture_renders_three_bubbles_and_five_dependency_arrowheads() {
+    let mut app = Explorer::default();
+    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures"));
+    finish_job(&mut app);
+    app.open(app.build.as_ref().unwrap().root.join("cortex-m.elf"));
+    finish_job(&mut app);
+    assert_eq!(app.analysis.as_ref().unwrap().dependencies.edges.len(), 5);
+    app.change_view(View::Dependencies);
+    let ctx = egui::Context::default();
+    shell::configure_style(&ctx);
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 900.0),
+            )),
+            ..Default::default()
+        },
+        |ctx| app.show(ctx),
+    );
+    let bubbles = output
+        .shapes
+        .iter()
+        .filter(|shape| {
+            matches!(&shape.shape,
+                egui::Shape::Circle(circle) if circle.fill == egui::Color32::from_rgb(40, 100, 140)
+            )
+        })
+        .count();
+    let arrow_color = ctx.style().visuals.text_color().gamma_multiply(0.8);
+    let arrows = output.shapes.iter().filter(|shape| matches!(&shape.shape,
+        egui::Shape::Path(path) if path.closed && path.points.len() == 3 && path.fill == arrow_color
+    )).count();
+    assert_eq!(bubbles, 3);
+    assert_eq!(arrows, 5);
 }

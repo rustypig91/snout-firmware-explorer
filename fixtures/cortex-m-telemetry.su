@@ -1,0 +1,2 @@
+fixtures/src/telemetry.c:7:10:telemetry_scale	16	static
+fixtures/src/telemetry.c:12:10:telemetry_collect	24	static
