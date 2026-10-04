@@ -104,12 +104,48 @@ fn layout(
     (positions, headings)
 }
 
+/// Distance along an edge needed to clear both the circle and its filename.
+fn endpoint_clearance(
+    origin: egui::Pos2,
+    direction: egui::Vec2,
+    radius: f32,
+    label: egui::Rect,
+) -> f32 {
+    if !label.is_positive() {
+        return radius;
+    }
+    let mut near = 0.0_f32;
+    let mut far = f32::INFINITY;
+    for (position, delta, min, max) in [
+        (origin.x, direction.x, label.min.x, label.max.x),
+        (origin.y, direction.y, label.min.y, label.max.y),
+    ] {
+        if delta.abs() < 1e-6 {
+            if position < min || position > max {
+                return radius;
+            }
+        } else {
+            let a = (min - position) / delta;
+            let b = (max - position) / delta;
+            near = near.max(a.min(b));
+            far = far.min(a.max(b));
+        }
+    }
+    if near <= far {
+        radius.max(far)
+    } else {
+        radius
+    }
+}
+
 /// Keep arrowheads visible at every zoom level and outside the dependency node.
 fn dependency_arrow(
     from: egui::Pos2,
     to: egui::Pos2,
     from_radius: f32,
     to_radius: f32,
+    from_label: egui::Rect,
+    to_label: egui::Rect,
 ) -> Option<(egui::Pos2, [egui::Pos2; 3])> {
     let delta = to - from;
     let distance = delta.length();
@@ -120,6 +156,11 @@ fn dependency_arrow(
     let perpendicular = egui::vec2(-direction.y, direction.x);
     // Opposing references get separate lanes so both directions remain visible.
     let offset = perpendicular * 5.0;
+    let from_radius = endpoint_clearance(from + offset, direction, from_radius, from_label);
+    let to_radius = endpoint_clearance(to + offset, -direction, to_radius, to_label);
+    if distance <= from_radius + to_radius + 16.0 {
+        return None;
+    }
     let start = from + direction * (from_radius + 4.0) + offset;
     let tip = to - direction * (to_radius + 6.0) + offset;
     let length = 11.0_f32.min((tip - start).length() * 0.4);
@@ -270,6 +311,43 @@ impl Explorer {
                 )
             })
             .collect();
+        // Measure labels once so edge clearance, painting and hit testing agree.
+        let labels: BTreeMap<_, _> = nodes
+            .iter()
+            .map(|node| {
+                let center = screen(positions[&node.id]);
+                let radius = radii[node.id.as_str()];
+                let label = short_path(&node.label, nodes.iter().map(|n| n.label.as_str()));
+                let label = if label.chars().count() > 32 {
+                    format!(
+                        "…{}",
+                        label
+                            .chars()
+                            .skip(label.chars().count() - 31)
+                            .collect::<String>()
+                    )
+                } else {
+                    label
+                };
+                let galley = painter.layout_no_wrap(
+                    label,
+                    egui::FontId::proportional((12.0 * scale).clamp(9.0, 16.0)),
+                    ui.visuals().text_color(),
+                );
+                let text_rect = egui::Rect::from_center_size(
+                    center + egui::vec2(0.0, radius + 14.0),
+                    galley.size(),
+                );
+                (
+                    node.id.as_str(),
+                    (
+                        text_rect.expand2(egui::vec2(5.0, 3.0)),
+                        text_rect.min,
+                        galley,
+                    ),
+                )
+            })
+            .collect();
         let pointer = response.hover_pos();
         let mut hit_edge = None;
         let mut distance = 8.0;
@@ -285,6 +363,8 @@ impl Explorer {
                 to,
                 radii[edge.from.as_str()].max(3.0),
                 radii[edge.to.as_str()].max(3.0),
+                labels[edge.from.as_str()].0,
+                labels[edge.to.as_str()].0,
             ) else {
                 continue;
             };
@@ -350,38 +430,17 @@ impl Explorer {
                     ui.visuals().text_color(),
                 ),
             );
-            let label = short_path(&node.label, nodes.iter().map(|n| n.label.as_str()));
-            let label = if label.chars().count() > 32 {
-                format!(
-                    "…{}",
-                    label
-                        .chars()
-                        .rev()
-                        .take(31)
-                        .collect::<String>()
-                        .chars()
-                        .rev()
-                        .collect::<String>()
-                )
-            } else {
-                label
-            };
-            let label_rect = egui::Rect::from_center_size(
-                center + egui::vec2(0.0, radius + 14.0),
-                egui::vec2(200.0 * scale.clamp(0.6, 1.0), 28.0),
-            );
-            painter.text(
-                label_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                label,
-                egui::FontId::proportional((12.0 * scale).clamp(9.0, 16.0)),
-                ui.visuals().text_color(),
-            );
+            let label_rect = labels[node.id.as_str()].0;
             if pointer
                 .is_some_and(|p| p.distance(center) <= radius.max(8.0) || label_rect.contains(p))
             {
                 hit_node = Some(*node);
             }
+        }
+        // Paint every filename after all edges and circles, including crossing edges.
+        for (label_rect, position, galley) in labels.values() {
+            painter.rect_filled(*label_rect, 3.0, ui.visuals().extreme_bg_color);
+            painter.galley(*position, galley.clone(), ui.visuals().text_color());
         }
         for (label, pos) in headings {
             painter.text(
@@ -455,16 +514,68 @@ mod tests {
             let from = egui::pos2(20.0, 40.0);
             let to = from + egui::vec2(400.0, 100.0) * scale;
             let direction = (to - from).normalized();
-            let (_, head) = dependency_arrow(from, to, 24.0 * scale, 47.0 * scale).unwrap();
+            let (_, head) = dependency_arrow(
+                from,
+                to,
+                24.0 * scale,
+                47.0 * scale,
+                egui::Rect::NOTHING,
+                egui::Rect::NOTHING,
+            )
+            .unwrap();
             let base = head[1].lerp(head[2], 0.5);
             assert!((head[0] - base).dot(direction) > 0.0);
             assert!(head[0].distance(to) > 47.0 * scale);
             assert!(head[0].distance(to) < head[0].distance(from));
             assert!(head[0].distance(base) <= 11.01);
-            let (_, reversed) = dependency_arrow(to, from, 47.0 * scale, 24.0 * scale).unwrap();
+            let (_, reversed) = dependency_arrow(
+                to,
+                from,
+                47.0 * scale,
+                24.0 * scale,
+                egui::Rect::NOTHING,
+                egui::Rect::NOTHING,
+            )
+            .unwrap();
             assert!(reversed[0].distance(from) < reversed[0].distance(to));
         }
-        assert!(dependency_arrow(egui::Pos2::ZERO, egui::Pos2::ZERO, 10.0, 10.0).is_none());
+        assert!(dependency_arrow(
+            egui::Pos2::ZERO,
+            egui::Pos2::ZERO,
+            10.0,
+            10.0,
+            egui::Rect::NOTHING,
+            egui::Rect::NOTHING
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn arrows_clear_filenames_in_both_directions_at_every_zoom() {
+        for scale in [0.2, 1.0, 8.0] {
+            let upper = egui::pos2(100.0, 100.0);
+            let lower = upper + egui::vec2(0.0, 400.0 * scale);
+            let radius = 40.0 * scale;
+            let label = |center| {
+                egui::Rect::from_center_size(
+                    center + egui::vec2(0.0, radius + 14.0),
+                    egui::vec2(100.0, 18.0),
+                )
+            };
+            let upper_label = label(upper);
+            let lower_label = label(lower);
+            let (start, _) =
+                dependency_arrow(upper, lower, radius, radius, upper_label, lower_label).unwrap();
+            assert!(start.y > upper_label.max.y);
+            let (_, head) =
+                dependency_arrow(lower, upper, radius, radius, lower_label, upper_label).unwrap();
+            assert!(head.iter().all(|point| point.y > upper_label.max.y));
+            // Sideways connections should still attach near the circle.
+            assert_eq!(
+                endpoint_clearance(upper, egui::Vec2::X, radius, upper_label),
+                radius
+            );
+        }
     }
 
     #[test]
@@ -532,6 +643,26 @@ mod tests {
             })
             .collect();
         assert_eq!(circles.len(), 3);
+        let last_circle = output
+            .shapes
+            .iter()
+            .rposition(|shape| matches!(shape.shape, egui::Shape::Circle(_)))
+            .unwrap();
+        for label in ["app/main.c", "drivers/spi.c", "unused/main.c"] {
+            let index = output.shapes.iter().position(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == label)).unwrap();
+            assert!(index > last_circle);
+            let egui::Shape::Text(text) = &output.shapes[index].shape else {
+                unreachable!()
+            };
+            let egui::Shape::Rect(background) = &output.shapes[index - 1].shape else {
+                panic!("filename needs an opaque background")
+            };
+            assert_eq!(background.fill, ctx.style().visuals.extreme_bg_color);
+            assert!(background
+                .rect
+                .contains_rect(egui::Rect::from_min_size(text.pos, text.galley.size())));
+        }
+
         let click = |app: &mut Explorer, position| {
             for pressed in [true, false] {
                 frame(
