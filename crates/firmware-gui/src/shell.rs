@@ -151,6 +151,30 @@ impl Explorer {
                                 self.pick_baseline();
                             }
                             ui.separator();
+                            ui.menu_button("Updates", |ui| {
+                                ui.label(format!("Snout v{}", env!("CARGO_PKG_VERSION")));
+                                if ui
+                                    .add_enabled(
+                                        self.updates.idle(),
+                                        egui::Button::new("Check for updates..."),
+                                    )
+                                    .clicked()
+                                {
+                                    self.start_update_check(ctx, true);
+                                    ui.close_menu();
+                                }
+                                if ui
+                                    .checkbox(
+                                        &mut self.updates.check_on_startup,
+                                        "Check on startup",
+                                    )
+                                    .changed()
+                                {
+                                    if let Err(error) = self.save_preferences() {
+                                        self.error = Some(error.to_string());
+                                    }
+                                }
+                            });
                             ui.menu_button("Layout", |ui| {
                                 ui.label(format!(
                                     "{} memory regions configured",

@@ -45,35 +45,37 @@ impl Explorer {
     }
 
     pub(super) fn preference_value(&self) -> serde_json::Value {
-        serde_json::json!({"version": 1, "folder": self.build.as_ref().map(|b| &b.root), "firmware": self.analysis.as_ref().map(|a| &a.path), "layout": self.layout_override, "layout_source": self.layout_source, "view": self.view.label(), "directories": self.tree, "metric": self.overview_metric.label(), "contributor_ram": self.contributor_ram})
+        serde_json::json!({"version": 1, "check_updates_on_startup": self.updates.check_on_startup, "skipped_version": self.updates.skipped_version, "folder": self.build.as_ref().map(|b| &b.root), "firmware": self.analysis.as_ref().map(|a| &a.path), "layout": self.layout_override, "layout_source": self.layout_source, "view": self.view.label(), "directories": self.tree, "metric": self.overview_metric.label(), "contributor_ram": self.contributor_ram})
     }
     pub(super) fn save_preferences(&self) -> Result<(), Box<dyn std::error::Error>> {
         let Some(path) = preferences_path() else {
             return Ok(());
         };
-        if self.build.is_none() {
-            return Ok(());
-        }
         std::fs::create_dir_all(path.parent().unwrap())?;
         std::fs::write(path, serde_json::to_vec_pretty(&self.preference_value())?)?;
         Ok(())
     }
-    pub(super) fn restore_preferences(&mut self) {
+    pub(super) fn restore_preferences(&mut self, restore_workspace: bool) {
         let Some(path) = preferences_path() else {
             return;
         };
         let Ok(data) = std::fs::read(path) else {
             return;
         };
-        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&data) else {
+        let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&data) else {
             return;
         };
+        if !restore_workspace {
+            value["folder"] = serde_json::Value::Null;
+        }
         self.apply_preferences(&value);
     }
     pub(super) fn apply_preferences(&mut self, value: &serde_json::Value) {
         if value["version"].as_u64() != Some(1) {
             return;
         }
+        self.updates.check_on_startup = value["check_updates_on_startup"].as_bool().unwrap_or(true);
+        self.updates.skipped_version = value["skipped_version"].as_str().map(str::to_owned);
         self.view = View::ALL
             .into_iter()
             .find(|v| Some(v.label()) == value["view"].as_str())

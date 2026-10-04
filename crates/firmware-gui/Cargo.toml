@@ -3,6 +3,7 @@ name = "firmware-gui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "A desktop explorer for embedded firmware memory usage."
 
 [dependencies]
 firmware-analysis-core.workspace = true
@@ -10,8 +11,27 @@ eframe = { version = "0.30", default-features = false, features = ["default_font
 rfd = "0.16"
 egui_extras = "0.30"
 serde_json.workspace = true
+crossbeam-channel = "0.5"
+self-replace = "1.5"
+sha2 = "0.10"
+tempfile = "3"
+ureq = "3.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ashpd = { version = "0.11", default-features = false, features = ["async-std"] }
 futures-lite = "2"
 winit = { version = "0.30", default-features = false, features = ["wayland-csd-adwaita"] }
+
+[package.metadata.deb]
+name = "snout"
+maintainer = "Christoffer Zakrisson <rustypig91@gmail.com>"
+copyright = "Christoffer Zakrisson"
+license-file = ["../../LICENSE", "0"]
+section = "electronics"
+priority = "optional"
+depends = "$auto, libx11-6, libxcursor1, libxi6, libxrandr2, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libwayland-cursor0, libwayland-egl1"
+assets = [
+    ["target/release/firmware-gui", "usr/bin/", "755"],
+    ["packaging/linux/snout.desktop", "usr/share/applications/", "644"],
+    ["packaging/icons/snout.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+]

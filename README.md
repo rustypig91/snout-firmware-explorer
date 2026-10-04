@@ -8,8 +8,10 @@ Install a current stable Rust toolchain. Windows builds need the Visual Studio C
 
 ```sh
 cargo build --workspace --locked
-cargo run -p firmware-gui -- fixtures
+cargo run -p firmware-gui -- fixtures --elf cortex-m.elf
 ```
+
+Pass `--elf FILE` to select firmware automatically after the folder scan. Relative file paths are resolved inside the supplied build folder. You can also open an ELF directly: `firmware-gui fixtures/cortex-m.elf`. With no path, Snout restores the saved workspace.
 
 Select **Open build folder**, press Ctrl+O, or drag a folder into the window. The application recursively scans for linked ELF images (including `.elf`, `.axf`, `.out` and extensionless images), linker maps (`.map`), stack reports (`.su`), linker scripts (`.ld`/`.lds`), and valid memory-layout JSON files. The **Build files** sidebar lists the discovered artifacts with relative paths and a search field. Select a firmware image to analyze it, or a supporting file to preview it. Rescan the folder after rebuilding.
 
@@ -37,6 +39,20 @@ cargo build --workspace --release --locked
 ```
 
 Executables are `target/release/firmware-gui` and `target/release/firmware-explorer` (with `.exe` on Windows). Neither requires a Rust installation on the destination machine. Desktop platform libraries still apply.
+
+## Releases and updates
+
+The [build workflow](.github/workflows/build.yml) follows Pigtail's Windows/Linux release workflow. Run it manually on a branch, or label a PR `build`, `build-linux`, or `build-windows` to produce downloadable artifacts. Pushing `v<workspace-version>` publishes a GitHub release; the workflow rejects tags that do not match `Cargo.toml`.
+
+Release assets include portable archives containing the GUI and CLI, standalone GUI executables for the updater, Windows MSI and Setup installers, a Debian package, and an AppImage. Linux builds also capture `snout-screenshot.png` using the regular app with `fixtures/cortex-m.elf` selected. There is no demo build. The screenshot runs in an isolated Xvfb session with fresh preferences and update checks disabled.
+
+Build packages locally using `bash scripts/build-release.sh` on x86_64 Debian/Ubuntu or `scripts\build-release.cmd` from a Windows developer shell. Output goes to `target/release-assets/<target>/`. The Linux script needs the desktop build packages listed above, plus `curl`, `pkg-config`, and `dpkg-dev`; packaging downloads linuxdeploy and installs cargo-deb if needed. Windows requires Rust, the C++ Build Tools and Windows SDK; the script downloads portable WiX and Inno Setup. To capture a screenshot locally, install `xvfb xauth xdotool imagemagick`, then run:
+
+```sh
+bash scripts/capture-screenshot.sh target/release/firmware-gui target/snout-screenshot.png fixtures/cortex-m.elf
+```
+
+Snout checks GitHub releases at startup. **Menu → Updates** provides a manual check and a persistent startup-check toggle. Startup checks stay quiet on network errors, when up to date, or for a skipped version. Download and installation begin only when you press **Update**, and the download's published size and SHA-256 digest are verified before installation. Workspace preferences are saved before installing and restored after restarting. Portable binaries update in place, AppImages replace the original AppImage, and Windows Setup installations reuse their existing installation scope. Debian installations use the package manager instead. `--no-update-check` suppresses the startup request for one launch.
 
 ## Architecture
 

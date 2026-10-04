@@ -1,4 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+mod startup;
+mod update;
+mod update_ui;
+mod wake;
+use wake::Wake;
+static RESTART_PATH: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
 mod display;
 mod overview;
 mod pie;
@@ -103,6 +109,7 @@ struct Explorer {
     top_files: [Vec<usize>; 2],
     top_symbols: [Vec<usize>; 2],
     layout_source: String,
+    updates: update_ui::Updates,
     pending_restore: Option<(PathBuf, Option<AnalysisOptions>, String)>,
 }
 impl Default for Explorer {
@@ -140,6 +147,7 @@ impl Default for Explorer {
             top_symbols: Default::default(),
             layout_source: String::new(),
             pending_restore: None,
+            updates: update_ui::Updates::default(),
         }
     }
 }
@@ -358,10 +366,25 @@ impl eframe::App for Explorer {
         if self.receiver.is_some() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
+        self.poll_updates(ctx);
         self.show(ctx);
+        self.show_updates(ctx);
     }
 }
 fn main() -> eframe::Result {
+    let startup = match startup::parse(std::env::args_os().skip(1)) {
+        Ok(Some(startup)) => startup,
+        Ok(None) => return Ok(()),
+        Err(error) => {
+            eprintln!("{error}");
+            rfd::MessageDialog::new()
+                .set_title("Invalid arguments")
+                .set_description(error)
+                .set_level(rfd::MessageLevel::Error)
+                .show();
+            std::process::exit(2);
+        }
+    };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 820.0])
@@ -371,17 +394,36 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "Rusty's Snout - Firmware Explorer",
         options,
-        Box::new(|cc| {
+        Box::new(move |cc| {
             shell::configure_style(&cc.egui_ctx);
             #[cfg(target_os = "linux")]
             window_theme::apply_startup_theme(cc.egui_ctx.clone());
             let mut app = Explorer::default();
-            if let Some(path) = std::env::args_os().nth(1) {
-                app.scan_build(path.into());
-            } else {
-                app.restore_preferences();
+            app.restore_preferences(startup.folder.is_none());
+            app.open_startup(&startup);
+            if app.updates.check_on_startup && !startup.no_update_check {
+                app.start_update_check(&cc.egui_ctx, false);
             }
             Ok(Box::new(app))
         }),
-    )
+    )?;
+    if let Some(path) = RESTART_PATH.lock().expect("restart path lock").take() {
+        let mut command = std::process::Command::new(&path);
+        if let Some(directory) = path.parent() {
+            command.current_dir(directory);
+        }
+        for key in ["APPIMAGE", "APPDIR", "OWD", "ARGV0"] {
+            command.env_remove(key);
+        }
+        if let Err(error) = command.spawn() {
+            rfd::MessageDialog::new()
+                .set_title("Update installed")
+                .set_description(format!(
+                    "Snout was updated, but could not restart: {error}. Please open it again."
+                ))
+                .set_level(rfd::MessageLevel::Error)
+                .show();
+        }
+    }
+    Ok(())
 }

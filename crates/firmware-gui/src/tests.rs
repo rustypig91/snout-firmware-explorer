@@ -784,3 +784,42 @@ fn notes_and_cached_rankings_follow_the_report_and_view() {
         );
     }
 }
+
+#[test]
+fn startup_elf_is_selected_after_scan_with_map_and_stack_reports() {
+    let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+    let startup = startup::parse([
+        folder.into_os_string(),
+        "--elf".into(),
+        "cortex-m.elf".into(),
+    ])
+    .unwrap()
+    .unwrap();
+    let mut app = Explorer::default();
+    app.open_startup(&startup);
+    finish_job(&mut app);
+    assert!(app.analysis.is_none());
+    assert!(app.receiver.is_some());
+    finish_job(&mut app);
+    assert!(app.error.is_none());
+    assert_eq!(
+        PathBuf::from(&app.analysis.as_ref().unwrap().path),
+        startup.elf.unwrap()
+    );
+    assert_eq!(app.options.regions.len(), 2);
+    assert!(app.stack.is_some());
+}
+
+#[test]
+fn update_preferences_round_trip_without_an_open_workspace() {
+    let mut app = Explorer::default();
+    app.updates.check_on_startup = false;
+    app.updates.skipped_version = Some("v0.2.0".into());
+    let mut restored = Explorer::default();
+    restored.apply_preferences(&app.preference_value());
+    assert!(!restored.updates.check_on_startup);
+    assert_eq!(restored.updates.skipped_version.as_deref(), Some("v0.2.0"));
+    restored.apply_preferences(&serde_json::json!({"version": 1}));
+    assert!(restored.updates.check_on_startup);
+    assert!(restored.updates.skipped_version.is_none());
+}
