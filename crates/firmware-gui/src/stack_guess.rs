@@ -168,15 +168,15 @@ pub(super) fn guess(analysis: &Analysis, build: &BuildFolder) -> Result<LoadedSt
         let mut symbol_files: BTreeMap<&str, BTreeSet<PathBuf>> = BTreeMap::new();
         let mut matched_files = BTreeSet::new();
         for entry in &report.entries {
-            if entry.symbol_candidates.len() != 1 {
-                continue;
-            }
             let path = PathBuf::from(&entry.report_file);
-            matched_files.insert(path.clone());
-            symbol_files
-                .entry(&entry.symbol_candidates[0])
-                .or_default()
-                .insert(path);
+            if entry.symbol_candidates.len() == 1 {
+                matched_files.insert(path.clone());
+            }
+            // An unresolved choice between ELF symbols still competes with
+            // other reports for each candidate; ignoring it invents ownership.
+            for symbol in &entry.symbol_candidates {
+                symbol_files.entry(symbol).or_default().insert(path.clone());
+            }
         }
         let ambiguous: BTreeSet<_> = symbol_files
             .values()
@@ -488,6 +488,32 @@ mod tests {
         assert!(selection.contains(&chosen));
         assert!(!selection.contains(&other));
         assert_eq!(stack.entries[0].local_bytes, 56);
+    }
+
+    #[test]
+    fn ambiguous_symbol_candidates_still_block_overlapping_report_guesses() {
+        let (_dir, root, mut analysis) = setup();
+        let mut duplicate = analysis
+            .symbols
+            .iter()
+            .find(|s| s.name == "diagnose")
+            .unwrap()
+            .clone();
+        duplicate.address += 0x1000;
+        duplicate.source_line = None;
+        analysis.symbols.push(duplicate);
+        let unique = root.join("first/diag.su");
+        report(&unique, 56);
+        let ambiguous = root.join("second/diag.su");
+        std::fs::create_dir_all(ambiguous.parent().unwrap()).unwrap();
+        std::fs::write(&ambiguous, "diag.c:999:1:diagnose\t96\tstatic\n").unwrap();
+        let (stack, selection) = guess(&analysis, &scan_folder(&root).unwrap()).unwrap();
+        assert!(selection.is_none());
+        assert!(stack.entries.is_empty());
+        assert!(stack
+            .warnings
+            .iter()
+            .any(|warning| warning.starts_with("Ambiguous reports:")));
     }
 
     #[test]
