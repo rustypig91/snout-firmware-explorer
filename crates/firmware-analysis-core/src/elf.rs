@@ -248,9 +248,14 @@ pub fn analyze_bytes(
             ));
         }
     }
-    let has_dwarf = sections
-        .iter()
-        .any(|s| s.name == ".debug_info" || s.name == ".zdebug_info");
+    let has_dwarf = elf.section_headers.iter().any(|s| {
+        s.sh_type != SHT_NOBITS
+            && s.sh_size > 0
+            && matches!(
+                elf.shdr_strtab.get_at(s.sh_name),
+                Some(".debug_info" | ".zdebug_info")
+            )
+    });
     let endian = if elf.little_endian {
         gimli::RunTimeEndian::Little
     } else {
@@ -266,8 +271,14 @@ pub fn analyze_bytes(
             let data = elf
                 .section_headers
                 .iter()
-                .find(|s| elf.shdr_strtab.get_at(s.sh_name) == Some(id.name()))
-                .and_then(|s| bytes.get(s.sh_offset as usize..(s.sh_offset + s.sh_size) as usize))
+                .find(|s| {
+                    s.sh_type != SHT_NOBITS && elf.shdr_strtab.get_at(s.sh_name) == Some(id.name())
+                })
+                .and_then(|s| {
+                    let start = usize::try_from(s.sh_offset).ok()?;
+                    let end = usize::try_from(s.sh_offset.checked_add(s.sh_size)?).ok()?;
+                    bytes.get(start..end)
+                })
                 .unwrap_or(&[]);
             Ok(gimli::EndianSlice::new(data, endian))
         });

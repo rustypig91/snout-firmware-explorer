@@ -70,6 +70,7 @@ type Refreshed = (
     String,
 );
 enum Loaded {
+    ResetBuildSettings(Box<Loaded>),
     Refresh(Box<Refreshed>),
     Firmware(
         Analysis,
@@ -212,6 +213,14 @@ impl Explorer {
         }
     }
     fn open_with_layout(&mut self, path: PathBuf, layout: Option<AnalysisOptions>) {
+        self.load_firmware(path, layout, false);
+    }
+    fn load_firmware(
+        &mut self,
+        path: PathBuf,
+        layout: Option<AnalysisOptions>,
+        reset_settings: bool,
+    ) {
         let Some(build) = self.build.clone() else {
             return;
         };
@@ -230,7 +239,12 @@ impl Explorer {
                 }
                 Err(e) => { analysis.warnings.push(format!("Stack reports could not be loaded: {e}")); None }
             };
-            Ok(Loaded::Firmware(analysis, stack, layout, source))
+            let loaded = Loaded::Firmware(analysis, stack, layout, source);
+            Ok(if reset_settings {
+                Loaded::ResetBuildSettings(Box::new(loaded))
+            } else {
+                loaded
+            })
         });
     }
     fn configure(&mut self, path: Option<PathBuf>) {
@@ -299,6 +313,14 @@ impl Explorer {
                 self.region_cache_key = 0;
                 let refreshed = matches!(&result, Ok(Loaded::Refresh(_)));
                 let result = result.map(|loaded| match loaded {
+                    Loaded::ResetBuildSettings(loaded) => {
+                        if let Some(build) = &self.build {
+                            self.build_settings.remove(&build.root);
+                        }
+                        self.remembered_firmware = None;
+                        self.pending_restore = None;
+                        *loaded
+                    }
                     Loaded::Refresh(result) => {
                         let (build, a, stack, layout, source) = *result;
                         self.build = Some(Arc::new(build));
@@ -307,6 +329,7 @@ impl Explorer {
                     other => other,
                 });
                 match result {
+                    Ok(Loaded::ResetBuildSettings(_)) => unreachable!(),
                     Ok(Loaded::Refresh(_)) => unreachable!(),
                     Ok(Loaded::Build(build)) => {
                         self.build = Some(Arc::new(build));

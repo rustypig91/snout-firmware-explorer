@@ -419,6 +419,62 @@ fn map_rediscovery_commits_layout_only_after_successful_analysis() {
 }
 
 #[test]
+fn folder_reset_preserves_saved_choices_and_report_when_reanalysis_fails() {
+    let folder = tempfile::tempdir().unwrap();
+    for name in ["app.elf", "other.elf"] {
+        std::fs::write(
+            folder.path().join(name),
+            include_bytes!("../../../fixtures/cortex-m.elf"),
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        folder.path().join("app.map"),
+        include_bytes!("../../../fixtures/cortex-m.map"),
+    )
+    .unwrap();
+    std::fs::write(
+        folder.path().join("manual.map"),
+        include_bytes!("../../../fixtures/cortex-m-grown.map"),
+    )
+    .unwrap();
+    let mut app = Explorer::default();
+    app.scan_build(folder.path().to_owned());
+    finish_job(&mut app);
+    let root = app.build.as_ref().unwrap().root.clone();
+    for name in ["other.elf", "app.elf"] {
+        app.open(root.join(name));
+        finish_job(&mut app);
+        app.apply_map(root.join("manual.map"));
+        finish_job(&mut app);
+    }
+    app.preview = Some((root.join("manual.map"), "Preview".into()));
+    let preferences = app.preference_value();
+    let analysis = app.analysis.clone().unwrap();
+    let preview = app.preview.clone();
+    std::fs::write(root.join("app.elf"), b"incomplete rebuild").unwrap();
+    app.reset_build_settings();
+    finish_job(&mut app);
+    assert!(app.error.is_some());
+    assert!(Arc::ptr_eq(&analysis, app.analysis.as_ref().unwrap()));
+    assert_eq!(app.preference_value(), preferences);
+    assert_eq!(app.preview, preview);
+    assert_eq!(app.build_settings[&root].layouts.len(), 2);
+
+    std::fs::write(
+        root.join("app.elf"),
+        include_bytes!("../../../fixtures/cortex-m.elf"),
+    )
+    .unwrap();
+    app.reset_build_settings();
+    finish_job(&mut app);
+    assert!(app.error.is_none());
+    assert!(app.build_settings[&root].layouts.is_empty());
+    assert!(app.map_in_use(&root.join("app.map")));
+    assert!(app.preview.is_none());
+}
+
+#[test]
 fn folder_workflow_selects_firmware_and_loads_stack_automatically() {
     let mut app = Explorer::default();
     app.scan_build(PathBuf::from(concat!(
