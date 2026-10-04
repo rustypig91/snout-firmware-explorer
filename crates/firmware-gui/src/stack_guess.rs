@@ -58,6 +58,7 @@ pub(super) fn guess(analysis: &Analysis, build: &BuildFolder) -> Result<LoadedSt
         .cloned()
         .collect();
     let mut map_matches = BTreeSet::new();
+    let mut relocated_matches = BTreeSet::new();
     for object in objects {
         let expected = map_parent.join(&object);
         let expected = expected.canonicalize().unwrap_or(expected);
@@ -79,9 +80,23 @@ pub(super) fn guess(analysis: &Analysis, build: &BuildFolder) -> Result<LoadedSt
             .filter(|path| object.components().count() > 1 && path.ends_with(&object))
             .collect();
         if suffix_matches.len() == 1 {
-            map_matches.insert(suffix_matches[0].clone());
+            relocated_matches.insert(suffix_matches[0].clone());
         }
     }
+    // Relocated paths supply weaker evidence than exact map paths. A cleaned
+    // configuration can still leave a unique suffix for a missing object;
+    // keep suffix guesses in the closest shared subtree represented by matches.
+    if let Some(parent) = firmware.parent() {
+        if let Some(depth) = map_matches
+            .iter()
+            .chain(&relocated_matches)
+            .map(|path| common_depth(parent, path))
+            .max()
+        {
+            relocated_matches.retain(|path| common_depth(parent, path) == depth);
+        }
+    }
+    map_matches.extend(relocated_matches);
     let stem = firmware
         .file_stem()
         .unwrap_or_default()
@@ -479,6 +494,32 @@ mod tests {
         // A relocated report is still eligible within the selected configuration.
         let chosen = root.join("release/relocated/objects/diag.su");
         report(&chosen, 56);
+        let (stack, selection) = guess(&analysis, &scan_folder(&root).unwrap()).unwrap();
+        let selection = selection.unwrap();
+        assert!(selection.contains(&chosen));
+        assert!(!selection.contains(&other));
+        assert_eq!(stack.entries.len(), 1);
+        assert_eq!(stack.entries[0].local_bytes, 56);
+    }
+
+    #[test]
+    fn relocated_map_reports_do_not_mix_cleaned_build_configurations() {
+        let (_dir, root, mut analysis) = setup();
+        let elf = root.join("release/bin/app.elf");
+        std::fs::create_dir_all(elf.parent().unwrap()).unwrap();
+        std::fs::rename(&analysis.path, &elf).unwrap();
+        analysis.path = elf.display().to_string();
+        let map = root.join("release/app.map");
+        std::fs::write(
+            &map,
+            "Linker script and memory map\nLOAD objects/diag.o\nLOAD objects/main.o\n",
+        )
+        .unwrap();
+        analysis.dependencies.map_path = Some(map.display().to_string());
+        let chosen = root.join("release/relocated/objects/diag.su");
+        let other = root.join("debug/relocated/objects/main.su");
+        report(&chosen, 56);
+        report(&other, 96);
         let (stack, selection) = guess(&analysis, &scan_folder(&root).unwrap()).unwrap();
         let selection = selection.unwrap();
         assert!(selection.contains(&chosen));
