@@ -1,0 +1,266 @@
+name: "build"
+
+on:
+  # GitHub's Run workflow branch selector chooses the branch to build.
+  workflow_dispatch:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  verify-version:
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'build') ||
+      contains(github.event.pull_request.labels.*.name, 'build-linux') ||
+      contains(github.event.pull_request.labels.*.name, 'build-windows')
+    permissions:
+      contents: read
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      matrix: ${{ steps.platforms.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select build platforms
+        id: platforms
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+
+          labels = json.loads(os.environ["PR_LABELS"]) or []
+          all_platforms = os.environ["EVENT_NAME"] != "pull_request" or "build" in labels
+          platforms = []
+          if all_platforms or "build-linux" in labels:
+              platforms.append({"platform": "ubuntu-22.04", "target": "x86_64-unknown-linux-gnu"})
+          if all_platforms or "build-windows" in labels:
+              platforms.append({"platform": "windows-latest", "target": "x86_64-pc-windows-msvc"})
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write("matrix=" + json.dumps({"include": platforms}) + "\n")
+          PY
+      - name: Read workspace version
+        id: version
+        run: |
+          VERSION="$(grep -m1 '^version = "' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          echo "Workspace version: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Verify tag matches workspace version
+        # Only meaningful on tag builds; manual/branch runs have no version to check.
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          echo "Workspace version: ${{ steps.version.outputs.version }}"
+          echo "Tag version:       $TAG_VERSION"
+          if [ "${{ steps.version.outputs.version }}" != "$TAG_VERSION" ]; then
+            echo "::error::Release tag '$GITHUB_REF_NAME' does not match workspace version '${{ steps.version.outputs.version }}'"
+            exit 1
+          fi
+
+  build:
+    needs: verify-version
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.verify-version.outputs.matrix) }}
+
+    runs-on: ${{ matrix.platform }}
+    env:
+      VERSION: ${{ needs.verify-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install dependencies (ubuntu only)
+        if: startsWith(matrix.platform, 'ubuntu') # This must match the platform value defined above.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwayland-dev libxkbcommon-dev libgl1-mesa-dev \
+            libx11-6 libxcursor1 libxi6 libxrandr2 libxkbcommon-x11-0 \
+            xvfb xauth xdotool imagemagick libgl1-mesa-dri libglx-mesa0
+
+      - name: install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --locked --release --workspace --target ${{ matrix.target }}
+
+      - name: Package archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN_DIR="target/${{ matrix.target }}/release"
+          OUT="snout-v${VERSION}-${{ matrix.target }}"
+          mkdir "$OUT"
+          if [ "${{ matrix.platform }}" = "windows-latest" ]; then
+            cp "$BIN_DIR/firmware-gui.exe" "$BIN_DIR/firmware-explorer.exe" "$OUT/"
+          else
+            cp "$BIN_DIR/firmware-gui" "$BIN_DIR/firmware-explorer" "$OUT/"
+          fi
+          cp README.md LICENSE "$OUT/"
+          if [ "${{ matrix.platform }}" = "windows-latest" ]; then
+            7z a "$OUT.zip" "$OUT" >/dev/null
+            echo "ASSET=$OUT.zip" >> "$GITHUB_ENV"
+          else
+            tar czf "$OUT.tar.gz" "$OUT"
+            echo "ASSET=$OUT.tar.gz" >> "$GITHUB_ENV"
+          fi
+
+      # Uncompressed executables allow portable installations to update in place.
+      - name: Package updater executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="target/${{ matrix.target }}/release/firmware-gui"
+          ASSET="snout-v${VERSION}-${{ matrix.target }}"
+          if [ "${{ matrix.platform }}" = "windows-latest" ]; then
+            BIN="$BIN.exe"
+            ASSET="$ASSET.exe"
+          fi
+          # The Linux archive staging directory already has the asset's name.
+          mkdir -p updater-assets
+          cp "$BIN" "updater-assets/$ASSET"
+          echo "UPDATE_ASSET=updater-assets/$ASSET" >> "$GITHUB_ENV"
+
+      # --- Windows installer -------------------------------------------------
+      # WiX v3 is not guaranteed to be present on the runner image, so fetch a
+      # pinned copy and drive candle/light directly. The same crates/firmware-gui/
+      # wix/main.wxs also works locally via `cargo wix -p firmware-gui`.
+      - name: Install WiX toolset (windows only)
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -sSfLo wix.zip \
+            https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip
+          7z x wix.zip -owix-bin >/dev/null
+          echo "$PWD/wix-bin" >> "$GITHUB_PATH"
+
+      - name: Build MSI installer (windows only)
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          MSI="snout-v${VERSION}-${{ matrix.target }}.msi"
+          # candle.exe is a native tool, so it needs Windows paths — bash's $PWD
+          # is an MSYS path here. GITHUB_WORKSPACE is already Windows-style.
+          WS="$GITHUB_WORKSPACE"
+          candle.exe \
+            -nologo -arch x64 \
+            -dVersion="$VERSION" \
+            -dPlatform=x64 \
+            -dCargoTargetBinDir="$WS/target/${{ matrix.target }}/release" \
+            -out obj/ \
+            "$WS/crates/firmware-gui/wix/main.wxs"
+          light.exe \
+            -nologo \
+            -ext WixUIExtension \
+            -cultures:en-us \
+            -out "$MSI" \
+            obj/main.wixobj
+          echo "MSI_ASSET=$MSI" >> "$GITHUB_ENV"
+
+      # The click-through setup.exe that sits alongside the MSI. Runs under
+      # PowerShell rather than bash because ISCC's /D and /O switches would be
+      # mangled by MSYS path conversion.
+      - name: Build setup.exe installer (windows only)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe'
+          Invoke-WebRequest -Uri $url -OutFile innosetup.exe
+          # /PORTABLE=1 unpacks the toolset instead of installing it.
+          $p = Start-Process -FilePath .\innosetup.exe -Wait -PassThru -NoNewWindow `
+            -ArgumentList '/PORTABLE=1', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$env:GITHUB_WORKSPACE\inno"
+          if ($p.ExitCode -ne 0) { throw "unpacking Inno Setup failed with exit code $($p.ExitCode)" }
+          & "$env:GITHUB_WORKSPACE\inno\ISCC.exe" `
+            "/DAppVersion=$($env:VERSION)" `
+            "/DSourceBinDir=$env:GITHUB_WORKSPACE\target\${{ matrix.target }}\release" `
+            "/O$env:GITHUB_WORKSPACE" `
+            "$env:GITHUB_WORKSPACE\crates\firmware-gui\packaging\windows\snout.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+          "SETUP_ASSET=snout-v$($env:VERSION)-x86_64-setup.exe" |
+            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      # --- Linux packages ----------------------------------------------------
+      - name: Build .deb package (ubuntu only)
+        if: startsWith(matrix.platform, 'ubuntu')
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo install cargo-deb --locked
+          # --no-build reuses the release binary built above. cargo-deb prints
+          # the path of the package it wrote as its last line of stdout.
+          DEB="$(cargo deb -p firmware-gui --target ${{ matrix.target }} --no-build | tail -n1)"
+          dpkg-deb --info "$DEB"
+          dpkg-deb --contents "$DEB"
+          echo "Built $DEB"
+          echo "DEB_ASSET=$DEB" >> "$GITHUB_ENV"
+
+      - name: Build AppImage (ubuntu only)
+        if: startsWith(matrix.platform, 'ubuntu')
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash crates/firmware-gui/packaging/linux/build-appimage.sh \
+            "target/${{ matrix.target }}/release/firmware-gui" "$VERSION" .
+          echo "APPIMAGE_ASSET=snout-v${VERSION}-x86_64.AppImage" >> "$GITHUB_ENV"
+
+      - name: Capture release screenshot (ubuntu only)
+        if: startsWith(matrix.platform, 'ubuntu')
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -euo pipefail
+          SCREENSHOT="snout-screenshot.png"
+          bash scripts/capture-screenshot.sh \
+            "target/${{ matrix.target }}/release/firmware-gui" "$SCREENSHOT" fixtures/cortex-m.elf
+          echo "SCREENSHOT_ASSET=$SCREENSHOT" >> "$GITHUB_ENV"
+
+      - name: Upload build artifacts (non-release builds)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: snout-v${{ env.VERSION }}-${{ matrix.target }}-build-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          path: |
+            ${{ env.ASSET }}
+            ${{ env.UPDATE_ASSET }}
+            ${{ env.SETUP_ASSET }}
+            ${{ env.MSI_ASSET }}
+            ${{ env.DEB_ASSET }}
+            ${{ env.APPIMAGE_ASSET }}
+            ${{ env.SCREENSHOT_ASSET }}
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: "Rusty's Snout - Firmware Explorer v${{ env.VERSION }}"
+          body: "See the assets to download this version."
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          # Unset variables expand to nothing, so each platform uploads only the
+          # assets it actually produced.
+          files: |
+            ${{ env.ASSET }}
+            ${{ env.UPDATE_ASSET }}
+            ${{ env.SETUP_ASSET }}
+            ${{ env.MSI_ASSET }}
+            ${{ env.DEB_ASSET }}
+            ${{ env.APPIMAGE_ASSET }}
+            ${{ env.SCREENSHOT_ASSET }}
