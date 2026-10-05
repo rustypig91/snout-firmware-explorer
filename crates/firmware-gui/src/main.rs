@@ -6,6 +6,7 @@ mod update_ui;
 mod wake;
 use wake::Wake;
 static RESTART_PATH: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+mod artifact_browser;
 mod dependencies;
 mod display;
 mod insights;
@@ -122,6 +123,7 @@ struct SavedLayout {
     source: String,
 }
 struct Explorer {
+    browser_cache: Option<artifact_browser::BrowserCache>,
     report_revision: u64,
     table_cache: views::TableCache,
     preferences_file: Option<PathBuf>,
@@ -169,6 +171,7 @@ struct Explorer {
 impl Default for Explorer {
     fn default() -> Self {
         Self {
+            browser_cache: None,
             report_revision: 0,
             table_cache: Default::default(),
             preferences_file: None,
