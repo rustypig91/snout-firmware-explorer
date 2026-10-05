@@ -307,6 +307,12 @@ pub fn analyze_bytes(
                 .into(),
         );
     }
+    let mut sections_by_index = vec![None; elf.section_headers.len()];
+    for section in &sections {
+        if section.allocated {
+            sections_by_index[section.index] = Some(section);
+        }
+    }
     let mut symbols = Vec::new();
     let mut compilation_unit = None;
     let mut group = 0usize;
@@ -325,10 +331,7 @@ pub fn analyze_bytes(
         {
             continue;
         }
-        let Some(section) = sections
-            .iter()
-            .find(|s| s.index == raw.st_shndx && s.allocated)
-        else {
+        let Some(section) = sections_by_index.get(raw.st_shndx).copied().flatten() else {
             continue;
         };
         let name = elf.strtab.get_at(raw.st_name).unwrap_or("");

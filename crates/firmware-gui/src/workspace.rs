@@ -290,84 +290,6 @@ pub(super) fn configured_report(
     Ok(Loaded::Config(options, analysis, source, stack, build))
 }
 
-fn report_folder_ui(
-    ui: &mut egui::Ui,
-    folder: &std::path::Path,
-    paths: &[PathBuf],
-    selected: &mut StackSelection,
-    search: &str,
-) {
-    let descendants: Vec<_> = paths.iter().filter(|p| p.starts_with(folder)).collect();
-    let visible: Vec<_> = descendants
-        .iter()
-        .copied()
-        .filter(|p| p.to_string_lossy().to_lowercase().contains(search))
-        .collect();
-    if visible.is_empty() {
-        return;
-    }
-    let count = descendants.len();
-    let checked_count = descendants.iter().filter(|p| selected.contains(p)).count();
-    let mut checked = count > 0 && count == checked_count;
-    let id = ui.make_persistent_id(folder);
-    egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
-        .show_header(ui, |ui| {
-            if ui
-                .add(
-                    egui::Checkbox::new(
-                        &mut checked,
-                        format!(
-                            "{} ({checked_count}/{count})",
-                            folder
-                                .file_name()
-                                .unwrap_or(folder.as_os_str())
-                                .to_string_lossy()
-                        ),
-                    )
-                    .indeterminate(checked_count > 0 && checked_count < count),
-                )
-                .on_hover_text(
-                    "Select all stack reports in this directory, including new files on refresh",
-                )
-                .changed()
-            {
-                selected.set(folder, checked, paths);
-            }
-        })
-        .body_unindented(|ui| {
-            ui.scope(|ui| {
-                ui.spacing_mut().indent = 8.0;
-                ui.indent(id.with("reports"), |ui| {
-                    let directories: std::collections::BTreeSet<_> = visible
-                        .iter()
-                        .filter_map(|path| {
-                            let relative = path.strip_prefix(folder).ok()?;
-                            (relative.components().count() > 1).then(|| {
-                                folder.join(relative.components().next().unwrap().as_os_str())
-                            })
-                        })
-                        .collect();
-                    for directory in directories {
-                        report_folder_ui(ui, &directory, paths, selected, search);
-                    }
-                    for path in visible.iter().filter(|p| p.parent() == Some(folder)) {
-                        let mut checked = selected.contains(path);
-                        if ui
-                            .checkbox(
-                                &mut checked,
-                                path.file_name().unwrap_or_default().to_string_lossy(),
-                            )
-                            .on_hover_text(display_path(&path.to_string_lossy()))
-                            .changed()
-                        {
-                            selected.set(path, checked, paths);
-                        }
-                    }
-                });
-            });
-        });
-}
-
 impl Explorer {
     pub(super) fn saved_stack_selection(
         &self,
@@ -403,6 +325,9 @@ impl Explorer {
             .or_default()
             .stack_reports
             .insert(PathBuf::from(&analysis.path), selection.clone());
+        if let Some(cache) = &mut self.browser_cache {
+            cache.revision = self.report_revision.wrapping_sub(1);
+        }
         // The old report no longer represents the saved selection, including on failure.
         self.stack = None;
         // Save the user's intent before analysis, even if the app closes during the job.
@@ -567,8 +492,32 @@ impl Explorer {
         };
         let mut selected = None;
         let mut selected_map = None;
-        let mut reports = self.current_stack_selection();
-        let previous_reports = reports.clone();
+        let previous = self.browser_cache.take();
+        let closed = previous
+            .as_ref()
+            .map(|c| c.closed.clone())
+            .unwrap_or_default();
+        let mut cache = previous
+            .filter(|cache| {
+                std::sync::Arc::ptr_eq(&cache.build, &build)
+                    && cache.revision == self.report_revision
+                    && match (&cache.analysis, &self.analysis) {
+                        (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+                        (None, None) => true,
+                        _ => false,
+                    }
+            })
+            .unwrap_or_else(|| {
+                let mut cache = super::artifact_browser::BrowserCache::new(
+                    build.clone(),
+                    self.analysis.clone(),
+                    self.report_revision,
+                    self.current_stack_selection(),
+                );
+                cache.closed = closed;
+                cache
+            });
+        let mut report_change = None;
         egui::SidePanel::left("build_artifacts")
             .default_width(260.0)
             .width_range(180.0..=500.0)
@@ -578,6 +527,7 @@ impl Explorer {
                         .hint_text("Find file...")
                         .desired_width(f32::INFINITY),
                 );
+                cache.filter(&self.artifact_search);
                 ui.small(format!("{} compatible files", build.artifacts.len()));
                 if !build.warnings.is_empty() {
                     ui.collapsing(format!("{} scan notes", build.warnings.len()), |ui| {
@@ -591,37 +541,22 @@ impl Explorer {
                     if build.artifacts.is_empty() {
                         ui.label("No compatible files found in this folder or its subfolders.");
                     }
-                    for kind in [
+                    for (group, kind) in [
                         ArtifactKind::Firmware,
                         ArtifactKind::Map,
                         ArtifactKind::StackUsage,
                         ArtifactKind::MemoryLayout,
-                    ] {
-                        let artifacts: Vec<_> = build
-                            .artifacts
-                            .iter()
-                            .filter(|a| a.kind == kind)
-                            .filter(|a| {
-                                a.path
-                                    .strip_prefix(&build.root)
-                                    .unwrap_or(&a.path)
-                                    .to_string_lossy()
-                                    .to_lowercase()
-                                    .contains(&self.artifact_search.to_lowercase())
-                            })
-                            .collect();
-                        if artifacts.is_empty() {
+                    ].into_iter().enumerate() {
+                        let count = cache.artifacts[group].len();
+                        if count == 0 {
                             continue;
                         }
                         if kind == ArtifactKind::StackUsage {
-                            egui::CollapsingHeader::new(format!("{} ({})", kind.label(), artifacts.len()))
+                            egui::CollapsingHeader::new(format!("{} ({})", kind.label(), count))
                                 .default_open(true)
                                 .show(ui, |ui| {
-                                    let paths: Vec<_> = build.artifacts.iter()
-                                        .filter(|a| a.kind == ArtifactKind::StackUsage)
-                                        .map(|a| a.path.clone()).collect();
                                     ui.add_enabled_ui(self.analysis.is_some() && self.receiver.is_none(), |ui| {
-                                        report_folder_ui(ui, &build.root, &paths, &mut reports, &self.artifact_search.to_lowercase());
+                                        report_change = cache.report_ui(ui);
                                     });
                                 });
                             continue;
@@ -629,15 +564,21 @@ impl Explorer {
                         egui::CollapsingHeader::new(format!(
                             "{} ({})",
                             kind.label(),
-                            artifacts.len()
+                            count
                         ))
                         .default_open(
                             kind == ArtifactKind::Firmware
                                 || (kind == ArtifactKind::Map
-                                    && artifacts.iter().any(|a| self.map_in_use(&a.path))),
+                                    && cache.artifacts[group].iter().any(|&i| self.map_in_use(&build.artifacts[i].path))),
                         )
                         .show(ui, |ui| {
-                            for artifact in artifacts {
+                            let height = ui.spacing().interact_size.y.max(ui.text_style_height(&egui::TextStyle::Body));
+                            egui::ScrollArea::vertical().id_salt(("artifact_rows",group))
+                                .max_height(ui.available_height().max(120.0))
+                                .show_rows(ui, height, count, |ui, range| {
+                            for row in range {
+                                let index = cache.artifacts[group][row];
+                                let artifact = &build.artifacts[index];
                                 let active = artifact.kind == ArtifactKind::Firmware
                                     && self.analysis.as_ref().is_some_and(|a| {
                                         std::path::Path::new(&a.path) == artifact.path
@@ -651,12 +592,7 @@ impl Explorer {
                                                 std::path::Path::new(&a.path) == artifact.path
                                             })
                                         });
-                                let label = artifact
-                                    .path
-                                    .strip_prefix(&build.root)
-                                    .unwrap_or(&artifact.path)
-                                    .display()
-                                    .to_string();
+                                let label = &cache.labels[index];
                                 let in_use = artifact.kind == ArtifactKind::Map
                                     && self.map_in_use(&artifact.path);
                                 if artifact.kind == ArtifactKind::Map {
@@ -669,7 +605,7 @@ impl Explorer {
                                             selected_map = Some(artifact.path.clone());
                                         }
                                         if ui.add_enabled(self.receiver.is_none(),
-                                            egui::Button::new(display_path(&label)).frame(false).selected(active).wrap())
+                                            egui::Button::new(display_path(label)).frame(false).selected(active).truncate())
                                             .on_hover_text("Preview map").clicked()
                                         {
                                             selected = Some(artifact.clone());
@@ -677,14 +613,14 @@ impl Explorer {
                                     });
                                     continue;
                                 }
-                                let label = egui::RichText::new(display_path(&label));
+                                let label = egui::RichText::new(display_path(label));
                                 if ui
                                     .add_enabled(
                                         self.receiver.is_none(),
                                         egui::Button::new(label)
                                             .frame(false)
                                             .selected(active)
-                                            .wrap(),
+                                            .truncate(),
                                     )
                                     .on_hover_text(display_path(&artifact.path.to_string_lossy()))
                                     .clicked()
@@ -692,16 +628,23 @@ impl Explorer {
                                     selected = Some(artifact.clone());
                                 }
                             }
+                            });
                         });
                     }
                 });
             });
-        if reports != previous_reports {
+        if let Some((path, checked)) = report_change {
+            cache.reports.set(&path, checked, &cache.paths);
+            let reports = cache.reports.clone();
+            self.browser_cache = Some(cache);
             self.select_stack_selection(reports);
-        } else if let Some(path) = selected_map {
-            self.apply_map(path);
-        } else if let Some(artifact) = selected {
-            self.select_artifact(artifact);
+        } else {
+            self.browser_cache = Some(cache);
+            if let Some(path) = selected_map {
+                self.apply_map(path);
+            } else if let Some(artifact) = selected {
+                self.select_artifact(artifact);
+            }
         }
     }
     pub(super) fn artifact_preview(&mut self, ui: &mut egui::Ui) -> bool {

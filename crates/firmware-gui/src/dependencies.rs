@@ -5,6 +5,25 @@ use std::collections::{BTreeMap, BTreeSet};
 mod graph_layout;
 use graph_layout::{CachedLayout, LayoutInput, NodeSpec};
 
+#[cfg(test)]
+pub(super) fn settle_graph(
+    app: &mut Explorer,
+    mut frame: impl FnMut(&mut Explorer) -> egui::FullOutput,
+) -> egui::FullOutput {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let output = frame(app);
+        if app.visible_rows == 0 || app.graph_view.layout_ready() {
+            return output;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "graph layout did not finish"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
 pub(super) struct GraphView {
     selected: Option<String>,
     edge: Option<(String, String)>,
@@ -14,6 +33,9 @@ pub(super) struct GraphView {
     zoom: f32,
     pan: egui::Vec2,
     layout: Option<CachedLayout>,
+    layout_revision: u64,
+    requested_layout: Option<LayoutInput>,
+    layout_job: Option<std::sync::mpsc::Receiver<(u64, CachedLayout)>>,
     filter: Option<(String, Option<String>)>,
 }
 impl Default for GraphView {
@@ -27,12 +49,59 @@ impl Default for GraphView {
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
             layout: None,
+            layout_revision: 0,
+            requested_layout: None,
+            layout_job: None,
             filter: None,
         }
     }
 }
 
 impl GraphView {
+    // At most one layout runs at a time. While it runs, requests coalesce to
+    // the latest controls; obsolete geometry never reaches the canvas.
+    fn request_layout(&mut self, input: LayoutInput, ctx: &egui::Context) -> bool {
+        if self.requested_layout.as_ref() != Some(&input) {
+            self.layout_revision = self.layout_revision.wrapping_add(1);
+            self.requested_layout = Some(input);
+        }
+        let mut changed = false;
+        if let Some(job) = &self.layout_job {
+            match job.try_recv() {
+                Ok((revision, cached)) => {
+                    self.layout_job = None;
+                    if revision == self.layout_revision {
+                        self.layout = Some(cached);
+                        changed = true;
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.layout_job = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        if !self.layout_ready() && self.layout_job.is_none() {
+            let input = self.requested_layout.as_ref().unwrap().clone();
+            let revision = self.layout_revision;
+            let (sender, receiver) = std::sync::mpsc::channel();
+            self.layout_job = Some(receiver);
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                let geometry = graph_layout::compute(&input);
+                let _ = sender.send((revision, CachedLayout { input, geometry }));
+                ctx.request_repaint();
+            });
+        }
+        changed
+    }
+
+    fn layout_ready(&self) -> bool {
+        self.layout
+            .as_ref()
+            .is_some_and(|cached| Some(&cached.input) == self.requested_layout.as_ref())
+    }
+
     fn select_edge(&mut self, from: &str, to: &str) {
         self.selected = None;
         self.edge = Some((from.into(), to.into()));
@@ -257,10 +326,13 @@ impl Explorer {
             })
             .max()
             .unwrap_or(0);
+        let short_labels = super::display::short_paths(
+            &nodes.iter().map(|n| n.label.as_str()).collect::<Vec<_>>(),
+        );
         let texts: BTreeMap<_, _> = nodes
             .iter()
-            .map(|node| {
-                let label = short_path(&node.label, nodes.iter().map(|n| n.label.as_str()));
+            .zip(short_labels)
+            .map(|(node, label)| {
                 let label = if label.chars().count() > 30 {
                     format!(
                         "…{}",
@@ -326,14 +398,16 @@ impl Explorer {
             // have enough room for horizontal mindmap branches.
             vertical: rect.width() < rect.height() * 1.8,
         };
-        let layout_changed = self
-            .graph_view
-            .layout
-            .as_ref()
-            .is_none_or(|cached| cached.input != input);
-        if layout_changed {
-            let geometry = graph_layout::compute(&input);
-            self.graph_view.layout = Some(CachedLayout { input, geometry });
+        let layout_changed = self.graph_view.request_layout(input, ui.ctx());
+        if !self.graph_view.layout_ready() {
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "Preparing dependency layout…",
+                egui::FontId::proportional(14.0),
+                ui.visuals().text_color(),
+            );
+            return;
         }
         if layout_changed || filter_changed {
             self.graph_view.zoom = 1.0;
@@ -504,6 +578,56 @@ mod tests {
     use firmware_analysis_core::dependencies::{DependencyEdge, DependencyNode};
 
     #[test]
+    fn changing_filters_coalesces_requests_and_discards_obsolete_geometry() {
+        let input = |name: &str| LayoutInput {
+            nodes: vec![NodeSpec {
+                id: name.into(),
+                directory: "src".into(),
+                size: egui::vec2(100.0, 40.0),
+            }],
+            edges: vec![],
+            grouped: false,
+            ram: false,
+            vertical: false,
+        };
+        let ctx = egui::Context::default();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let old = input("old");
+        let mut state = GraphView {
+            requested_layout: Some(old.clone()),
+            layout_revision: 1,
+            layout_job: Some(receiver),
+            ..Default::default()
+        };
+        // The injected worker is deliberately held until after two changes.
+        assert!(!state.request_layout(input("intermediate"), &ctx));
+        assert!(!state.request_layout(input("latest"), &ctx));
+        assert_eq!(state.layout_revision, 3);
+        assert!(state.layout.is_none());
+        sender
+            .send((
+                1,
+                CachedLayout {
+                    geometry: graph_layout::compute(&old),
+                    input: old,
+                },
+            ))
+            .unwrap();
+        assert!(!state.request_layout(input("latest"), &ctx));
+        assert!(state.layout.is_none(), "obsolete results must not appear");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !state.layout_ready() {
+            state.request_layout(input("latest"), &ctx);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let geometry = &state.layout.as_ref().unwrap().geometry;
+        assert!(geometry.cards.contains_key("latest"));
+        assert!(!geometry.cards.contains_key("old"));
+        assert!(!geometry.cards.contains_key("intermediate"));
+    }
+
+    #[test]
     fn directory_grouping_accepts_debug_paths_from_either_platform() {
         assert_eq!(
             node_directory(r"C:\project\drivers\spi.c"),
@@ -605,19 +729,21 @@ mod tests {
         let mut app = Explorer::default();
         let ctx = egui::Context::default();
         let frame = |app: &mut Explorer| {
-            ctx.run(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(1100.0, 700.0),
-                    )),
-                    ..Default::default()
-                },
-                |ctx| {
-                    egui::CentralPanel::default()
-                        .show(ctx, |ui| app.dependency_view(ui, &analysis));
-                },
-            )
+            settle_graph(app, |app| {
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1100.0, 700.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default()
+                            .show(ctx, |ui| app.dependency_view(ui, &analysis));
+                    },
+                )
+            })
         };
         let _ = frame(&mut app);
         let cached_points = app.graph_view.layout.as_ref().unwrap().geometry.edges[0]
@@ -679,21 +805,23 @@ mod tests {
         let mut app = Explorer::default();
         let ctx = egui::Context::default();
         super::super::shell::configure_style(&ctx);
-        let frame = |app: &mut Explorer, events| {
-            ctx.run(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(1100.0, 700.0),
-                    )),
-                    events,
-                    ..Default::default()
-                },
-                |ctx| {
-                    egui::CentralPanel::default()
-                        .show(ctx, |ui| app.dependency_view(ui, &analysis));
-                },
-            )
+        let frame = |app: &mut Explorer, mut events| {
+            settle_graph(app, |app| {
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1100.0, 700.0),
+                        )),
+                        events: std::mem::take(&mut events),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default()
+                            .show(ctx, |ui| app.dependency_view(ui, &analysis));
+                    },
+                )
+            })
         };
         let output = frame(&mut app, vec![]);
         let cards: Vec<_> = output

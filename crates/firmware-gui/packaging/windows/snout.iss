@@ -34,6 +34,7 @@ DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 LicenseFile={#SourcePath}License.rtf
 UninstallDisplayIcon={app}\{#AppExeName}
+SetupIconFile={#SourcePath}..\icons\snout.ico
 OutputBaseFilename=snout-v{#AppVersion}-x86_64-setup
 Compression=lzma2/max
 SolidCompression=yes
@@ -65,8 +66,8 @@ Type: files; Name: "{group}\Rustys Snout - Firmware Explorer.lnk"
 
 [Icons]
 ; Keep the display name and include the apostrophe-free spelling in metadata.
-Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Comment: "Rustys Snout - Firmware Explorer"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
+Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\{#AppExeName}"; IconIndex: 0; Comment: "Rustys Snout - Firmware Explorer"
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\{#AppExeName}"; IconIndex: 0; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(AppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent

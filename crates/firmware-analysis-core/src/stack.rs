@@ -1,6 +1,7 @@
 //! Compiler reports are facts about local frames, not call-chain upper bounds.
-use crate::{Analysis, Error};
+use crate::{Analysis, Error, Symbol};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -129,49 +130,109 @@ pub fn analyze_stack(analysis: &Analysis, path: impl AsRef<Path>) -> Result<Stac
 }
 
 /// Analyze explicit report files or recursively selected report folders.
-pub fn analyze_stack_files(
-    analysis: &Analysis,
-    mut paths: Vec<PathBuf>,
-) -> Result<StackReport, Error> {
-    let mut expanded = Vec::new();
-    for path in paths {
-        if path.is_dir() {
-            collect(&path, &mut expanded)?;
-        } else {
-            expanded.push(path);
+pub fn analyze_stack_files(analysis: &Analysis, paths: Vec<PathBuf>) -> Result<StackReport, Error> {
+    StackAnalyzer::new(analysis).analyze_files(paths)
+}
+
+/// Reusable function index for matching many reports from the same ELF.
+/// Candidate vectors retain ELF order and all ambiguous matches.
+pub struct StackAnalyzer<'a> {
+    names: HashMap<&'a str, Vec<&'a Symbol>>,
+    lines: HashMap<u32, Vec<&'a Symbol>>,
+    bare_names: HashMap<&'a str, Vec<&'a Symbol>>,
+}
+
+impl<'a> StackAnalyzer<'a> {
+    pub fn new(analysis: &'a Analysis) -> Self {
+        let mut index = Self {
+            names: HashMap::new(),
+            lines: HashMap::new(),
+            bare_names: HashMap::new(),
+        };
+        for symbol in analysis.symbols.iter().filter(|s| s.kind == "Function") {
+            index.names.entry(&symbol.name).or_default().push(symbol);
+            if symbol.demangled_name != symbol.name {
+                index
+                    .names
+                    .entry(&symbol.demangled_name)
+                    .or_default()
+                    .push(symbol);
+            }
+            if let Some(line) = symbol.source_line {
+                index.lines.entry(line).or_default().push(symbol);
+            }
+            if let Some((name, _)) = symbol.demangled_name.split_once('(') {
+                index.bare_names.entry(name).or_default().push(symbol);
+            }
         }
+        index
     }
-    paths = expanded;
-    paths.sort();
-    paths.dedup();
-    let mut report = StackReport { schema_version: 1, entries: Vec::new(), warnings: vec!["Local stack comes from compiler reports, which must belong to this build. Dynamic frames may be unbounded. Interrupt overhead and call-chain totals are unknown.".into()],
+
+    pub fn analyze_files(&self, mut paths: Vec<PathBuf>) -> Result<StackReport, Error> {
+        let mut expanded = Vec::new();
+        for path in paths {
+            if path.is_dir() {
+                collect(&path, &mut expanded)?;
+            } else {
+                expanded.push(path);
+            }
+        }
+        paths = expanded;
+        paths.sort();
+        paths.dedup();
+        let mut report = StackReport { schema_version: 1, entries: Vec::new(), warnings: vec!["Local stack comes from compiler reports, which must belong to this build. Dynamic frames may be unbounded. Interrupt overhead and call-chain totals are unknown.".into()],
         call_graph: CallGraph { unresolved: vec![UnresolvedCall { function: None, reason: Uncertainty::CallGraphUnavailable }], ..Default::default() } };
-    for path in paths {
-        let text = fs::read_to_string(&path).map_err(|source| Error::Io {
-            path: path.display().to_string(),
-            source,
-        })?;
-        let (mut entries, warnings) = parse_stack_usage(&text, &path.display().to_string());
-        for entry in &mut entries {
-            let functions: Vec<_> = analysis
-                .symbols
-                .iter()
-                .filter(|s| s.kind == "Function")
-                // A known conflicting source path rules out same-name functions in other units.
-                .filter(|s| {
+        for path in paths {
+            let text = fs::read_to_string(&path).map_err(|source| Error::Io {
+                path: path.display().to_string(),
+                source,
+            })?;
+            let (mut entries, warnings) = parse_stack_usage(&text, &path.display().to_string());
+            for entry in &mut entries {
+                // Narrow by name/line before comparing paths. The old all-function
+                // scan normalized every source path for every stack entry.
+                let compatible = |s: &&Symbol| {
                     s.source_file
                         .as_ref()
                         .is_none_or(|p| source_matches(p, &entry.source_file))
-                })
-                .collect();
-            let mut candidates: Vec<_> = functions
-                .iter()
-                .copied()
-                .filter(|s| s.name == entry.function || s.demangled_name == entry.function)
-                .collect();
-            let mut method = "exact symbol name";
-            if candidates.is_empty() {
-                candidates = functions
+                };
+                let mut candidates: Vec<_> = self
+                    .names
+                    .get(entry.function.as_str())
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .filter(compatible)
+                    .collect();
+                let mut method = "exact symbol name";
+                if candidates.is_empty() {
+                    candidates = self
+                        .lines
+                        .get(&entry.source_line)
+                        .into_iter()
+                        .flatten()
+                        .copied()
+                        .filter(|s| {
+                            s.source_file
+                                .as_ref()
+                                .is_some_and(|p| source_matches(p, &entry.source_file))
+                        })
+                        .collect();
+                    method = "DWARF source file and line";
+                }
+                if candidates.is_empty() && !entry.function.contains('(') {
+                    candidates = self
+                        .bare_names
+                        .get(entry.function.as_str())
+                        .into_iter()
+                        .flatten()
+                        .copied()
+                        .filter(compatible)
+                        .collect();
+                    method = "demangled function name without parameters";
+                }
+                // Prefer source evidence when duplicate local names or overloads exist.
+                let located: Vec<_> = candidates
                     .iter()
                     .copied()
                     .filter(|s| {
@@ -181,57 +242,33 @@ pub fn analyze_stack_files(
                                 .is_some_and(|p| source_matches(p, &entry.source_file))
                     })
                     .collect();
-                method = "DWARF source file and line";
-            }
-            if candidates.is_empty() && !entry.function.contains('(') {
-                candidates = functions
-                    .iter()
-                    .copied()
-                    .filter(|s| {
-                        s.demangled_name
-                            .split_once('(')
-                            .is_some_and(|(name, _)| name == entry.function)
-                    })
-                    .collect();
-                method = "demangled function name without parameters";
-            }
-            // Prefer source evidence when duplicate local names or overloads exist.
-            let located: Vec<_> = candidates
-                .iter()
-                .copied()
-                .filter(|s| {
-                    s.source_line == Some(entry.source_line)
-                        && s.source_file
-                            .as_ref()
-                            .is_some_and(|p| source_matches(p, &entry.source_file))
-                })
-                .collect();
-            if !located.is_empty() {
-                candidates = located;
-                if method != "DWARF source file and line" {
-                    method = "symbol name and DWARF source file/line";
+                if !located.is_empty() {
+                    candidates = located;
+                    if method != "DWARF source file and line" {
+                        method = "symbol name and DWARF source file/line";
+                    }
                 }
+                if !candidates.is_empty() {
+                    entry
+                        .evidence
+                        .push_str(&format!("; ELF candidates matched by {method}"));
+                }
+                entry.symbol_candidates = candidates
+                    .into_iter()
+                    .map(|s| format!("{} @ {:#x}", s.name, s.address))
+                    .collect();
             }
-            if !candidates.is_empty() {
-                entry
-                    .evidence
-                    .push_str(&format!("; ELF candidates matched by {method}"));
-            }
-            entry.symbol_candidates = candidates
-                .into_iter()
-                .map(|s| format!("{} @ {:#x}", s.name, s.address))
-                .collect();
+            report.entries.extend(entries);
+            report.warnings.extend(warnings);
         }
-        report.entries.extend(entries);
-        report.warnings.extend(warnings);
+        if report.entries.is_empty() {
+            report.warnings.push("No stack usage information found. Build with -fstack-usage and select the resulting .su files or build directory.".into());
+        }
+        report
+            .entries
+            .sort_by_key(|e| std::cmp::Reverse(e.local_bytes));
+        Ok(report)
     }
-    if report.entries.is_empty() {
-        report.warnings.push("No stack usage information found. Build with -fstack-usage and select the resulting .su files or build directory.".into());
-    }
-    report
-        .entries
-        .sort_by_key(|e| std::cmp::Reverse(e.local_bytes));
-    Ok(report)
 }
 
 /// Debug paths may be absolute on the build machine while .su paths are relative.

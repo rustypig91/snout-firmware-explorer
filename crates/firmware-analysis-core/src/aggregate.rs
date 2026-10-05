@@ -18,10 +18,11 @@ pub(crate) fn attribute(
     let mut overlaps = false;
     for section in sections {
         let mut claimed_end = section.address;
-        for symbol in symbols
-            .iter_mut()
-            .filter(|s| s.section_index == section.index)
-        {
+        // Symbols are already sorted by section. Visit only this section's
+        // range instead of scanning the entire symbol table for each section.
+        let start = symbols.partition_point(|s| s.section_index < section.index);
+        let end = symbols.partition_point(|s| s.section_index <= section.index);
+        for symbol in &mut symbols[start..end] {
             let end = symbol.normalized_address + symbol.size;
             let unique = end.saturating_sub(claimed_end.max(symbol.normalized_address));
             overlaps |= unique != symbol.size;

@@ -3,6 +3,7 @@ use super::{Explorer, View};
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
 use firmware_analysis_core::{format_bytes as bytes, Analysis, FileTree};
+use std::{cell::RefCell, rc::Rc};
 
 pub const ACCENT: egui::Color32 = egui::Color32::from_rgb(113, 185, 219);
 pub(super) const TEXT_SELECTION: egui::Color32 = egui::Color32::from_rgb(48, 105, 163);
@@ -11,10 +12,58 @@ pub(super) const FLASH_HELP: &str = "Allocated bytes stored in the load image. I
 pub(super) const RAM_HELP: &str = "Static memory required while running. Includes initialized data, zero-filled storage and explicit reservations. Additional heap and stack demand is not automatically known.";
 struct Row {
     cells: Vec<String>,
+    search_cells: Vec<String>,
     values: Vec<Option<i128>>,
     tip: String,
     action: Option<String>,
     bar_columns: Vec<usize>,
+}
+
+#[derive(PartialEq, Eq)]
+struct RowKey {
+    revision: u64,
+    source: usize,
+    view: View,
+    file: Option<String>,
+    region: Option<usize>,
+    kind: String,
+    unresolved: bool,
+    comparison_group: usize,
+    build_root: Option<std::path::PathBuf>,
+}
+
+#[derive(Default)]
+pub(super) struct TableCache {
+    rows: RefCell<Option<(RowKey, Rc<Vec<Row>>)>>,
+    prepared: Option<Rc<PreparedTable>>,
+}
+
+struct PreparedTable {
+    source: Rc<Vec<Row>>,
+    search: String,
+    sort: usize,
+    descending: bool,
+    indices: Vec<usize>,
+    bar_maxima: Vec<i128>,
+}
+
+struct OrderedRows<'a>(&'a PreparedTable);
+impl OrderedRows<'_> {
+    fn len(&self) -> usize {
+        self.0.indices.len()
+    }
+    fn is_empty(&self) -> bool {
+        self.0.indices.is_empty()
+    }
+    fn iter(&self) -> impl Iterator<Item = &Row> {
+        self.0.indices.iter().map(|&i| &self.0.source[i])
+    }
+}
+impl std::ops::Index<usize> for OrderedRows<'_> {
+    type Output = Row;
+    fn index(&self, index: usize) -> &Row {
+        &self.0.source[self.0.indices[index]]
+    }
 }
 impl Row {
     fn new(cells: Vec<String>, numbers: &[(usize, i128)], tip: String) -> Self {
@@ -23,6 +72,7 @@ impl Row {
             values[column] = Some(value);
         }
         Self {
+            search_cells: cells.iter().map(|cell| cell.to_lowercase()).collect(),
             cells,
             values,
             tip,
@@ -37,25 +87,70 @@ impl Row {
     }
 }
 impl Explorer {
-    fn table(
-        &mut self,
-        ui: &mut egui::Ui,
-        headers: &[(&str, &str)],
-        mut rows: Vec<Row>,
-    ) -> Option<String> {
-        let search = self.search.to_lowercase();
-        rows.retain(|r| r.cells.iter().any(|c| c.to_lowercase().contains(&search)));
-        let mut bar_maxima = vec![0; headers.len()];
-        for row in &rows {
-            for &column in &row.bar_columns {
-                bar_maxima[column] = bar_maxima[column].max(row.values[column].unwrap_or(0));
+    fn cached_rows(&self, source: usize, build: impl FnOnce() -> Vec<Row>) -> Rc<Vec<Row>> {
+        let key = RowKey {
+            revision: self.report_revision,
+            source,
+            view: self.view,
+            file: self.selected_file.clone(),
+            region: self.selected_region,
+            kind: self.kind_filter.clone(),
+            unresolved: self.stack_show_unresolved,
+            comparison_group: self.comparison_group,
+            build_root: self.build.as_ref().map(|b| b.root.clone()),
+        };
+        let mut cache = self.table_cache.rows.borrow_mut();
+        if let Some((old, rows)) = &*cache {
+            if *old == key {
+                return rows.clone();
             }
         }
-        let sort = self.sort_column.min(headers.len() - 1);
-        rows.sort_by(|a, b| {
-            let order = match (a.values[sort], b.values[sort]) {
+        let rows = Rc::new(build());
+        *cache = Some((key, rows.clone()));
+        rows
+    }
+
+    fn prepare_table(&mut self, rows: Rc<Vec<Row>>, columns: usize) -> Rc<PreparedTable> {
+        let search = self.search.to_lowercase();
+        let sort = self.sort_column.min(columns - 1);
+        if let Some(cached) = &self.table_cache.prepared {
+            if Rc::ptr_eq(&cached.source, &rows)
+                && cached.search == search
+                && cached.sort == sort
+                && cached.descending == self.descending
+            {
+                return cached.clone();
+            }
+        }
+        let filtered = self
+            .table_cache
+            .prepared
+            .as_ref()
+            .filter(|cached| Rc::ptr_eq(&cached.source, &rows) && cached.search == search);
+        let (mut indices, bar_maxima) = if let Some(cached) = filtered {
+            // A sort-only interaction reuses filtering and numeric scales.
+            // Restore source order to retain stable ties in either direction.
+            let mut indices = cached.indices.clone();
+            indices.sort_unstable();
+            (indices, cached.bar_maxima.clone())
+        } else {
+            let indices: Vec<_> = (0..rows.len())
+                .filter(|&i| {
+                    search.is_empty() || rows[i].search_cells.iter().any(|c| c.contains(&search))
+                })
+                .collect();
+            let mut maxima = vec![0; columns];
+            for &i in &indices {
+                for &column in &rows[i].bar_columns {
+                    maxima[column] = maxima[column].max(rows[i].values[column].unwrap_or(0));
+                }
+            }
+            (indices, maxima)
+        };
+        indices.sort_by(|&a, &b| {
+            let order = match (rows[a].values[sort], rows[b].values[sort]) {
                 (Some(a), Some(b)) => a.cmp(&b),
-                _ => a.cells[sort].cmp(&b.cells[sort]),
+                _ => rows[a].cells[sort].cmp(&rows[b].cells[sort]),
             };
             if self.descending {
                 order.reverse()
@@ -63,6 +158,28 @@ impl Explorer {
                 order
             }
         });
+        let prepared = Rc::new(PreparedTable {
+            source: rows,
+            search,
+            sort,
+            descending: self.descending,
+            indices,
+            bar_maxima,
+        });
+        self.table_cache.prepared = Some(prepared.clone());
+        prepared
+    }
+
+    fn table(
+        &mut self,
+        ui: &mut egui::Ui,
+        headers: &[(&str, &str)],
+        rows: Rc<Vec<Row>>,
+    ) -> Option<String> {
+        let sort = self.sort_column.min(headers.len() - 1);
+        let prepared = self.prepare_table(rows, headers.len());
+        let rows = OrderedRows(&prepared);
+        let bar_maxima = &prepared.bar_maxima;
         self.visible_rows = rows.len();
         if rows.is_empty() {
             ui.weak(if self.search.is_empty() {
@@ -155,10 +272,9 @@ impl Explorer {
                     .body(|mut body| {
                         let width = body.widths().iter().sum::<f32>()
                             + (headers.len() - 1) as f32 * body.ui_mut().spacing().item_spacing.x;
-                        let expanded = rows.iter().position(|item| {
-                            self.details.as_ref().is_some_and(|(name, tip)| {
-                                name == &item.cells[0] && tip == &item.tip
-                            })
+                        let expanded = self.details.as_ref().and_then(|(name, tip)| {
+                            rows.iter()
+                                .position(|item| name == &item.cells[0] && tip == &item.tip)
                         });
                         let detail_text = expanded.map(|index| {
                             let ui = body.ui_mut();
@@ -169,16 +285,7 @@ impl Explorer {
                                 (width - 24.0).max(100.0),
                             )
                         });
-                        let heights = (0..rows.len()).map(|i| {
-                            if Some(i) == expanded {
-                                23.0 + detail_text.as_ref().map_or(0.0, |t| t.size().y)
-                                    + 20.0
-                                    + if rows[i].action.is_some() { 28.0 } else { 0.0 }
-                            } else {
-                                23.0
-                            }
-                        });
-                        body.heterogeneous_rows(heights, |mut row| {
+                        let draw_row = |mut row: egui_extras::TableRow<'_, '_>| {
                             let item = &rows[row.index()];
                             let open = Some(row.index()) == expanded;
                             row.set_selected(open);
@@ -286,7 +393,21 @@ impl Explorer {
                                     item.action.clone(),
                                 ));
                             }
-                        });
+                        };
+                        if expanded.is_some() {
+                            let heights = (0..rows.len()).map(|i| {
+                                if Some(i) == expanded {
+                                    23.0 + detail_text.as_ref().map_or(0.0, |t| t.size().y)
+                                        + 20.0
+                                        + if rows[i].action.is_some() { 28.0 } else { 0.0 }
+                                } else {
+                                    23.0
+                                }
+                            });
+                            body.heterogeneous_rows(heights, draw_row);
+                        } else {
+                            body.rows(23.0, rows.len(), draw_row);
+                        }
                     });
                 // TableBuilder paints its full-height resize dividers after the body.
                 // Paint the spanning detail area last so those dividers cannot cross
@@ -327,36 +448,37 @@ impl Explorer {
     }
     pub(super) fn files(&mut self, ui: &mut egui::Ui, a: &Analysis) {
         let build_root = self.build.as_ref().map(|build| build.root.as_path());
-        let rows = a
-            .files
-            .iter()
-            .map(|f| {
-                let mut row = Row::new(
-                    vec![
-                        build_relative_path(&f.path, build_root),
-                        bytes(f.usage.flash),
-                        bytes(f.usage.ram),
-                        f.symbol_count.to_string(),
-                        f.attribution.clone(),
-                    ],
-                    &[
-                        (1, f.usage.flash.into()),
-                        (2, f.usage.ram.into()),
-                        (3, f.symbol_count as i128),
-                    ],
-                    format!(
-                        "{}\n{}\nFlash: {} / RAM: {}",
-                        build_relative_path(&f.path, build_root),
-                        f.attribution,
-                        bytes(f.usage.flash),
-                        bytes(f.usage.ram)
-                    ),
-                )
-                .with_bars(&[1, 2]);
-                row.action = Some(f.path.clone());
-                row
-            })
-            .collect();
+        let rows = self.cached_rows(a as *const Analysis as usize, || {
+            a.files
+                .iter()
+                .map(|f| {
+                    let mut row = Row::new(
+                        vec![
+                            build_relative_path(&f.path, build_root),
+                            bytes(f.usage.flash),
+                            bytes(f.usage.ram),
+                            f.symbol_count.to_string(),
+                            f.attribution.clone(),
+                        ],
+                        &[
+                            (1, f.usage.flash.into()),
+                            (2, f.usage.ram.into()),
+                            (3, f.symbol_count as i128),
+                        ],
+                        format!(
+                            "{}\n{}\nFlash: {} / RAM: {}",
+                            build_relative_path(&f.path, build_root),
+                            f.attribution,
+                            bytes(f.usage.flash),
+                            bytes(f.usage.ram)
+                        ),
+                    )
+                    .with_bars(&[1, 2]);
+                    row.action = Some(f.path.clone());
+                    row
+                })
+                .collect()
+        });
         if let Some(file) = self.table(
             ui,
             &[
@@ -375,7 +497,7 @@ impl Explorer {
         if let Some(file) = &self.selected_file {
             ui.weak(display_path(file));
         }
-        let rows = a
+        let rows = self.cached_rows(a as *const Analysis as usize, || { a
             .symbols
             .iter()
             .filter(|s| self.kind_filter == "All" || s.kind == self.kind_filter)
@@ -433,7 +555,7 @@ impl Explorer {
                 )
                 .with_bars(&[1, 2, 3])
             })
-            .collect();
+            .collect() });
         self.table(
             ui,
             &[
@@ -455,8 +577,8 @@ impl Explorer {
         );
     }
     pub(super) fn sections(&mut self, ui: &mut egui::Ui, a: &Analysis) {
-        let rows = a.sections.iter().map(|s| Row::new(vec![s.name.clone(), bytes(s.size), bytes(s.usage.flash), bytes(s.usage.ram), format!("{:#x}",s.address), load_address(s.load_address, s.load_size), classification(s.classification).into()], &[(1,s.size.into()),(2,s.usage.flash.into()),(3,s.usage.ram.into()),(4,s.address.into()),(5,s.load_address.unwrap_or(0).into())],
-            format!("Load size: {} B / runtime size: {} B\nAlignment: {} / flags: {:#x}\nAllocated: {} / writable: {} / executable: {}\n{}", s.load_size,s.runtime_size,s.alignment,s.flags,s.allocated,s.writable,s.executable,s.evidence)).with_bars(&[1, 2, 3])).collect();
+        let rows = self.cached_rows(a as *const Analysis as usize, || { a.sections.iter().map(|s| Row::new(vec![s.name.clone(), bytes(s.size), bytes(s.usage.flash), bytes(s.usage.ram), format!("{:#x}",s.address), load_address(s.load_address, s.load_size), classification(s.classification).into()], &[(1,s.size.into()),(2,s.usage.flash.into()),(3,s.usage.ram.into()),(4,s.address.into()),(5,s.load_address.unwrap_or(0).into())],
+            format!("Load size: {} B / runtime size: {} B\nAlignment: {} / flags: {:#x}\nAllocated: {} / writable: {} / executable: {}\n{}", s.load_size,s.runtime_size,s.alignment,s.flags,s.allocated,s.writable,s.executable,s.evidence)).with_bars(&[1, 2, 3])).collect() });
         self.table(
             ui,
             &[
@@ -540,32 +662,34 @@ impl Explorer {
                 if usage.symbols.is_empty() {
                     ui.label("No symbols available in this region. Stripped firmware can still occupy space.");
                 }
-                let rows = usage
-                    .symbols
-                    .iter()
-                    .map(|entry| {
-                        let s = &a.symbols[entry.symbol_index];
-                        Row::new(
-                            vec![
-                                s.demangled_name.clone(),
-                                format!("{:#010x}", entry.address),
-                                bytes(s.size),
-                                s.section.clone(),
-                                entry.placement.into(),
-                                s.source_file
-                                    .as_ref()
-                                    .or(s.compilation_unit.as_ref())
-                                    .map(|path| display_path(path).into_owned())
-                                    .unwrap_or_else(|| "[unattributed]".into()),
-                            ],
-                            &[(1, entry.address.into()), (2, s.size.into())],
-                            format!(
+                let rows = self.cached_rows(a as *const Analysis as usize, || {
+                    usage
+                        .symbols
+                        .iter()
+                        .map(|entry| {
+                            let s = &a.symbols[entry.symbol_index];
+                            Row::new(
+                                vec![
+                                    s.demangled_name.clone(),
+                                    format!("{:#010x}", entry.address),
+                                    bytes(s.size),
+                                    s.section.clone(),
+                                    entry.placement.into(),
+                                    s.source_file
+                                        .as_ref()
+                                        .or(s.compilation_unit.as_ref())
+                                        .map(|path| display_path(path).into_owned())
+                                        .unwrap_or_else(|| "[unattributed]".into()),
+                                ],
+                                &[(1, entry.address.into()), (2, s.size.into())],
+                                format!(
                                 "Linker name: {}\nRuntime address: {:#010x}\nELF size: {} B\n{}",
                                 s.name, s.normalized_address, s.size, s.attribution
                             ),
-                        )
-                    })
-                    .collect();
+                            )
+                        })
+                        .collect()
+                });
                 self.table(
                     ui,
                     &[
@@ -588,27 +712,28 @@ impl Explorer {
             }
         }
         ui.small("Load and runtime are separate address spaces").on_hover_text("Do not add load and runtime ranges together; the same storage can appear in both views.");
-        let rows = a
-            .memory_map
-            .iter()
-            .map(|r| {
-                Row::new(
-                    vec![
-                        r.name.clone(),
-                        format!("{:#010x}", r.address),
-                        format!("{:#010x}", r.address + r.size),
-                        bytes(r.size),
-                        r.space.clone(),
-                    ],
-                    &[
-                        (1, r.address.into()),
-                        (2, (r.address + r.size).into()),
-                        (3, r.size.into()),
-                    ],
-                    r.evidence.clone(),
-                )
-            })
-            .collect();
+        let rows = self.cached_rows(a as *const Analysis as usize, || {
+            a.memory_map
+                .iter()
+                .map(|r| {
+                    Row::new(
+                        vec![
+                            r.name.clone(),
+                            format!("{:#010x}", r.address),
+                            format!("{:#010x}", r.address + r.size),
+                            bytes(r.size),
+                            r.space.clone(),
+                        ],
+                        &[
+                            (1, r.address.into()),
+                            (2, (r.address + r.size).into()),
+                            (3, r.size.into()),
+                        ],
+                        r.evidence.clone(),
+                    )
+                })
+                .collect()
+        });
         self.table(
             ui,
             &[
@@ -702,33 +827,37 @@ impl Explorer {
         }
         ui.weak("Expand a frame for evidence").on_hover_text("Multiple ELF candidates are ambiguous. Each expanded row includes matching evidence and its report path.");
         let build_root = self.build.as_ref().map(|build| build.root.as_path());
-        let rows = report
-            .entries
-            .iter()
-            .filter(|e| no_matches || self.stack_show_unresolved || !e.symbol_candidates.is_empty())
-            .map(|e| {
-                Row::new(
-                    vec![
-                        e.function.clone(),
-                        bytes(e.local_bytes),
-                        e.qualifier.clone(),
+        let rows = self.cached_rows(report as *const _ as usize, || {
+            report
+                .entries
+                .iter()
+                .filter(|e| {
+                    no_matches || self.stack_show_unresolved || !e.symbol_candidates.is_empty()
+                })
+                .map(|e| {
+                    Row::new(
+                        vec![
+                            e.function.clone(),
+                            bytes(e.local_bytes),
+                            e.qualifier.clone(),
+                            format!(
+                                "{}:{}",
+                                build_relative_path(&e.source_file, build_root),
+                                e.source_line
+                            ),
+                        ],
+                        &[(1, e.local_bytes.into())],
                         format!(
-                            "{}:{}",
-                            build_relative_path(&e.source_file, build_root),
-                            e.source_line
+                            "{}\n{}\nELF matches: {:?}",
+                            build_relative_path(&e.report_file, build_root),
+                            e.evidence,
+                            e.symbol_candidates
                         ),
-                    ],
-                    &[(1, e.local_bytes.into())],
-                    format!(
-                        "{}\n{}\nELF matches: {:?}",
-                        build_relative_path(&e.report_file, build_root),
-                        e.evidence,
-                        e.symbol_candidates
-                    ),
-                )
-                .with_bars(&[1])
-            })
-            .collect();
+                    )
+                    .with_bars(&[1])
+                })
+                .collect()
+        });
         self.table(ui, &[("Function","Compiler function label"),("Local frame","Compiler reported bytes, not a call-chain estimate. Gray bars compare each frame with the largest visible frame (100%)."),("Qualifier","static: fixed frame; dynamic,bounded: compiler bound; dynamic: total may be unbounded"),("Source","Location reported by the compiler")], rows);
     }
     pub(super) fn compare_view(&mut self, ui: &mut egui::Ui) {
@@ -755,27 +884,29 @@ impl Explorer {
             2 => &c.sections,
             _ => &c.files,
         };
-        let rows = changes
-            .iter()
-            .map(|c| {
-                Row::new(
-                    vec![
-                        c.identity.clone(),
-                        format!("{:+} B", c.flash_delta),
-                        format!("{:+} B", c.ram_delta),
-                        c.status.clone(),
-                    ],
-                    &[(1, c.flash_delta), (2, c.ram_delta)],
-                    format!(
-                        "Flash: {} to {}\nRAM: {} to {}",
-                        bytes(c.old.flash),
-                        bytes(c.new.flash),
-                        bytes(c.old.ram),
-                        bytes(c.new.ram)
-                    ),
-                )
-            })
-            .collect();
+        let rows = self.cached_rows(c as *const _ as usize, || {
+            changes
+                .iter()
+                .map(|c| {
+                    Row::new(
+                        vec![
+                            c.identity.clone(),
+                            format!("{:+} B", c.flash_delta),
+                            format!("{:+} B", c.ram_delta),
+                            c.status.clone(),
+                        ],
+                        &[(1, c.flash_delta), (2, c.ram_delta)],
+                        format!(
+                            "Flash: {} to {}\nRAM: {} to {}",
+                            bytes(c.old.flash),
+                            bytes(c.new.flash),
+                            bytes(c.old.ram),
+                            bytes(c.new.ram)
+                        ),
+                    )
+                })
+                .collect()
+        });
         self.table(
             ui,
             &[
@@ -956,5 +1087,70 @@ fn tree(
             })
             .header_response
             .on_hover_text(help);
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    fn rows() -> Vec<Row> {
+        [("Alpha", 100), ("Beta", 9), ("beta", 9)]
+            .into_iter()
+            .map(|(name, value)| {
+                Row::new(
+                    vec![name.into(), value.to_string()],
+                    &[(1, value)],
+                    name.into(),
+                )
+                .with_bars(&[1])
+            })
+            .collect()
+    }
+
+    #[test]
+    fn repaints_reuse_rows_and_order_while_search_and_sort_preserve_scales_and_ties() {
+        let mut app = Explorer::default();
+        let source = app.cached_rows(1, rows);
+        let prepared = app.prepare_table(source.clone(), 2);
+        assert_eq!(prepared.indices, [0, 1, 2]);
+        assert_eq!(prepared.bar_maxima[1], 100);
+        let same_rows = app.cached_rows(1, || panic!("repaint rebuilt rows"));
+        assert!(Rc::ptr_eq(&source, &same_rows));
+        assert!(Rc::ptr_eq(&prepared, &app.prepare_table(same_rows, 2)));
+        app.search = "BETA".into();
+        let filtered = app.prepare_table(source.clone(), 2);
+        assert_eq!(filtered.indices, [1, 2]);
+        assert_eq!(filtered.bar_maxima[1], 9);
+        app.descending = false;
+        let sorted = app.prepare_table(source.clone(), 2);
+        assert_eq!(sorted.indices, [1, 2]);
+        assert_eq!(sorted.bar_maxima[1], 9);
+        assert!(!Rc::ptr_eq(&filtered, &sorted));
+        app.search.clear();
+        assert_eq!(app.prepare_table(source, 2).indices, [1, 2, 0]);
+    }
+
+    #[test]
+    fn modes_selections_sources_and_report_revision_invalidate_rows() {
+        let mut app = Explorer::default();
+        let mut previous = app.cached_rows(1, rows);
+        let changes: [fn(&mut Explorer); 8] = [
+            |a| a.view = View::Symbols,
+            |a| a.kind_filter = "Function".into(),
+            |a| a.selected_file = Some("src/main.c".into()),
+            |a| a.selected_region = Some(1),
+            |a| a.stack_show_unresolved = true,
+            |a| a.comparison_group = 1,
+            |a| a.report_revision += 1,
+            |a| a.view = View::Sections,
+        ];
+        for change in changes {
+            change(&mut app);
+            let next = app.cached_rows(1, rows);
+            assert!(!Rc::ptr_eq(&previous, &next));
+            previous = next;
+        }
+        assert!(!Rc::ptr_eq(&previous, &app.cached_rows(2, rows)));
     }
 }
