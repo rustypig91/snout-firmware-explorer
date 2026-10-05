@@ -2009,16 +2009,18 @@ fn committed_fixture_renders_six_boxes_and_sixteen_dependency_arrowheads() {
     app.change_view(View::Dependencies);
     let ctx = egui::Context::default();
     shell::configure_style(&ctx);
-    let output = ctx.run(
-        egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(1280.0, 900.0),
-            )),
-            ..Default::default()
-        },
-        |ctx| app.show(ctx),
-    );
+    let output = dependencies::settle_graph(&mut app, |app| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 900.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| app.show(ctx),
+        )
+    });
     let boxes: Vec<_> = output
         .shapes
         .iter()

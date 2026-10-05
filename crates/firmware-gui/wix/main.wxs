@@ -63,7 +63,8 @@
                                 Name="Rusty's Snout - Firmware Explorer"
                                 Description="Rustys Snout - Firmware Explorer"
                                 WorkingDirectory="APPLICATIONFOLDER"
-                                Advertise="yes" />
+                                Advertise="yes"
+                                Icon="SnoutIcon.exe" IconIndex="0" />
                         </File>
                     </Component>
 
@@ -97,6 +98,8 @@
         </Feature>
 
         <!-- Icon shown in Add/Remove Programs and on the Start Menu shortcut. -->
+        <Icon Id="SnoutIcon.exe" SourceFile="$(var.CargoTargetBinDir)\firmware-gui.exe" />
+        <Property Id="ARPPRODUCTICON" Value="SnoutIcon.exe" />
         <Property Id="ARPHELPLINK" Value="https://github.com/rustypig91/snout-firmware-explorer" />
         <Property Id="ARPURLINFOABOUT" Value="https://github.com/rustypig91/snout-firmware-explorer" />
 

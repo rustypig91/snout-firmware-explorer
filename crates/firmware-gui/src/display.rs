@@ -1,5 +1,34 @@
 use std::borrow::Cow;
 
+/// Resolve all peer labels together, avoiding an all-pairs path scan in graphs.
+pub(super) fn short_paths(paths: &[&str]) -> Vec<String> {
+    use std::collections::{HashMap, HashSet};
+    let normalized: Vec<_> = paths.iter().map(|p| p.replace('\\', "/")).collect();
+    let distinct: HashSet<_> = normalized.iter().map(String::as_str).collect();
+    let mut suffix_counts = HashMap::<&str, usize>::new();
+    for path in distinct {
+        *suffix_counts.entry(path).or_default() += 1;
+        for (offset, _) in path.match_indices('/') {
+            *suffix_counts.entry(&path[offset + 1..]).or_default() += 1;
+        }
+    }
+    normalized
+        .iter()
+        .map(|path| {
+            let parts: Vec<_> = path.split('/').filter(|p| !p.is_empty()).collect();
+            for count in 2.min(parts.len())..=parts.len() {
+                let suffix = parts[parts.len() - count..].join("/");
+                let own_match =
+                    usize::from(path == &suffix || path.ends_with(&format!("/{suffix}")));
+                if suffix_counts.get(suffix.as_str()).copied().unwrap_or(0) <= own_match {
+                    return suffix;
+                }
+            }
+            path.clone()
+        })
+        .collect()
+}
+
 /// Keep at least a parent directory and extend the suffix to distinguish peers.
 /// Treat both separators as paths, including debug paths from another OS.
 pub(super) fn short_path<'a>(path: &str, peers: impl IntoIterator<Item = &'a str>) -> String {
@@ -100,6 +129,25 @@ pub(super) fn display_path(path: &str) -> Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::{build_relative_path, display_path, short_path};
+
+    #[test]
+    fn batch_short_paths_match_individual_resolution() {
+        let paths = [
+            "C:/build/app/src/main.c",
+            "C:/build/lib/src/main.c",
+            "C:\\build\\app\\src\\main.c",
+            "main.c",
+            "src/main.c",
+            "",
+            "/",
+            "/build/src/diag.c",
+            "/build//src/other.c",
+            "a/b/",
+            "a///b",
+        ];
+        let expected: Vec<_> = paths.iter().map(|p| short_path(p, paths)).collect();
+        assert_eq!(super::short_paths(&paths), expected);
+    }
 
     #[test]
     fn paths_are_relative_to_build_folder_without_filesystem_access() {

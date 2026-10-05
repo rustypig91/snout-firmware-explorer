@@ -22,7 +22,7 @@ pub(super) struct NodeSpec {
     pub size: egui::Vec2,
 }
 
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 pub(super) struct LayoutInput {
     pub nodes: Vec<NodeSpec>,
     pub edges: Vec<(String, String)>,

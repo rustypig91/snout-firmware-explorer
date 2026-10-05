@@ -10,6 +10,8 @@ mod dependencies;
 mod display;
 mod insights;
 mod overview;
+#[cfg(test)]
+mod performance;
 mod pie;
 mod preferences;
 mod shell;
@@ -120,6 +122,8 @@ struct SavedLayout {
     source: String,
 }
 struct Explorer {
+    report_revision: u64,
+    table_cache: views::TableCache,
     preferences_file: Option<PathBuf>,
     analysis: Option<Arc<Analysis>>,
     graph_view: dependencies::GraphView,
@@ -165,6 +169,8 @@ struct Explorer {
 impl Default for Explorer {
     fn default() -> Self {
         Self {
+            report_revision: 0,
+            table_cache: Default::default(),
             preferences_file: None,
             analysis: None,
             graph_view: Default::default(),
@@ -332,6 +338,8 @@ impl Explorer {
     fn poll(&mut self) {
         match self.receiver.as_ref().map(|r| r.try_recv()) {
             Some(Ok(result)) => {
+                self.report_revision = self.report_revision.wrapping_add(1);
+                self.table_cache = Default::default();
                 self.receiver = None;
                 self.region_cache_key = 0;
                 let refreshed = matches!(&result, Ok(Loaded::Refresh(_)));
@@ -578,6 +586,10 @@ fn main() -> eframe::Result {
     };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
+            .with_icon(
+                eframe::icon_data::from_png_bytes(include_bytes!("../packaging/icons/snout.png"))
+                    .expect("bundled Snout icon"),
+            )
             .with_inner_size([1280.0, 820.0])
             .with_min_inner_size([900.0, 600.0]),
         ..Default::default()

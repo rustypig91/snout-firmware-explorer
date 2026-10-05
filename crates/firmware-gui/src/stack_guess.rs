@@ -1,7 +1,7 @@
 use super::{workspace::StackSelection, Analysis, LoadedStack};
 use firmware_analysis_core::{
     build::{ArtifactKind, BuildFolder},
-    stack::analyze_stack_files,
+    stack::StackAnalyzer,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -157,14 +157,19 @@ pub(super) fn guess(analysis: &Analysis, build: &BuildFolder) -> Result<LoadedSt
         .as_ref()
         .map(|(paths, _)| paths.clone())
         .unwrap_or_else(|| fallback_paths.clone());
+    let analyzer = StackAnalyzer::new(analysis);
     let mut report = if provenance.is_some() {
-        analyze_stack_files(analysis, analyzed_paths).map_err(|e| e.to_string())?
+        analyzer
+            .analyze_files(analyzed_paths)
+            .map_err(|e| e.to_string())?
     } else {
         // These are candidates across the build folder, not a selected set.
         // An unrelated unreadable report must not hide usable function matches.
-        let mut combined = analyze_stack_files(analysis, Vec::new()).map_err(|e| e.to_string())?;
+        let mut combined = analyzer
+            .analyze_files(Vec::new())
+            .map_err(|e| e.to_string())?;
         for path in analyzed_paths {
-            match analyze_stack_files(analysis, vec![path]) {
+            match analyzer.analyze_files(vec![path]) {
                 Ok(candidate) => {
                     combined.entries.extend(candidate.entries);
                     for warning in candidate.warnings {
