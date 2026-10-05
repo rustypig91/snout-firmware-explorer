@@ -153,7 +153,169 @@ pub(super) fn compute(input: &LayoutInput) -> GraphLayout {
     result
 }
 
+/// Linear traversal and column placement for large connected graphs. Routes
+/// leave each column through its gutters and run outside the cards, so no
+/// per-edge all-pairs obstacle search is needed.
+fn compute_large(input: &LayoutInput) -> GraphLayout {
+    let indexes: BTreeMap<_, _> = input
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id.as_str(), i))
+        .collect();
+    let mut outgoing = vec![Vec::new(); input.nodes.len()];
+    let mut incoming = vec![0usize; input.nodes.len()];
+    for (from, to) in &input.edges {
+        let (a, b) = (indexes[from.as_str()], indexes[to.as_str()]);
+        outgoing[a].push(b);
+        incoming[b] += 1;
+    }
+    let mut rank = vec![usize::MAX; input.nodes.len()];
+    let mut queue = std::collections::VecDeque::new();
+    for (i, count) in incoming.iter().enumerate() {
+        if *count == 0 {
+            rank[i] = 0;
+            queue.push_back(i);
+        }
+    }
+    loop {
+        while let Some(i) = queue.pop_front() {
+            for &next in &outgoing[i] {
+                if rank[next] == usize::MAX {
+                    rank[next] = rank[i] + 1;
+                    queue.push_back(next);
+                }
+            }
+        }
+        // Cyclic components have no zero-incoming root. Choose a deterministic
+        // seed with many references rather than leaving their cards unplaced.
+        let next = (0..rank.len())
+            .filter(|&i| rank[i] == usize::MAX)
+            .max_by_key(|&i| (outgoing[i].len(), std::cmp::Reverse(i)));
+        let Some(next) = next else {
+            break;
+        };
+        rank[next] = 0;
+        queue.push_back(next);
+    }
+    let mut lanes: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, node) in input.nodes.iter().enumerate() {
+        let lane = if input.grouped {
+            node.directory.clone()
+        } else {
+            format!("{:020}", rank[i])
+        };
+        lanes.entry(lane).or_default().push(i);
+    }
+    let vertical = input.vertical && !input.grouped;
+    let transform = |point: egui::Pos2| {
+        if vertical {
+            egui::pos2(point.y, point.x)
+        } else {
+            point
+        }
+    };
+    let mut cards = BTreeMap::new();
+    let mut headings = Vec::new();
+    let mut gutters = BTreeMap::new();
+    let mut x = 0.0;
+    for (lane, members) in lanes {
+        let width = members
+            .iter()
+            .map(|&i| {
+                if vertical {
+                    input.nodes[i].size.y
+                } else {
+                    input.nodes[i].size.x
+                }
+            })
+            .fold(0.0, f32::max);
+        if input.grouped {
+            headings.push((lane, transform(egui::pos2(x + width / 2.0, -24.0))));
+        }
+        let mut y = 0.0;
+        for i in members {
+            let node = &input.nodes[i];
+            let size = if vertical {
+                egui::vec2(node.size.y, node.size.x)
+            } else {
+                node.size
+            };
+            let min = egui::pos2(x + (width - size.x) / 2.0, y);
+            let max = min + size;
+            cards.insert(
+                node.id.clone(),
+                egui::Rect::from_min_max(transform(min), transform(max)),
+            );
+            gutters.insert(node.id.as_str(), (x - 24.0, x + width + 24.0));
+            y += size.y + 36.0;
+        }
+        x += width + 96.0;
+    }
+    let mut bounds = cards.values().fold(egui::Rect::NOTHING, |b, r| b.union(*r));
+    let bottom = if vertical {
+        bounds.right()
+    } else {
+        bounds.bottom()
+    };
+    let edges = input
+        .edges
+        .iter()
+        .enumerate()
+        .map(|(i, (from, to))| {
+            let a = cards[from];
+            let b = cards[to];
+            let (start, end) = if vertical {
+                (a.center_bottom(), b.center_top())
+            } else {
+                (a.right_center(), b.left_center())
+            };
+            let start = transform(start);
+            let end = transform(end);
+            let track = 48.0 + (i % 24) as f32 * 4.0;
+            let outside = if from < to { -track } else { bottom + track };
+            let points = vec![
+                start,
+                egui::pos2(gutters[from.as_str()].1, start.y),
+                egui::pos2(gutters[from.as_str()].1, outside),
+                egui::pos2(gutters[to.as_str()].0, outside),
+                egui::pos2(gutters[to.as_str()].0, end.y),
+                end,
+            ]
+            .into_iter()
+            .map(transform)
+            .collect::<Vec<_>>();
+            for point in &points {
+                bounds.extend_with(*point);
+            }
+            RoutedEdge {
+                from: from.clone(),
+                to: to.clone(),
+                points,
+            }
+        })
+        .collect();
+    for (label, point) in &headings {
+        bounds = bounds.union(egui::Rect::from_center_size(
+            *point,
+            egui::vec2(label.chars().count() as f32 * 8.0, 24.0),
+        ));
+    }
+    GraphLayout {
+        cards,
+        edges,
+        headings,
+        bounds: bounds.expand(12.0),
+    }
+}
+
 fn compute_connected(input: &LayoutInput) -> GraphLayout {
+    // Dense firmware graphs make rank optimization, connector expansion and
+    // per-edge visibility routing prohibitively expensive. Keep the full graph
+    // using bounded placement and gutter routes; focused subsets retain detail.
+    if input.nodes.len() > 100 || input.edges.len() > 250 {
+        return compute_large(input);
+    }
     let orientation = if input.vertical && !input.grouped {
         Orientation::TopToBottom
     } else {
@@ -853,5 +1015,56 @@ impl RenderBackend for CurveCollector {
     fn draw_text(&mut self, _: Point, _: &str, _: &StyleAttr) {}
     fn create_clip(&mut self, _: Point, _: Point, _: usize) -> ClipHandle {
         0
+    }
+}
+
+#[test]
+fn large_connected_firmware_graph_preserves_cards_and_clear_routes() {
+    let mut input = LayoutInput {
+        nodes: (0..301)
+            .map(|i| NodeSpec {
+                id: format!("unit{i:03}"),
+                directory: format!("directory{}", i % 24),
+                size: egui::vec2(180.0 + (i % 5) as f32 * 24.0, 48.0 + (i % 7) as f32 * 12.0),
+            })
+            .collect(),
+        edges: (0..301)
+            .flat_map(|i| {
+                [1, 17].map(move |step| {
+                    (
+                        format!("unit{i:03}"),
+                        format!("unit{:03}", (i + step) % 301),
+                    )
+                })
+            })
+            .collect(),
+        grouped: false,
+        ram: false,
+        vertical: false,
+    };
+    for (grouped, vertical) in [(false, false), (false, true), (true, false)] {
+        input.grouped = grouped;
+        input.vertical = vertical;
+        let start = std::time::Instant::now();
+        let geometry = compute(&input);
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(3),
+            "large layout exceeded its interactive budget"
+        );
+        assert_eq!(geometry.cards.len(), input.nodes.len());
+        assert_eq!(geometry.edges.len(), input.edges.len());
+        for (i, card) in geometry.cards.values().enumerate() {
+            assert!(geometry.bounds.contains_rect(*card));
+            for other in geometry.cards.values().skip(i + 1) {
+                assert!(!card.intersects(*other));
+            }
+        }
+        for (edge, (from, to)) in geometry.edges.iter().zip(&input.edges) {
+            assert_eq!((&edge.from, &edge.to), (from, to));
+            assert!(geometry.cards[from].contains(edge.points[0]));
+            assert!(geometry.cards[to].contains(*edge.points.last().unwrap()));
+            assert!(route_is_clear(&edge.points, &geometry.cards));
+        }
+        assert_eq!(geometry.headings.is_empty(), !grouped);
     }
 }

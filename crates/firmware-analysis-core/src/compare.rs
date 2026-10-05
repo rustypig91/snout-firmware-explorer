@@ -63,6 +63,9 @@ pub fn compare(old: &Analysis, new: &Analysis) -> Comparison {
         map
     };
     let mut warnings = vec!["Matching uses file label, section and mangled symbol name. Duplicate identities are aggregated; renamed/moved files appear as additions and removals. Attribution changes can affect file deltas.".into()];
+    if old.tls.is_some() || new.tls.is_some() {
+        warnings.push("TLS runtime allocations are unknown and excluded from static RAM deltas. Compare the per-thread TLS templates separately.".into());
+    }
     if old.metadata.machine != new.metadata.machine || old.metadata.bitness != new.metadata.bitness
     {
         warnings

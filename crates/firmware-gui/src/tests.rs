@@ -2576,3 +2576,52 @@ fn llvm_map_preview_and_manual_import_preserve_analysis_and_capacity() {
         .any(|text| text.starts_with("Cannot parse the map preview:")));
     assert!(!labels.contains(&".beyond_preview"));
 }
+
+#[test]
+fn overview_displays_tls_template_and_unknown_runtime_ram() {
+    let mut app = Explorer::default();
+    let mut a = firmware_analysis_core::analyze_bytes(
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        "TLS fixture",
+        &Default::default(),
+    )
+    .unwrap();
+    a.tls = Some(firmware_analysis_core::TlsReport {
+        source: "PT_TLS".into(),
+        initialized_size: 4,
+        zero_initialized_size: 8,
+        template_size: 12,
+        alignment: 8,
+        total_runtime_ram: None,
+        symbols: vec![firmware_analysis_core::TlsSymbol {
+            name: "local_counter".into(),
+            offset: 0,
+            size: 4,
+            section: ".tdata".into(),
+        }],
+    });
+    app.analysis = Some(a.into());
+    let ctx = egui::Context::default();
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 900.0),
+            )),
+            ..Default::default()
+        },
+        |ctx| app.show(ctx),
+    );
+    let text = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("Thread-local storage"));
+    assert!(text.contains("Template per thread: 12 B"));
+    assert!(text.contains("Total TLS RAM is unknown"));
+}

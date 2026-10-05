@@ -8,6 +8,9 @@ pub struct Analysis {
     pub metadata: Metadata,
     pub options: AnalysisOptions,
     pub totals: Usage,
+    /// TLS templates are separate from static RAM; runtime allocation is unknown.
+    #[serde(default)]
+    pub tls: Option<TlsReport>,
     pub unattributed: Usage,
     pub sections: Vec<Section>,
     pub symbols: Vec<Symbol>,
@@ -45,6 +48,7 @@ pub enum Classification {
     InitializedRam,
     NoLoadRam,
     NonAllocated,
+    ThreadLocal,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,4 +142,26 @@ pub struct MemoryRegion {
 pub enum MemoryKind {
     Flash,
     Ram,
+}
+
+/// Generic ELF TLS template facts, excluding ABI/runtime allocation overhead.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TlsReport {
+    pub source: String,
+    pub initialized_size: u64,
+    pub zero_initialized_size: u64,
+    pub template_size: u64,
+    pub alignment: u64,
+    /// Unknown without thread count and runtime allocation policy. Never added to static RAM.
+    pub total_runtime_ram: Option<u64>,
+    pub symbols: Vec<TlsSymbol>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TlsSymbol {
+    pub name: String,
+    /// Offset within the TLS template, not a physical runtime address.
+    pub offset: u64,
+    pub size: u64,
+    pub section: String,
 }

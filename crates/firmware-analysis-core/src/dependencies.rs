@@ -10,6 +10,12 @@ pub struct DependencyGraph {
     pub edges: Vec<DependencyEdge>,
     pub map_path: Option<String>,
     pub notes: Vec<String>,
+    /// Guidance for a map that could not supply connections; absent for ELF-only reports.
+    #[serde(default)]
+    pub connection_hint: Option<String>,
+    /// Only supplied when a recognized linker supports these options.
+    #[serde(default)]
+    pub cross_reference_flags: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DependencyNode {
@@ -91,7 +97,7 @@ pub fn units(analysis: &Analysis) -> DependencyGraph {
     }
     DependencyGraph {
         nodes: nodes.into_values().collect(),
-        notes: vec!["Connections unavailable. Generate a GNU ld or LLVM lld ELF map with -Wl,-Map,app.map,--cref,--no-demangle and use it from the same firmware build. Units without connections are not proven independent.".into()],
+        notes: vec!["No linker cross references loaded. Load a GNU ld or LLVM lld ELF map with cross references from the same firmware build. Units without connections are not proven independent.".into()],
         ..Default::default()
     }
 }
@@ -107,10 +113,7 @@ fn references(text: &str) -> Result<Vec<Reference>, String> {
         .lines()
         .skip_while(|line| line.trim() != "Cross Reference Table");
     if lines.next().is_none() {
-        return Err(
-            "No GNU ld / LLVM lld Cross Reference Table found; rebuild with --cref --no-demangle."
-                .into(),
-        );
+        return Err("No Cross Reference Table found.".into());
     }
     let header = lines
         .find(|line| !line.trim().is_empty())
@@ -152,7 +155,14 @@ pub fn from_map(analysis: &Analysis, text: &str, path: &str) -> Result<Dependenc
     if crate::map::detect_map_format(text) == crate::map::MapFormat::TexasCgt {
         return Err("TI CGT memory regions are supported, but TI cross-reference import is not yet supported.".into());
     }
-    let references = references(text)?;
+    let format = crate::map::detect_map_format(text);
+    let references = references(text).map_err(|error| {
+        match format {
+            crate::map::MapFormat::GnuLd | crate::map::MapFormat::LlvmLld =>
+                format!("{} map: {error} Rebuild with --cref --no-demangle to generate symbol cross references.", format.label()),
+            _ => format!("Unrecognized map format: {error} Cross-reference import supports GNU ld and LLVM lld ELF tables; select a supported map from the same build."),
+        }
+    })?;
     let mut graph = units(analysis);
     graph.notes.clear();
     if crate::map::detect_map_format(text) == crate::map::MapFormat::LlvmLld {
@@ -256,8 +266,20 @@ pub fn from_map(analysis: &Analysis, text: &str, path: &str) -> Result<Dependenc
 
 /// Failed imports preserve the ELF-only nodes and explain why connections are unavailable.
 pub fn import_map(analysis: &mut Analysis, text: &str, path: &str) {
+    // A successful replacement map clears a warning from a previous failed import.
+    analysis
+        .warnings
+        .retain(|warning| !warning.starts_with("Dependency graph: "));
     analysis.dependencies = from_map(analysis, text, path).unwrap_or_else(|error| {
+        analysis.warnings.push(format!(
+            "Dependency graph: {path}: {error} File boxes do not establish dependencies; connections are unavailable until a map with cross references is loaded."
+        ));
         let mut graph = units(analysis);
+        graph.notes.clear();
+        graph.connection_hint = Some(error.clone());
+        if matches!(crate::map::detect_map_format(text), crate::map::MapFormat::GnuLd | crate::map::MapFormat::LlvmLld) {
+            graph.cross_reference_flags = Some("-Wl,--cref,--no-demangle".into());
+        }
         graph.notes.push(format!("{path}: {error}"));
         graph
     });

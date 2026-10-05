@@ -968,6 +968,7 @@ fn classification(value: firmware_analysis_core::Classification) -> &'static str
         InitializedRam => "Initialized RAM",
         NoLoadRam => "RAM / no payload",
         NonAllocated => "Not allocated",
+        ThreadLocal => "TLS template (per thread)",
     }
 }
 /// Draw the direction indicator geometrically, without depending on font glyphs.
