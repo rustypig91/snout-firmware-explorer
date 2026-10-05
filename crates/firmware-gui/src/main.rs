@@ -70,6 +70,30 @@ impl View {
         }
     }
 }
+// Session-only settings for the controls shared by the data tabs.
+#[derive(Clone)]
+struct TabOptions {
+    search: String,
+    sort_column: usize,
+    descending: bool,
+    tree: bool,
+    selected_file: Option<String>,
+    selected_region: Option<usize>,
+    kind_filter: String,
+}
+impl TabOptions {
+    fn new(view: View) -> Self {
+        Self {
+            search: String::new(),
+            sort_column: 1,
+            descending: !matches!(view, View::MemoryMap),
+            tree: false,
+            selected_file: None,
+            selected_region: None,
+            kind_filter: "All".into(),
+        }
+    }
+}
 type LoadedStack = (StackReport, Option<workspace::StackSelection>);
 type Refreshed = (
     firmware_analysis_core::build::BuildFolder,
@@ -140,6 +164,7 @@ struct Explorer {
     options: AnalysisOptions,
     receiver: Option<mpsc::Receiver<JobResult>>,
     view: View,
+    tab_options: [TabOptions; 8],
     search: String,
     selected_file: Option<String>,
     selected_region: Option<usize>,
@@ -188,6 +213,7 @@ impl Default for Explorer {
             options: AnalysisOptions::default(),
             receiver: None,
             view: View::Overview,
+            tab_options: View::ALL.map(TabOptions::new),
             search: String::new(),
             selected_file: None,
             selected_region: None,
@@ -376,13 +402,10 @@ impl Explorer {
                         self.baseline = None;
                         self.stack = None;
                         self.details = None;
-                        self.selected_region = None;
+                        self.clear_firmware_filters();
                         self.overview_section = None;
                         self.overview_unit = None;
-                        self.selected_file = None;
                         self.artifact_search.clear();
-                        self.search.clear();
-                        self.kind_filter = "All".into();
                         self.visible_rows = 0;
                         let restore = self
                             .pending_restore
@@ -452,13 +475,9 @@ impl Explorer {
                             self.baseline = None;
                         }
                         self.replace_stack(stack);
-                        self.selected_file = None;
-                        self.selected_region = None;
+                        self.clear_firmware_filters();
                         self.overview_section = None;
                         self.overview_unit = None;
-                        self.search.clear();
-                        self.kind_filter = "All".into();
-                        self.stack_show_unresolved = false;
                         self.details = None;
                         self.visible_rows = 0;
                     }
@@ -495,7 +514,7 @@ impl Explorer {
                     Ok(Loaded::Config(options, analysis, source, stack, build)) => {
                         self.layout_source = source;
                         self.details = None;
-                        self.selected_region = None;
+                        self.clear_region_filters();
                         self.overview_section = None;
                         self.overview_unit = None;
                         self.layout_override = Some(options.clone());
