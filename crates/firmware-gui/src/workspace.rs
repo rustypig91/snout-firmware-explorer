@@ -6,6 +6,9 @@ use firmware_analysis_core::{
 };
 use std::{io::Read, path::PathBuf};
 
+const PREVIEW_TRUNCATED: &str =
+    "\n[Preview truncated at 1 MiB; applying a map reads the complete file.]";
+
 pub(super) fn analyze_selected(
     build: &firmware_analysis_core::build::BuildFolder,
     path: &std::path::Path,
@@ -460,9 +463,7 @@ impl Explorer {
             bytes.truncate(1024 * 1024);
             let mut text = String::from_utf8_lossy(&bytes).into_owned();
             if truncated {
-                text.push_str(
-                    "\n[Preview truncated at 1 MiB; applying a map reads the complete file.]",
-                );
+                text.push_str(PREVIEW_TRUNCATED);
             }
             Ok(Loaded::Text(artifact.path, text))
         });
@@ -691,9 +692,17 @@ impl Explorer {
         });
         if detect_map_format(&text) == MapFormat::LlvmLld {
             ui.collapsing("LLVM output section placement", |ui| {
-                match firmware_analysis_core::map::parse_lld_sections(&text) {
+                // A bounded text preview can end in the middle of any row. Do not
+                // parse that row or the UI's truncation notice as linker output.
+                let placement_text = if let Some(prefix) = text.strip_suffix(PREVIEW_TRUNCATED) {
+                    ui.small("Partial placement preview: only complete rows within the first 1 MiB are shown.");
+                    prefix.rsplit_once('\n').map_or("", |(complete, _)| complete)
+                } else {
+                    &text
+                };
+                match firmware_analysis_core::map::parse_lld_sections(placement_text) {
                     Ok(sections) => {
-                        ui.small("Allocated ranges from the map; ELF/DWARF remains authoritative for analysis.");
+                        ui.small("Output sections from the map, including non-allocated sections; ELF/DWARF remains authoritative for analysis.");
                         egui::ScrollArea::both().max_height(240.0).id_salt("lld_sections_scroll").show(ui, |ui| {
                             egui::Grid::new("lld_sections").striped(true).show(ui, |ui| {
                                 for heading in ["Section", "Runtime address", "Load address", "Size (bytes)"] { ui.strong(heading); }

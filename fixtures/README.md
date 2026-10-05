@@ -95,7 +95,7 @@ cargo run -p firmware-cli -- stack fixtures/build/cortex-m.elf \
 
 Scanning the whole build folder also discovers the grown configuration's reports. CMake's machine-specific cache, compiler probes, Ninja rules, and build bookkeeping are recreated locally and ignored by Git; ELF, map, object, stack-report, and compilation-database artifacts are committed. Tests use these artifacts and need no ARM toolchain. Debug paths and compilation-database commands reflect the generation machine.
 
-GNU ld maps include the 256 KiB Flash / 64 KiB RAM capacities and raw-symbol cross references (`--cref --no-demangle`). Clang/LLD maps do not support these GNU map imports. Toolchains may produce different code sizes; test totals refer to the stated GCC version.
+GNU ld maps include the 256 KiB Flash / 64 KiB RAM capacities and raw-symbol cross references (`--cref --no-demangle`). LLVM lld ELF maps support section-placement previews and cross-reference imports, but do not provide physical memory capacities. Toolchains may produce different code sizes; test totals refer to the stated GCC version.
 
 ## Memory layout
 

@@ -2544,4 +2544,35 @@ fn llvm_map_preview_and_manual_import_preserve_analysis_and_capacity() {
             "Missing {heading}"
         );
     }
+
+    // The real file loader cuts this valid map halfway through a numeric field.
+    // The section table must retain complete rows and identify the partial view.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("large.map");
+    let mut text = String::from("VMA LMA Size Align Out In Symbol\n0 0 10 1 .large\n");
+    text.extend(std::iter::repeat_n('\n', 1024 * 1024 - text.len() - 2));
+    text.push_str("1234 1234 10 1 .beyond_preview\n");
+    std::fs::write(&path, text).unwrap();
+    app.select_artifact(firmware_analysis_core::build::Artifact {
+        path,
+        kind: firmware_analysis_core::build::ArtifactKind::Map,
+    });
+    finish_job(&mut app);
+    let output = frame(&mut app, vec![]);
+    let labels: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Text(t) => Some(t.galley.text()),
+            _ => None,
+        })
+        .collect();
+    assert!(labels
+        .iter()
+        .any(|text| text.starts_with("Partial placement preview:")));
+    assert!(labels.contains(&".large"));
+    assert!(!labels
+        .iter()
+        .any(|text| text.starts_with("Cannot parse the map preview:")));
+    assert!(!labels.contains(&".beyond_preview"));
 }
