@@ -1,4 +1,4 @@
-//! Compilation-unit graph backed by GNU ld symbol cross references, not inferred calls.
+//! Compilation-unit graph backed by GNU ld / LLVM lld cross references, not inferred calls.
 use crate::{Analysis, Symbol, Usage};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -91,7 +91,7 @@ pub fn units(analysis: &Analysis) -> DependencyGraph {
     }
     DependencyGraph {
         nodes: nodes.into_values().collect(),
-        notes: vec!["Connections unavailable. Generate a GNU ld map with -Wl,-Map,app.map,--cref,--no-demangle and use it from the same firmware build. Units without connections are not proven independent.".into()],
+        notes: vec!["Connections unavailable. Generate a GNU ld or LLVM lld ELF map with -Wl,-Map,app.map,--cref,--no-demangle and use it from the same firmware build. Units without connections are not proven independent.".into()],
         ..Default::default()
     }
 }
@@ -107,7 +107,10 @@ fn references(text: &str) -> Result<Vec<Reference>, String> {
         .lines()
         .skip_while(|line| line.trim() != "Cross Reference Table");
     if lines.next().is_none() {
-        return Err("No GNU ld Cross Reference Table found; rebuild with --cref.".into());
+        return Err(
+            "No GNU ld / LLVM lld Cross Reference Table found; rebuild with --cref --no-demangle."
+                .into(),
+        );
     }
     let header = lines
         .find(|line| !line.trim().is_empty())
@@ -146,9 +149,15 @@ fn references(text: &str) -> Result<Vec<Reference>, String> {
 /// Object -> source-unit association requires exact symbol names and one consistent owner
 /// across all matching ELF definitions. Basenames are never used to guess ownership.
 pub fn from_map(analysis: &Analysis, text: &str, path: &str) -> Result<DependencyGraph, String> {
+    if crate::map::detect_map_format(text) == crate::map::MapFormat::TexasCgt {
+        return Err("TI CGT memory regions are supported, but TI cross-reference import is not yet supported.".into());
+    }
     let references = references(text)?;
     let mut graph = units(analysis);
     graph.notes.clear();
+    if crate::map::detect_map_format(text) == crate::map::MapFormat::LlvmLld {
+        graph.notes.push("Cross references imported from LLVM lld (ELF). ELF/DWARF symbol ownership remains authoritative.".into());
+    }
     graph.map_path = Some(path.into());
     graph.notes.push("Arrows mean linker symbol references, including data and function addresses; they are not a function call graph. Cross references may include discarded code. Object-only arrows may also include unresolved weak references: GNU ld lists their users without distinguishing a defining file. Map matching is not proof of build ownership.".into());
     let mut definitions: BTreeMap<&str, BTreeSet<Option<String>>> = BTreeMap::new();

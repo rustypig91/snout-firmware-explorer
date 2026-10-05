@@ -255,3 +255,122 @@ fn committed_fixtures_have_six_units_and_real_cross_dependencies() {
         .iter()
         .all(|n| n.usage.is_none()));
 }
+
+const TI_MAP: &str = "ARM Linker PC v20.2.7.LTS\nOUTPUT FILE NAME: <app.out>\nMEMORY CONFIGURATION\nname origin length used unused attr fill\n---------------------- -------- -------- -------- -------- ---- --------\nPAGE 0:\nFLASH 08000000 00040000 00000100 0003ff00 RWIX\nPAGE 1:\nSRAM 20000000 00010000 00000020 0000ffe0 RWIX\nEMPTY 30000000 00000000 00000000 00000000 RWIX\nSECTION ALLOCATION MAP\nnot a memory region\n";
+
+#[test]
+fn detects_formats_from_contents_including_bom_and_crlf() {
+    use firmware_analysis_core::build::{detect_map_format, MapFormat};
+    assert_eq!(detect_map_format(MAP), MapFormat::GnuLd);
+    assert_eq!(detect_map_format(TI_MAP), MapFormat::TexasCgt);
+    assert_eq!(detect_map_format("unknown.map"), MapFormat::Unknown);
+    assert_eq!(
+        detect_map_format(&format!("{MAP}{TI_MAP}")),
+        MapFormat::Unknown
+    );
+    let text = format!("\u{feff}{}", TI_MAP.replace('\n', "\r\n"));
+    assert_eq!(detect_map_format(&text), MapFormat::TexasCgt);
+    assert_eq!(parse_map_regions(&text).unwrap().regions.len(), 2);
+    assert!(parse_map_regions(&format!("\u{feff}{MAP}")).is_ok());
+}
+
+#[test]
+fn ti_regions_use_capacity_and_names_before_permissions() {
+    use firmware_analysis_core::MemoryKind;
+    let options = parse_map_regions(TI_MAP).unwrap();
+    assert_eq!(options.regions.len(), 2);
+    assert_eq!(options.regions[0].start, 0x08000000);
+    assert_eq!(options.regions[0].size, 0x40000);
+    assert_eq!(options.regions[0].kind, MemoryKind::Flash);
+    assert_eq!(options.regions[1].size, 0x10000);
+    assert_eq!(options.regions[1].kind, MemoryKind::Ram);
+}
+
+#[test]
+fn ti_legacy_table_and_hex_variants() {
+    let options = parse_map_regions("MEMORY CONFIGURATION\nname origin length attributes fill\n-------- -------- -------- ---------- --------\nEEPROM 0X08000000 0x400 RWIX ffffffff\nRAM 20000000 0000ABCD RW\nGLOBAL SYMBOLS\nignored\n").unwrap();
+    assert_eq!(options.regions[0].size, 0x400);
+    assert_eq!(
+        options.regions[0].kind,
+        firmware_analysis_core::MemoryKind::Flash
+    );
+    assert_eq!(options.regions[1].size, 0xabcd);
+}
+
+#[test]
+fn ti_target_detection_does_not_use_the_output_filename() {
+    let text = TI_MAP.replace("<app.out>", "<C:/C2000/ARM/app.out>");
+    assert_eq!(
+        parse_map_regions(&text).unwrap(),
+        parse_map_regions(TI_MAP).unwrap()
+    );
+    for target in [
+        "TMS320C2800",
+        "TMS320C2000 COFF",
+        "TMS320C54x",
+        "TMS320C55x",
+        "C2000",
+    ] {
+        let text = TI_MAP.replace("ARM Linker", &format!("{target} Linker"));
+        assert!(parse_map_regions(&text)
+            .unwrap_err()
+            .to_string()
+            .contains("word-addressed"));
+    }
+}
+
+#[test]
+fn ti_invalid_and_unrepresentable_layouts_are_rejected() {
+    for text in [
+        TI_MAP.replace("20000000", "08000000"),
+        TI_MAP.replace("00010000", "ffffffffffffffff"),
+        TI_MAP.replace("00040000", "invalid"),
+        TI_MAP.replace("00000100", "invalid"),
+        TI_MAP.replace("PAGE 1:", "PAGE bad:"),
+        TI_MAP.replace("ARM Linker", "TMS320C2800 Linker"),
+        "MEMORY CONFIGURATION\nname origin length attr\n".into(),
+        "MEMORY CONFIGURATION\nname origin length used attr\nFLASH 0 100 0 RWIX\n".into(),
+        "MEMORY CONFIGURATION\nFLASH 08000000 00040000 RWIX\n".into(),
+    ] {
+        assert!(parse_map_regions(&text).is_err(), "Accepted: {text}");
+    }
+}
+
+#[test]
+fn ti_automatic_import_preserves_elf_and_dwarf_information() {
+    let dir = Temp::new();
+    let firmware = dir.0.join("app.out");
+    fs::write(
+        &firmware,
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+    )
+    .unwrap();
+    fs::write(dir.0.join("app.map"), TI_MAP).unwrap();
+    let baseline = firmware_analysis_core::analyze_path(&firmware, &Default::default()).unwrap();
+    assert!(baseline
+        .symbols
+        .iter()
+        .any(|s| s.dwarf_compilation_unit.is_some()));
+    let build = scan_folder(&dir.0).unwrap();
+    let imported = analyze_build_firmware(&build, &firmware, None).unwrap();
+    assert_eq!(imported.options.regions.len(), 2);
+    assert!(imported
+        .warnings
+        .iter()
+        .any(|w| w.contains("Texas Instruments CGT")));
+    let attribution = |a: &firmware_analysis_core::Analysis| {
+        a.symbols
+            .iter()
+            .map(|s| {
+                (
+                    s.name.clone(),
+                    s.address,
+                    s.size,
+                    s.compilation_unit.clone(),
+                    s.dwarf_compilation_unit.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(attribution(&baseline), attribution(&imported));
+}

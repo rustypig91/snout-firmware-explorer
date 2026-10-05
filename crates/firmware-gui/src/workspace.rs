@@ -2,9 +2,12 @@ use super::display::display_path;
 use super::{egui, Explorer, Loaded};
 use firmware_analysis_core::{
     analyze_path,
-    build::{parse_map_regions, scan_folder, Artifact, ArtifactKind},
+    build::{detect_map_format, parse_map_regions, scan_folder, Artifact, ArtifactKind, MapFormat},
 };
 use std::{io::Read, path::PathBuf};
+
+const PREVIEW_TRUNCATED: &str =
+    "\n[Preview truncated at 1 MiB; applying a map reads the complete file.]";
 
 pub(super) fn analyze_selected(
     build: &firmware_analysis_core::build::BuildFolder,
@@ -460,9 +463,7 @@ impl Explorer {
             bytes.truncate(1024 * 1024);
             let mut text = String::from_utf8_lossy(&bytes).into_owned();
             if truncated {
-                text.push_str(
-                    "\n[Preview truncated at 1 MiB; applying a map reads the complete file.]",
-                );
+                text.push_str(PREVIEW_TRUNCATED);
             }
             Ok(Loaded::Text(artifact.path, text))
         });
@@ -479,7 +480,7 @@ impl Explorer {
             let options = parse_map_regions(&text).map_err(|e| e.to_string())?;
             let mut analysis = current_path.map(|p| {
                 let mut a = analyze_path(p, &options)?;
-                a.warnings.push(format!("Memory regions selected from {}. Flash/RAM roles are inferred from names and attributes; verify this map belongs to the selected firmware.", path.display()));
+                a.warnings.push(format!("Memory regions selected from {} ({}). Flash/RAM roles are inferred from names and attributes; verify this map belongs to the selected firmware.", path.display(), detect_map_format(&text).label()));
                 Ok::<_, firmware_analysis_core::Error>(a)
             }).transpose().map_err(|e| e.to_string())?;
             if let (Some(analysis), Some(map)) = (&mut analysis, dependency_map) { read_dependency_map(analysis, &map); }
@@ -653,7 +654,7 @@ impl Explorer {
         };
         ui.heading(path.file_name().unwrap_or_default().to_string_lossy());
         ui.label(display_path(&path.to_string_lossy()));
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if self.analysis.is_some() && ui.button("Back to firmware").clicked() {
                 self.preview = None;
             }
@@ -666,12 +667,21 @@ impl Explorer {
                     .as_str()
                 {
                     "map" => {
-                        if self.analysis.is_some()
+                        let format = detect_map_format(&text);
+                        ui.label(format!("Detected format: {}", format.label()));
+                        if format == MapFormat::TexasCgt {
+                            ui.small("Memory regions supported; TI cross references are not yet supported.");
+                        }
+                        if format != MapFormat::TexasCgt && self.analysis.is_some()
                             && ui.button("Use cross references from this map").clicked()
                         {
                             self.apply_dependency_map(path.clone());
                         }
-                        ui.small("Select this map's radio button in the left menu to use its memory regions.");
+                        if format == MapFormat::LlvmLld {
+                            ui.small("LLVM maps contain section placement, not memory capacities. Load a memory-layout JSON for capacities.");
+                        } else {
+                            ui.small("Select this map's radio button in the left menu to use its memory regions.");
+                        }
                     }
                     "json" if ui.button("Use this memory layout").clicked() => {
                         self.configure(Some(path.clone()));
@@ -680,6 +690,37 @@ impl Explorer {
                 }
             });
         });
+        if detect_map_format(&text) == MapFormat::LlvmLld {
+            ui.collapsing("LLVM output section placement", |ui| {
+                // A bounded text preview can end in the middle of any row. Do not
+                // parse that row or the UI's truncation notice as linker output.
+                let placement_text = if let Some(prefix) = text.strip_suffix(PREVIEW_TRUNCATED) {
+                    ui.small("Partial placement preview: only complete rows within the first 1 MiB are shown.");
+                    prefix.rsplit_once('\n').map_or("", |(complete, _)| complete)
+                } else {
+                    &text
+                };
+                match firmware_analysis_core::map::parse_lld_sections(placement_text) {
+                    Ok(sections) => {
+                        ui.small("Output sections from the map, including non-allocated sections; ELF/DWARF remains authoritative for analysis.");
+                        egui::ScrollArea::both().max_height(240.0).id_salt("lld_sections_scroll").show(ui, |ui| {
+                            egui::Grid::new("lld_sections").striped(true).show(ui, |ui| {
+                                for heading in ["Section", "Runtime address", "Load address", "Size (bytes)"] { ui.strong(heading); }
+                                ui.end_row();
+                                for section in sections {
+                                    ui.label(section.name);
+                                    ui.monospace(format!("{:#x}", section.vma));
+                                    ui.monospace(format!("{:#x}", section.lma));
+                                    ui.label(section.size.to_string());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                    Err(error) => { ui.label(format!("Cannot parse the map preview: {error}")); }
+                }
+            });
+        }
         ui.separator();
         egui::ScrollArea::both()
             .id_salt("artifact_text")

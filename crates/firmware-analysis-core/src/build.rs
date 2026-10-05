@@ -1,7 +1,6 @@
-//! Build folder discovery and GNU ld memory configuration import.
-use crate::{
-    analyze_path, validate_options, Analysis, AnalysisOptions, Error, MemoryKind, MemoryRegion,
-};
+//! Build folder discovery and automatic linker-map memory configuration import.
+pub use crate::map::{detect_map_format, parse_map_regions, MapFormat};
+use crate::{analyze_path, validate_options, Analysis, AnalysisOptions, Error};
 use std::{
     fs,
     io::Read,
@@ -157,69 +156,6 @@ impl BuildFolder {
     }
 }
 
-/// Imports GNU ld's Memory Configuration table. Permission/name-based memory roles
-/// remain an inference; the numeric origins and lengths come directly from the map.
-pub fn parse_map_regions(text: &str) -> Result<AnalysisOptions, Error> {
-    let mut in_table = false;
-    let mut options = AnalysisOptions::default();
-    for line in text.lines() {
-        let line = line.trim();
-        if line == "Memory Configuration" {
-            in_table = true;
-            continue;
-        }
-        if !in_table {
-            continue;
-        }
-        if line.starts_with("Linker script and memory map") {
-            break;
-        }
-        if line.is_empty() {
-            continue;
-        }
-        let fields: Vec<_> = line.split_whitespace().collect();
-        if matches!(fields.first(), Some(&"*default*" | &"Name")) {
-            continue;
-        }
-        if fields.len() < 3 {
-            return Err(Error::Configuration(format!(
-                "Unsupported memory map row: {line}"
-            )));
-        }
-        let hex = |s: &str| {
-            u64::from_str_radix(s.trim_start_matches("0x").trim_start_matches("0X"), 16)
-                .map_err(|_| Error::Configuration(format!("Invalid map address/length: {s}")))
-        };
-        let name = fields[0].to_string();
-        let attrs = fields
-            .get(3)
-            .copied()
-            .unwrap_or("")
-            .split('!')
-            .next()
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        let kind = if attrs.contains('w') || name.to_ascii_lowercase().contains("ram") {
-            MemoryKind::Ram
-        } else {
-            MemoryKind::Flash
-        };
-        options.regions.push(MemoryRegion {
-            name,
-            start: hex(fields[1])?,
-            size: hex(fields[2])?,
-            kind,
-        });
-    }
-    if options.regions.is_empty() {
-        return Err(Error::Configuration(
-            "No supported GNU ld Memory Configuration table found".into(),
-        ));
-    }
-    validate_options(&options)?;
-    Ok(options)
-}
-
 pub fn analyze_build_firmware(
     build: &BuildFolder,
     path: &Path,
@@ -231,11 +167,14 @@ pub fn analyze_build_firmware(
         if let Some(map) = build.matching_map(path) {
             match fs::read_to_string(map)
                 .map_err(|e| e.to_string())
-                .and_then(|text| parse_map_regions(&text).map_err(|e| e.to_string()))
-            {
-                Ok(layout) => {
+                .and_then(|text| {
+                    parse_map_regions(&text)
+                        .map(|layout| (detect_map_format(&text), layout))
+                        .map_err(|e| e.to_string())
+                }) {
+                Ok((format, layout)) => {
                     options = layout;
-                    notes.push(format!("Memory capacities imported from {} (matched by filename). Flash/RAM roles are inferred from region names and attributes. Verify that the map belongs to this firmware build.", map.display()));
+                    notes.push(format!("Memory capacities imported from {} ({}; matched by filename). Flash/RAM roles are inferred from region names and attributes. Verify that the map belongs to this firmware build.", map.display(), format.label()));
                 }
                 Err(e) => notes.push(format!("{}: {e}; capacity remains unknown", map.display())),
             }

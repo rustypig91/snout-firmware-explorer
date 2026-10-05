@@ -95,7 +95,7 @@ cargo run -p firmware-cli -- stack fixtures/build/cortex-m.elf \
 
 Scanning the whole build folder also discovers the grown configuration's reports. CMake's machine-specific cache, compiler probes, Ninja rules, and build bookkeeping are recreated locally and ignored by Git; ELF, map, object, stack-report, and compilation-database artifacts are committed. Tests use these artifacts and need no ARM toolchain. Debug paths and compilation-database commands reflect the generation machine.
 
-GNU ld maps include the 256 KiB Flash / 64 KiB RAM capacities and raw-symbol cross references (`--cref --no-demangle`). Clang/LLD maps do not support these GNU map imports. Toolchains may produce different code sizes; test totals refer to the stated GCC version.
+GNU ld maps include the 256 KiB Flash / 64 KiB RAM capacities and raw-symbol cross references (`--cref --no-demangle`). LLVM lld ELF maps support section-placement previews and cross-reference imports, but do not provide physical memory capacities. Toolchains may produce different code sizes; test totals refer to the stated GCC version.
 
 ## Memory layout
 
@@ -113,3 +113,12 @@ GNU `arm-none-eabi-size -A` / `arm-none-eabi-readelf -l -S` reference for the ba
 | **Total** | | **1484** | **356** |
 
 `cortex-m-grown.elf` reserves eight additional 32-bit sample slots. Flash stays 1484 bytes; RAM grows by 32 to 388 bytes. Scheduling uses the fixed sixteen-slot window so the comparison isolates storage growth. `cortex-m-stripped.elf` has the baseline layout without symbols or debug information. A weak callback alias and a deliberately mangled function remain explicit analyzer test cases. Shared alias storage must not be counted twice.
+
+
+## LLVM lld map fixture
+
+`maps/llvm-lld.elf` and `maps/llvm-lld.map` were linked with lld 21.0.0 from the committed Cortex-M objects. They exercise actual lld section placement, distinct load/runtime addresses, DWARF precedence, and cross references. Tests use the committed outputs and do not require an LLVM installation. Regenerate from the repository root (quote the map option in PowerShell):
+
+```sh
+ld.lld -T fixtures/src/cortex-m.ld --cref --no-demangle "-Map=fixtures/maps/llvm-lld.map" -o fixtures/maps/llvm-lld.elf fixtures/build/CMakeFiles/cortex-m-objects.dir/src/main.c.obj fixtures/build/CMakeFiles/cortex-m-objects.dir/src/config.c.obj fixtures/build/CMakeFiles/cortex-m-objects.dir/src/sensor.c.obj fixtures/build/CMakeFiles/cortex-m-objects.dir/src/diag.c.obj fixtures/build/CMakeFiles/cortex-m-objects.dir/src/telemetry.c.obj fixtures/build/CMakeFiles/cortex-m-objects.dir/src/transport.c.obj
+```
