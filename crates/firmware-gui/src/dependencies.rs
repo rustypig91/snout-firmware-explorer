@@ -32,6 +32,7 @@ pub(super) struct GraphView {
     grouped: bool,
     zoom: f32,
     pan: egui::Vec2,
+    readable_size: bool,
     layout: Option<CachedLayout>,
     layout_revision: u64,
     requested_layout: Option<LayoutInput>,
@@ -48,6 +49,7 @@ impl Default for GraphView {
             grouped: false,
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
+            readable_size: false,
             layout: None,
             layout_revision: 0,
             requested_layout: None,
@@ -115,6 +117,11 @@ fn node_directory(label: &str) -> String {
         .map(|(directory, _)| directory)
         .unwrap_or("[no directory]")
         .into()
+}
+
+fn scroll_zoom(zoom: f32, scroll: f32, fit_scale: f32) -> f32 {
+    // The upper limit is an absolute rendering scale, not a multiple of fit.
+    (zoom * (scroll * 0.002).exp()).clamp(0.2, 8.0 / fit_scale)
 }
 
 fn visible_nodes<'a>(
@@ -192,7 +199,7 @@ fn arrow_head(points: &[egui::Pos2], scale: f32, target: egui::Rect) -> Option<[
         direction = inward;
     }
     let normal = egui::vec2(-direction.y, direction.x);
-    let length = (10.0 * scale).clamp(4.0, 12.0);
+    let length = (10.0 * scale).clamp(7.0, 16.0);
     Some([
         tip,
         tip - direction * length + normal * length * 0.5,
@@ -230,6 +237,9 @@ impl Explorer {
                 self.graph_view.zoom = 1.0;
                 self.graph_view.pan = egui::Vec2::ZERO;
             }
+            if ui.button("Readable size").clicked() {
+                self.graph_view.readable_size = true;
+            }
         });
         ui.small("Arrows point to dependencies (uses → defines) · Box area: Flash / RAM, with a minimum for labels · Drag to pan; scroll to zoom");
         if let Some(path) = &graph.map_path {
@@ -237,6 +247,8 @@ impl Explorer {
         }
         if graph.map_path.is_none() {
             ui.label("Connections unavailable. Build with -Wl,-Map,app.map,--cref,--no-demangle, then rescan. You can also select a map in Build files and use its cross references.");
+        } else if graph.edges.is_empty() {
+            ui.label("No dependency connections were found in this map. Generate it with --cref,--no-demangle to include symbol cross references.");
         }
         ui.collapsing("Evidence and limitations", |ui| {
             for note in &graph.notes { ui.label(note); }
@@ -417,6 +429,25 @@ impl Explorer {
         let base_scale = (rect.width() / bounds.width())
             .min(rect.height() / bounds.height())
             .min(1.0);
+        if self.graph_view.readable_size {
+            self.graph_view.zoom = 1.0 / base_scale;
+            self.graph_view.pan = self
+                .graph_view
+                .selected
+                .as_ref()
+                .and_then(|id| {
+                    self.graph_view
+                        .layout
+                        .as_ref()
+                        .unwrap()
+                        .geometry
+                        .cards
+                        .get(id)
+                })
+                .map(|card| bounds.center() - card.center())
+                .unwrap_or(egui::Vec2::ZERO);
+            self.graph_view.readable_size = false;
+        }
         if response.dragged() {
             self.graph_view.pan += response.drag_delta();
         }
@@ -426,7 +457,7 @@ impl Explorer {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
                 let old_zoom = self.graph_view.zoom;
-                self.graph_view.zoom = (old_zoom * (scroll * 0.002).exp()).clamp(0.2, 8.0);
+                self.graph_view.zoom = scroll_zoom(old_zoom, scroll, base_scale);
                 if let Some(pointer) = response.hover_pos() {
                     let offset = pointer - rect.center();
                     self.graph_view.pan =
@@ -576,6 +607,18 @@ impl Explorer {
 mod tests {
     use super::*;
     use firmware_analysis_core::dependencies::{DependencyEdge, DependencyNode};
+
+    #[test]
+    fn zoom_reaches_readable_scale_even_for_very_large_graphs() {
+        for fit_scale in [1.0, 0.1, 0.001] {
+            let mut zoom = 1.0;
+            for _ in 0..100 {
+                zoom = scroll_zoom(zoom, 120.0, fit_scale);
+            }
+            assert!((zoom * fit_scale - 8.0).abs() < 0.001);
+            assert_eq!(scroll_zoom(zoom, -100_000.0, fit_scale), 0.2);
+        }
+    }
 
     #[test]
     fn changing_filters_coalesces_requests_and_discards_obsolete_geometry() {

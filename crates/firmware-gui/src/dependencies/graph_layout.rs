@@ -58,6 +58,93 @@ pub(super) fn card_size(minimum: egui::Vec2, bytes: u64, maximum: u64) -> egui::
 }
 
 pub(super) fn compute(input: &LayoutInput) -> GraphLayout {
+    if input.grouped || input.nodes.len() < 2 {
+        return compute_connected(input);
+    }
+    // Lay out weakly connected components separately. Unconnected units must
+    // not turn into one enormous rank that shrinks every label in the graph.
+    let mut neighbors: BTreeMap<&str, Vec<&str>> = input
+        .nodes
+        .iter()
+        .map(|node| (node.id.as_str(), vec![]))
+        .collect();
+    for (from, to) in &input.edges {
+        neighbors.get_mut(from.as_str()).unwrap().push(to);
+        neighbors.get_mut(to.as_str()).unwrap().push(from);
+    }
+    let mut visited = BTreeSet::new();
+    let mut parts = vec![];
+    for node in &input.nodes {
+        if visited.contains(node.id.as_str()) {
+            continue;
+        }
+        let mut members = BTreeSet::new();
+        let mut pending = vec![node.id.as_str()];
+        while let Some(id) = pending.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            members.insert(id);
+            pending.extend(neighbors[id].iter().copied());
+        }
+        if members.len() == input.nodes.len() {
+            return compute_connected(input);
+        }
+        let part = LayoutInput {
+            nodes: input
+                .nodes
+                .iter()
+                .filter(|n| members.contains(n.id.as_str()))
+                .cloned()
+                .collect(),
+            edges: input
+                .edges
+                .iter()
+                .filter(|(f, _)| members.contains(f.as_str()))
+                .cloned()
+                .collect(),
+            ..input.clone()
+        };
+        parts.push(compute_connected(&part));
+    }
+    parts.sort_by(|a, b| b.bounds.height().total_cmp(&a.bounds.height()));
+    let area: f32 = parts.iter().map(|p| p.bounds.area()).sum();
+    let width = (area * 1.5)
+        .sqrt()
+        .max(parts.iter().map(|p| p.bounds.width()).fold(0.0, f32::max));
+    let mut result = GraphLayout {
+        cards: BTreeMap::new(),
+        edges: vec![],
+        headings: vec![],
+        bounds: egui::Rect::NOTHING,
+    };
+    let (mut x, mut y, mut row_height) = (0.0, 0.0, 0.0_f32);
+    for part in parts {
+        if x > 0.0 && x + part.bounds.width() > width {
+            x = 0.0;
+            y += row_height + 24.0;
+            row_height = 0.0;
+        }
+        let offset = egui::pos2(x, y) - part.bounds.min;
+        result.bounds = result.bounds.union(part.bounds.translate(offset));
+        row_height = row_height.max(part.bounds.height());
+        x += part.bounds.width() + 24.0;
+        result.cards.extend(
+            part.cards
+                .into_iter()
+                .map(|(id, rect)| (id, rect.translate(offset))),
+        );
+        result.edges.extend(part.edges.into_iter().map(|mut edge| {
+            for point in &mut edge.points {
+                *point += offset;
+            }
+            edge
+        }));
+    }
+    result
+}
+
+fn compute_connected(input: &LayoutInput) -> GraphLayout {
     let orientation = if input.vertical && !input.grouped {
         Orientation::TopToBottom
     } else {
@@ -322,6 +409,41 @@ fn round_route(route: &[egui::Pos2]) -> Vec<egui::Pos2> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hundreds_of_unconnected_units_pack_into_rows_without_hiding_connections() {
+        let mut input = input();
+        input.nodes = (0..200)
+            .map(|i| NodeSpec {
+                id: format!("unit{i}"),
+                directory: "src".into(),
+                size: egui::vec2(120.0, 50.0),
+            })
+            .collect();
+        input.edges = vec![("unit0".into(), "unit1".into())];
+        for vertical in [false, true] {
+            input.vertical = vertical;
+            let geometry = compute(&input);
+            assert_eq!(geometry.cards.len(), 200);
+            assert_eq!(geometry.edges.len(), 1);
+            assert!(geometry.bounds.width() / geometry.bounds.height() < 3.0);
+            assert!(geometry.bounds.height() / geometry.bounds.width() < 3.0);
+            for (i, card) in geometry.cards.values().enumerate() {
+                assert!(geometry.bounds.contains_rect(*card));
+                for other in geometry.cards.values().skip(i + 1) {
+                    assert!(!card.intersects(*other));
+                }
+            }
+            let edge = &geometry.edges[0];
+            assert!(geometry.cards[&edge.from]
+                .expand(0.01)
+                .contains(edge.points[0]));
+            assert!(geometry.cards[&edge.to]
+                .expand(0.01)
+                .contains(*edge.points.last().unwrap()));
+            assert!(route_is_clear(&edge.points, &geometry.cards));
+        }
+    }
 
     fn input() -> LayoutInput {
         LayoutInput {
