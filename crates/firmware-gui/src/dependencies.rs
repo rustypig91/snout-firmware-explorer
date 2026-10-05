@@ -241,7 +241,7 @@ impl Explorer {
                 self.graph_view.readable_size = true;
             }
         });
-        ui.small("Arrows point to dependencies (uses → defines) · Box area: Flash / RAM, with a minimum for labels · Drag to pan; scroll to zoom");
+        ui.small("Arrows point to dependencies (uses → defines) · Box area: visible min–max Flash / RAM scaled from 1× to 25× · Drag to pan; scroll to zoom");
         if let Some(path) = &graph.map_path {
             ui.small(format!("Cross references: {path}"));
         }
@@ -330,14 +330,15 @@ impl Explorer {
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 6.0, ui.visuals().extreme_bg_color);
-        let maximum = nodes
+        let (smallest, largest) = nodes
             .iter()
             .filter_map(|node| {
                 node.usage
                     .map(|u| if self.graph_view.ram { u.ram } else { u.flash })
             })
-            .max()
-            .unwrap_or(0);
+            .fold((u64::MAX, 0), |(smallest, largest), bytes| {
+                (smallest.min(bytes), largest.max(bytes))
+            });
         let short_labels = super::display::short_paths(
             &nodes.iter().map(|n| n.label.as_str()).collect::<Vec<_>>(),
         );
@@ -392,7 +393,7 @@ impl Explorer {
                     NodeSpec {
                         id: node.id.clone(),
                         directory: node_directory(&node.label),
-                        size: graph_layout::card_size(minimum, bytes, maximum),
+                        size: graph_layout::card_size(minimum, bytes, smallest, largest),
                     }
                 })
                 .collect(),

@@ -50,11 +50,20 @@ pub(super) struct CachedLayout {
     pub geometry: GraphLayout,
 }
 
-/// Area is proportional to bytes above the text-sized floor. The largest box
-/// uses 2.5 times the minimum area, keeping the whole graph compact.
-pub(super) fn card_size(minimum: egui::Vec2, bytes: u64, maximum: u64) -> egui::Vec2 {
-    let relative = bytes as f64 / maximum.max(1) as f64;
-    minimum * (2.5 * relative).max(1.0).sqrt() as f32
+/// Normalize area across the visible byte range, from the label-sized floor
+/// to 25 times that area. Equal values retain equal, label-sized cards.
+pub(super) fn card_size(
+    minimum: egui::Vec2,
+    bytes: u64,
+    smallest: u64,
+    largest: u64,
+) -> egui::Vec2 {
+    let range = largest.saturating_sub(smallest);
+    if range == 0 {
+        return minimum;
+    }
+    let relative = bytes.saturating_sub(smallest).min(range) as f64 / range as f64;
+    minimum * (1.0 + 24.0 * relative).sqrt() as f32
 }
 
 pub(super) fn compute(input: &LayoutInput) -> GraphLayout {
@@ -462,7 +471,7 @@ mod tests {
                     .map(|p| p.0)
                     .unwrap_or("[no directory]")
                     .into(),
-                size: card_size(egui::vec2(100.0, 42.0), index as u64 * 100, 300),
+                size: card_size(egui::vec2(100.0, 42.0), index as u64 * 100, 0, 300),
             })
             .collect(),
             edges: [
@@ -759,17 +768,23 @@ mod tests {
         let minimum = egui::vec2(100.0, 42.0);
         let mut previous = minimum;
         for bytes in [0, 1, 100, 10_000, 1_000_000, u64::MAX] {
-            let size = card_size(minimum, bytes, u64::MAX);
+            let size = card_size(minimum, bytes, 0, u64::MAX);
             assert!(size.x >= previous.x && size.y >= previous.y);
-            assert!(size.x <= minimum.x * 1.59 && size.y <= minimum.y * 1.59);
+            assert!(size.x <= minimum.x * 5.0 && size.y <= minimum.y * 5.0);
             previous = size;
         }
-        assert_eq!(card_size(minimum, 0, 0), minimum);
-        let largest = card_size(minimum, 346, 346);
-        let smallest = card_size(minimum, 144, 346);
+        assert_eq!(card_size(minimum, 0, 0, 0), minimum);
+        assert_eq!(card_size(minimum, 52, 52, 52), minimum);
+        // Approximately 27.14 KiB versus 52 B: endpoints must stand apart,
+        // and a halfway byte value must have halfway area, not dimensions.
+        let largest = card_size(minimum, 27_792, 52, 27_792);
+        let smallest = card_size(minimum, 52, 52, 27_792);
+        let midpoint = card_size(minimum, 13_922, 52, 27_792);
         let area = |size: egui::Vec2| size.x * size.y;
-        assert!((area(largest) / area(smallest) - 346.0 / 144.0).abs() < 0.001);
-        assert!(largest.x < 160.0 && largest.y < 67.0);
+        assert_eq!(smallest, minimum);
+        assert!((area(largest) / area(smallest) - 25.0).abs() < 0.001);
+        assert!((area(midpoint) / area(smallest) - 13.0).abs() < 0.001);
+        assert_eq!(card_size(minimum, 0, 52, 27_792), minimum);
     }
 }
 
