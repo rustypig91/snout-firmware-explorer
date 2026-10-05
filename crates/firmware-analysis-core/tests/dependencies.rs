@@ -153,12 +153,33 @@ fn malformed_tables_and_missing_reports_do_not_invent_edges() {
         assert!(analysis.dependencies.edges.is_empty());
         assert!(analysis.dependencies.map_path.is_none());
         assert!(!analysis.dependencies.nodes.is_empty());
+        assert_eq!(
+            analysis
+                .warnings
+                .iter()
+                .filter(|w| w.starts_with("Dependency graph: "))
+                .count(),
+            1
+        );
     }
     // Additive report field stays backwards compatible with existing JSON envelopes.
     let mut json = serde_json::to_value(&analysis).unwrap();
     json.as_object_mut().unwrap().remove("dependencies");
     let restored: Analysis = serde_json::from_value(json).unwrap();
     assert!(restored.dependencies.nodes.is_empty());
+
+    // A valid, empty table is different from missing cross-reference metadata.
+    import_map(
+        &mut analysis,
+        "Cross Reference Table\nSymbol File\n",
+        "valid.map",
+    );
+    assert_eq!(analysis.dependencies.map_path.as_deref(), Some("valid.map"));
+    assert!(analysis.dependencies.edges.is_empty());
+    assert!(!analysis
+        .warnings
+        .iter()
+        .any(|w| w.starts_with("Dependency graph: ")));
 }
 
 #[test]
@@ -281,4 +302,34 @@ fn undefined_or_discarded_symbols_cannot_invent_source_unit_dependencies() {
         .notes
         .iter()
         .any(|n| n.contains("1 symbols without a global ELF definition")));
+}
+
+#[test]
+fn missing_cross_reference_hints_follow_detected_map_format() {
+    let mut analysis = fixture();
+    for (text, label, supports_flags) in [
+        ("Memory Configuration\n", "GNU ld", true),
+        (
+            "             VMA              LMA     Size Align Out     In      Symbol\n",
+            "LLVM lld",
+            true,
+        ),
+        ("MEMORY CONFIGURATION\n", "TI", false),
+        ("unrecognized map", "Unrecognized", false),
+    ] {
+        import_map(&mut analysis, text, "app.map");
+        let graph = &analysis.dependencies;
+        assert!(graph.connection_hint.as_ref().unwrap().contains(label));
+        assert_eq!(graph.cross_reference_flags.is_some(), supports_flags);
+        if !supports_flags {
+            assert!(!graph.notes.iter().any(|n| n.contains("--cref")));
+            assert!(!analysis.warnings.iter().any(|n| n.contains("--cref")));
+        }
+    }
+    import_map(&mut analysis, MAP, "valid.map");
+    assert!(analysis.dependencies.connection_hint.is_none());
+    assert!(analysis.dependencies.cross_reference_flags.is_none());
+    let graph = units(&fixture());
+    assert!(graph.connection_hint.is_none());
+    assert!(graph.cross_reference_flags.is_none());
 }

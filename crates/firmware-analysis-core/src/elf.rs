@@ -111,6 +111,10 @@ pub fn analyze_bytes(
         checked_end(ph.p_paddr, ph.p_memsz)?;
         segment_file_bytes = checked_end(segment_file_bytes, ph.p_filesz)?;
     }
+    let tls = crate::tls::analyze(&elf, bytes.len() as u64)?;
+    if let Some(tls) = &tls {
+        warnings.push(format!("TLS template: {} initialized bytes, {} zero-initialized bytes, alignment {} ({}). Total TLS RAM is unknown: thread count, ABI/runtime overhead and allocation within existing reservations are not modeled. Static RAM excludes TLS templates.", tls.initialized_size, tls.zero_initialized_size, tls.alignment, tls.source));
+    }
     let mut sections = Vec::new();
     for (index, sh) in elf.section_headers.iter().enumerate() {
         if sh.sh_type == SHT_NULL {
@@ -130,12 +134,12 @@ pub fn analyze_bytes(
             .get_at(sh.sh_name)
             .unwrap_or("<unnamed>")
             .to_owned();
-        if allocated && sh.sh_flags & u64::from(SHF_TLS) != 0 {
-            return Err(Error::Unsupported(
-                "Thread-local storage requires a per-thread allocation model".into(),
-            ));
-        }
-        let runtime_size = if allocated { sh.sh_size } else { 0 };
+        let thread_local = allocated && sh.sh_flags & u64::from(SHF_TLS) != 0;
+        let runtime_size = if allocated && !thread_local {
+            sh.sh_size
+        } else {
+            0
+        };
         let load_size = if allocated && sh.sh_type != SHT_NOBITS {
             sh.sh_size
         } else {
@@ -164,7 +168,7 @@ pub fn analyze_bytes(
         let run_region = region_kind(options, sh.sh_addr, runtime_size);
         let load_region = load_address.and_then(|a| region_kind(options, a, load_size));
         if allocated && sh.sh_size > 0 && !options.regions.is_empty() {
-            if run_region.is_none() {
+            if !thread_local && run_region.is_none() {
                 warnings.push(format!("{name}: runtime range is not fully covered by configured memory regions; falling back to ELF inference. Check region boundaries and capacity."));
             }
             if load_size > 0 && load_region.is_none() {
@@ -173,13 +177,16 @@ pub fn analyze_bytes(
         }
         let copied = load_address.is_some_and(|a| a != sh.sh_addr);
         let ram = allocated
+            && !thread_local
             && match run_region {
                 Some(MemoryKind::Ram) => true,
                 Some(MemoryKind::Flash) => false,
                 None => writable || copied || sh.sh_type == SHT_NOBITS,
             };
         let flash = load_size > 0 && load_region != Some(MemoryKind::Ram);
-        let classification = if !allocated {
+        let classification = if thread_local {
+            Classification::ThreadLocal
+        } else if !allocated {
             Classification::NonAllocated
         } else if ram && load_size == 0 {
             Classification::NoLoadRam
@@ -188,7 +195,9 @@ pub fn analyze_bytes(
         } else {
             Classification::ReadOnly
         };
-        let evidence = if run_region.is_some() || load_region.is_some() {
+        let evidence = if thread_local {
+            "ELF SHF_TLS: per-thread template; physical runtime allocation unknown"
+        } else if run_region.is_some() || load_region.is_some() {
             "Configured region(s), with ELF inference for any unmatched address"
         } else if copied {
             "ELF load address differs from runtime address; inferred copied-to-RAM section"
@@ -225,7 +234,7 @@ pub fn analyze_bytes(
     // Overlays need an explicit policy. Refuse misleading additive totals for now.
     let mut runtime_ranges: Vec<_> = sections
         .iter()
-        .filter(|s| s.allocated && s.size > 0)
+        .filter(|s| s.allocated && s.runtime_size > 0)
         .collect();
     runtime_ranges.sort_by_key(|s| s.address);
     for pair in runtime_ranges.windows(2) {
@@ -334,6 +343,9 @@ pub fn analyze_bytes(
         let Some(section) = sections_by_index.get(raw.st_shndx).copied().flatten() else {
             continue;
         };
+        if section.classification == Classification::ThreadLocal {
+            continue;
+        }
         let name = elf.strtab.get_at(raw.st_name).unwrap_or("");
         if name.is_empty() || is_mapping_symbol(elf.header.e_machine, name, &raw) {
             continue;
@@ -447,18 +459,20 @@ pub fn analyze_bytes(
         totals.flash = checked_end(totals.flash, section.usage.flash)?;
         totals.ram = checked_end(totals.ram, section.usage.ram)?;
         if section.allocated && section.size > 0 {
-            memory_map.push(MemoryRange {
-                name: section.name.clone(),
-                address: section.address,
-                size: section.runtime_size,
-                space: if section.usage.ram > 0 {
-                    "RAM runtime"
-                } else {
-                    "Read-only runtime"
-                }
-                .into(),
-                evidence: section.evidence.clone(),
-            });
+            if section.runtime_size > 0 {
+                memory_map.push(MemoryRange {
+                    name: section.name.clone(),
+                    address: section.address,
+                    size: section.runtime_size,
+                    space: if section.usage.ram > 0 {
+                        "RAM runtime"
+                    } else {
+                        "Read-only runtime"
+                    }
+                    .into(),
+                    evidence: section.evidence.clone(),
+                });
+            }
             if let Some(address) = section.load_address.filter(|_| section.load_size > 0) {
                 memory_map.push(MemoryRange {
                     name: format!("{} load image", section.name),
@@ -506,6 +520,7 @@ pub fn analyze_bytes(
             has_dwarf,
         },
         totals,
+        tls,
         unattributed,
         sections,
         symbols,

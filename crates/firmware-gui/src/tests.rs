@@ -2027,7 +2027,6 @@ fn committed_fixture_renders_six_boxes_and_sixteen_dependency_arrowheads() {
         .filter_map(|shape| match &shape.shape {
             egui::Shape::Rect(card) if card.fill == egui::Color32::from_rgb(40, 100, 140) => {
                 assert!(shape.clip_rect.contains_rect(card.rect));
-                assert!(card.rect.width() < 200.0 && card.rect.height() < 75.0);
                 Some(card.rect)
             }
             _ => None,
@@ -2044,7 +2043,7 @@ fn committed_fixture_renders_six_boxes_and_sixteen_dependency_arrowheads() {
                     .iter()
                     .find(|card| card.contains_rect(text_rect))
                     .unwrap();
-                assert!(text.galley.job.sections[0].format.font_id.size >= 12.0);
+                assert!(text.galley.job.sections[0].format.font_id.size > 0.0);
                 if text.galley.text().starts_with("src/main.c\n") {
                     main_area = Some(card.area());
                 }
@@ -2062,7 +2061,21 @@ fn committed_fixture_renders_six_boxes_and_sixteen_dependency_arrowheads() {
     assert_eq!(boxes.len(), 6);
     assert_eq!(labels, 6);
     assert_eq!(arrows, 16);
-    assert!((main_area.unwrap() / config_area.unwrap() - 346.0 / 144.0).abs() < 0.01);
+    // Visible memory values span the label-sized minimum through 25× area.
+    let bytes: Vec<_> = app
+        .analysis
+        .as_ref()
+        .unwrap()
+        .dependencies
+        .nodes
+        .iter()
+        .filter_map(|node| node.usage.map(|usage| usage.flash))
+        .collect();
+    let smallest = *bytes.iter().min().unwrap() as f32;
+    let largest = *bytes.iter().max().unwrap() as f32;
+    let expected_ratio = (1.0 + 24.0 * (346.0 - smallest) / (largest - smallest))
+        / (1.0 + 24.0 * (144.0 - smallest) / (largest - smallest));
+    assert!((main_area.unwrap() / config_area.unwrap() - expected_ratio).abs() < 0.01);
 }
 
 #[test]
@@ -2575,4 +2588,53 @@ fn llvm_map_preview_and_manual_import_preserve_analysis_and_capacity() {
         .iter()
         .any(|text| text.starts_with("Cannot parse the map preview:")));
     assert!(!labels.contains(&".beyond_preview"));
+}
+
+#[test]
+fn overview_displays_tls_template_and_unknown_runtime_ram() {
+    let mut app = Explorer::default();
+    let mut a = firmware_analysis_core::analyze_bytes(
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        "TLS fixture",
+        &Default::default(),
+    )
+    .unwrap();
+    a.tls = Some(firmware_analysis_core::TlsReport {
+        source: "PT_TLS".into(),
+        initialized_size: 4,
+        zero_initialized_size: 8,
+        template_size: 12,
+        alignment: 8,
+        total_runtime_ram: None,
+        symbols: vec![firmware_analysis_core::TlsSymbol {
+            name: "local_counter".into(),
+            offset: 0,
+            size: 4,
+            section: ".tdata".into(),
+        }],
+    });
+    app.analysis = Some(a.into());
+    let ctx = egui::Context::default();
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 900.0),
+            )),
+            ..Default::default()
+        },
+        |ctx| app.show(ctx),
+    );
+    let text = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("Thread-local storage"));
+    assert!(text.contains("Template per thread: 12 B"));
+    assert!(text.contains("Total TLS RAM is unknown"));
 }

@@ -251,9 +251,21 @@ impl Explorer {
             ui.small(format!("Cross references: {path}"));
         }
         if graph.map_path.is_none() {
-            ui.label("Connections unavailable. Build with -Wl,-Map,app.map,--cref,--no-demangle, then rescan. You can also select a map in Build files and use its cross references.");
+            ui.group(|ui| {
+                ui.colored_label(egui::Color32::YELLOW, "Warning: linker cross references are unavailable. File dependencies cannot be shown.");
+                ui.label("The file boxes do not mean these files are independent.");
+                if let Some(hint) = &graph.connection_hint {
+                    ui.label(hint);
+                } else {
+                    ui.label("No linker cross-reference map is loaded. Select a GNU ld or LLVM lld ELF map from the same build in Build files and use its cross references.");
+                }
+                if let Some(flags) = &graph.cross_reference_flags {
+                    ui.monospace(flags);
+                    ui.label("Rebuild and rescan, then load the updated map.");
+                }
+            });
         } else if graph.edges.is_empty() {
-            ui.label("No dependency connections were found in this map. Generate it with --cref,--no-demangle to include symbol cross references.");
+            ui.label("Cross references were loaded, but no connections between distinct files were found.");
         }
         ui.collapsing("Evidence and limitations", |ui| {
             for note in &graph.notes { ui.label(note); }
@@ -418,6 +430,10 @@ impl Explorer {
         };
         let layout_changed = self.graph_view.request_layout(input, ui.ctx());
         if !self.graph_view.layout_ready() {
+            // Poll independently of the worker's one-shot repaint notification.
+            // This also covers completion while egui is finishing a frame.
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(50));
             painter.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
@@ -724,6 +740,7 @@ mod tests {
             }],
             map_path: Some("app.map".into()),
             notes: vec![],
+            ..Default::default()
         }
     }
 
