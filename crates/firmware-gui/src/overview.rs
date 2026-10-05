@@ -93,7 +93,7 @@ impl Explorer {
         notes
     }
     pub(super) fn pick_layout(&mut self) {
-        let mut dialog = rfd::FileDialog::new().add_filter("Memory layout", &["json", "map"]);
+        let mut dialog = rfd::FileDialog::new().add_filter("Linker map", &["map"]);
         if let Some(build) = &self.build {
             dialog = dialog.set_directory(&build.root);
         }

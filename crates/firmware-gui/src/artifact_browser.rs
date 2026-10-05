@@ -15,7 +15,7 @@ pub(super) struct BrowserCache {
     pub paths: Vec<PathBuf>,
     pub labels: Vec<String>,
     search_labels: Vec<String>,
-    pub artifacts: [Vec<usize>; 4],
+    pub artifacts: [Vec<usize>; 3],
     search: Option<String>,
     nodes: Vec<Node>,
     visible: Vec<usize>,
@@ -159,7 +159,6 @@ impl BrowserCache {
                 ArtifactKind::Firmware => 0,
                 ArtifactKind::Map => 1,
                 ArtifactKind::StackUsage => 2,
-                ArtifactKind::MemoryLayout => 3,
             };
             self.artifacts[group].push(i);
         }

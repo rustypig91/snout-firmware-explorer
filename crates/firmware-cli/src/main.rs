@@ -19,9 +19,6 @@ struct Args {
     command: Command,
     #[arg(long, global = true, value_enum, default_value = "text")]
     format: Format,
-    /// JSON configuration containing physical memory regions.
-    #[arg(long, global = true)]
-    config: Option<PathBuf>,
 }
 #[derive(Clone, Copy, ValueEnum)]
 enum Format {
@@ -31,30 +28,122 @@ enum Format {
 #[derive(Subcommand)]
 enum Command {
     /// Overall Flash, static RAM, metadata and sections.
-    Analyze { elf: PathBuf },
+    Analyze {
+        elf: PathBuf,
+        /// Linker map supplying capacities and optional --cref dependencies.
+        #[arg(long)]
+        map: Option<PathBuf>,
+    },
     /// Memory attributed to files; includes unattributed bytes.
-    Files { elf: PathBuf },
+    Files {
+        elf: PathBuf,
+        /// Linker map supplying capacities and optional --cref dependencies.
+        #[arg(long)]
+        map: Option<PathBuf>,
+    },
     /// Defined symbols with unique memory contributions.
-    Symbols { elf: PathBuf },
+    Symbols {
+        elf: PathBuf,
+        /// Linker map supplying capacities and optional --cref dependencies.
+        #[arg(long)]
+        map: Option<PathBuf>,
+    },
     /// Compare memory usage between linked builds.
-    Diff { old: PathBuf, new: PathBuf },
+    Diff {
+        old: PathBuf,
+        new: PathBuf,
+        /// Linker map for the old ELF.
+        #[arg(long)]
+        old_map: Option<PathBuf>,
+        /// Linker map for the new ELF.
+        #[arg(long)]
+        new_map: Option<PathBuf>,
+    },
     /// Read compiler-reported local stack frames (.su).
     Stack {
         elf: PathBuf,
         #[arg(long)]
         stack_usage: PathBuf,
+        /// Linker map supplying capacities and optional --cref dependencies.
+        #[arg(long)]
+        map: Option<PathBuf>,
     },
 }
 
-fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
-    let options = match args.config {
-        Some(p) => serde_json::from_slice(&std::fs::read(p)?)?,
-        None => AnalysisOptions::default(),
+/// Explicit maps supply capacities where supported and cross references where present.
+fn analyze_input(
+    path: &std::path::Path,
+    map: Option<&std::path::Path>,
+) -> Result<firmware_analysis_core::Analysis, Box<dyn std::error::Error>> {
+    use firmware_analysis_core::map::{detect_map_format, parse_map_regions, MapFormat};
+    let Some(map) = map else {
+        return Ok(analyze_path(path, &AnalysisOptions::default())?);
     };
+    let text = std::fs::read_to_string(map).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "Cannot read linker map {}: {error}; check --map path and permissions",
+                map.display()
+            ),
+        )
+    })?;
+    let format = detect_map_format(&text);
+    let options = match format {
+        MapFormat::LlvmLld => AnalysisOptions::default(),
+        _ => parse_map_regions(&text).map_err(|error| {
+            format!(
+                "{}: {error}; supply a valid linker map from this build",
+                map.display()
+            )
+        })?,
+    };
+    let mut analysis = analyze_path(path, &options)?;
+    if format == MapFormat::LlvmLld {
+        analysis.warnings.push(
+            "LLVM lld maps do not contain physical memory capacities; capacity remains unknown."
+                .into(),
+        );
+    } else {
+        analysis.warnings.push(format!("Memory capacities imported from {} ({}). Verify this map belongs to the firmware; memory roles are inferred from names and attributes.", map.display(), format.label()));
+    }
+    if text
+        .lines()
+        .any(|line| line.trim() == "Cross Reference Table")
+    {
+        analysis.dependencies = firmware_analysis_core::dependencies::from_map(
+            &analysis,
+            &text,
+            &map.display().to_string(),
+        )
+        .map_err(|error| {
+            format!(
+                "{}: {error}; regenerate the map with --cref,--no-demangle",
+                map.display()
+            )
+        })?;
+    } else {
+        firmware_analysis_core::dependencies::import_map(
+            &mut analysis,
+            &text,
+            &map.display().to_string(),
+        );
+    }
+    analysis.dependencies.map_path = Some(map.display().to_string());
+    Ok(analysis)
+}
+
+fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let mut out = io::BufWriter::new(io::stdout().lock());
-    if let Command::Diff { old, new } = args.command {
-        let old = analyze_path(old, &options)?;
-        let new = analyze_path(new, &options)?;
+    if let Command::Diff {
+        old,
+        new,
+        old_map,
+        new_map,
+    } = args.command
+    {
+        let old = analyze_input(&old, old_map.as_deref())?;
+        let new = analyze_input(&new, new_map.as_deref())?;
         let diff = compare(&old, &new);
         if matches!(args.format, Format::Json) {
             serde_json::to_writer_pretty(&mut out, &diff)?;
@@ -95,14 +184,14 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     } else {
-        let path = match &args.command {
-            Command::Analyze { elf }
-            | Command::Files { elf }
-            | Command::Symbols { elf }
-            | Command::Stack { elf, .. } => elf,
+        let (path, map) = match &args.command {
+            Command::Analyze { elf, map }
+            | Command::Files { elf, map }
+            | Command::Symbols { elf, map }
+            | Command::Stack { elf, map, .. } => (elf, map.as_deref()),
             _ => unreachable!(),
         };
-        let analysis = analyze_path(path, &options)?;
+        let analysis = analyze_input(path, map)?;
         if let Command::Stack { stack_usage, .. } = &args.command {
             let report = analyze_stack(&analysis, stack_usage)?;
             if matches!(args.format, Format::Json) {

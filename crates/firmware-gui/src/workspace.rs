@@ -13,8 +13,17 @@ pub(super) fn analyze_selected(
     build: &firmware_analysis_core::build::BuildFolder,
     path: &std::path::Path,
     mut layout: Option<super::AnalysisOptions>,
-    source: Option<String>,
+    mut source: Option<String>,
 ) -> Result<(super::Analysis, Option<super::AnalysisOptions>, String), String> {
+    // Discard legacy JSON layout preferences; rediscover capacities from maps.
+    if source.as_ref().is_some_and(|source| {
+        std::path::Path::new(source)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+    }) {
+        source = None;
+        layout = None;
+    }
     if let Some(source) = &source {
         let extension = std::path::Path::new(source)
             .extension()
@@ -27,13 +36,6 @@ pub(super) fn analyze_selected(
                     parse_map_regions(&std::fs::read_to_string(source).map_err(|e| e.to_string())?)
                         .map_err(|e| e.to_string())?,
                 )
-            }
-            "json" => {
-                let options =
-                    serde_json::from_slice(&std::fs::read(source).map_err(|e| e.to_string())?)
-                        .map_err(|e| e.to_string())?;
-                firmware_analysis_core::validate_options(&options).map_err(|e| e.to_string())?;
-                layout = Some(options);
             }
             _ => {}
         }
@@ -546,7 +548,6 @@ impl Explorer {
                         ArtifactKind::Firmware,
                         ArtifactKind::Map,
                         ArtifactKind::StackUsage,
-                        ArtifactKind::MemoryLayout,
                     ].into_iter().enumerate() {
                         let count = cache.artifacts[group].len();
                         if count == 0 {
@@ -678,13 +679,10 @@ impl Explorer {
                             self.apply_dependency_map(path.clone());
                         }
                         if format == MapFormat::LlvmLld {
-                            ui.small("LLVM maps contain section placement, not memory capacities. Load a memory-layout JSON for capacities.");
+                            ui.small("LLVM maps contain section placement, not memory capacities. Physical memory capacities remain unknown.");
                         } else {
                             ui.small("Select this map's radio button in the left menu to use its memory regions.");
                         }
-                    }
-                    "json" if ui.button("Use this memory layout").clicked() => {
-                        self.configure(Some(path.clone()));
                     }
                     _ => {}
                 }
