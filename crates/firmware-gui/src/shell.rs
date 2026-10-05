@@ -47,12 +47,28 @@ impl Explorer {
         if self.view == view {
             return;
         }
+        let index = View::ALL.iter().position(|v| *v == self.view).unwrap();
+        self.tab_options[index] = super::TabOptions {
+            search: std::mem::take(&mut self.search),
+            sort_column: self.sort_column,
+            descending: self.descending,
+            tree: self.tree,
+            selected_file: self.selected_file.take(),
+            selected_region: self.selected_region.take(),
+            kind_filter: std::mem::take(&mut self.kind_filter),
+        };
+        let index = View::ALL.iter().position(|v| *v == view).unwrap();
+        let options = self.tab_options[index].clone();
+        self.search = options.search;
+        self.sort_column = options.sort_column;
+        self.descending = options.descending;
+        self.tree = options.tree;
+        self.selected_file = options.selected_file;
+        self.selected_region = options.selected_region;
+        self.kind_filter = options.kind_filter;
         self.view = view;
-        self.search.clear();
         self.details = None;
         self.visible_rows = 0;
-        self.sort_column = 1;
-        self.descending = !matches!(view, View::MemoryMap);
     }
 
     pub(super) fn show_file_symbols(&mut self, path: String) {

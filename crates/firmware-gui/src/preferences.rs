@@ -68,7 +68,7 @@ impl Explorer {
     }
 
     pub(super) fn preference_value(&self) -> serde_json::Value {
-        serde_json::json!({"version": 1, "build_settings": self.build_settings, "check_updates_on_startup": self.updates.check_on_startup, "skipped_version": self.updates.skipped_version, "folder": self.build.as_ref().map(|b| &b.root), "firmware": self.analysis.as_ref().map(|a| &a.path), "layout": self.layout_override, "layout_source": self.layout_source, "view": self.view.label(), "directories": self.tree, "metric": self.overview_metric.label(), "contributor_ram": self.contributor_ram})
+        serde_json::json!({"version": 1, "build_settings": self.build_settings, "check_updates_on_startup": self.updates.check_on_startup, "skipped_version": self.updates.skipped_version, "folder": self.build.as_ref().map(|b| &b.root), "firmware": self.analysis.as_ref().map(|a| &a.path), "layout": self.layout_override, "layout_source": self.layout_source, "view": self.view.label()})
     }
     pub(super) fn save_preferences(&self) -> Result<(), Box<dyn std::error::Error>> {
         let Some(path) = &self.preferences_file else {
@@ -112,17 +112,12 @@ impl Explorer {
             serde_json::from_value(value["build_settings"].clone()).unwrap_or_default();
         self.updates.check_on_startup = value["check_updates_on_startup"].as_bool().unwrap_or(true);
         self.updates.skipped_version = value["skipped_version"].as_str().map(str::to_owned);
-        self.view = View::ALL
-            .into_iter()
-            .find(|v| Some(v.label()) == value["view"].as_str())
-            .unwrap_or(View::Overview);
-        self.tree = value["directories"].as_bool().unwrap_or(false);
-        self.contributor_ram = value["contributor_ram"].as_bool().unwrap_or(false);
-        self.overview_metric = match value["metric"].as_str() {
-            Some("RAM") => super::overview::Metric::Ram,
-            Some("All sections") => super::overview::Metric::All,
-            _ => super::overview::Metric::Flash,
-        };
+        self.change_view(
+            View::ALL
+                .into_iter()
+                .find(|v| Some(v.label()) == value["view"].as_str())
+                .unwrap_or(View::Overview),
+        );
         let Some(folder) = value["folder"]
             .as_str()
             .map(PathBuf::from)

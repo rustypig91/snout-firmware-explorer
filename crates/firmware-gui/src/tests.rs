@@ -1471,8 +1471,8 @@ fn preferences_restore_selected_firmware_layout_and_view() {
     finish_job(&mut restored);
     assert!(restored.error.is_none());
     assert!(restored.view == View::Symbols);
-    assert!(restored.tree);
-    assert!(restored.overview_metric == overview::Metric::Ram);
+    assert!(!restored.tree);
+    assert!(restored.overview_metric == overview::Metric::Flash);
     assert_eq!(restored.options, original.options);
     assert_eq!(restored.layout_source, original.layout_source);
     assert_eq!(
@@ -2663,4 +2663,71 @@ fn overview_displays_tls_template_and_unknown_runtime_ram() {
     assert!(text.contains("Thread-local storage"));
     assert!(text.contains("Template per thread: 12 B"));
     assert!(text.contains("Total TLS RAM is unknown"));
+}
+
+#[test]
+fn tab_controls_are_independent_and_remembered_for_the_session() {
+    let mut app = Explorer::default();
+    for (index, view) in View::ALL.into_iter().enumerate() {
+        app.change_view(view);
+        assert!(app.search.is_empty());
+        assert_eq!(app.sort_column, 1);
+        assert_eq!(app.descending, view != View::MemoryMap);
+        assert!(!app.tree);
+        assert!(app.selected_file.is_none());
+        assert!(app.selected_region.is_none());
+        assert_eq!(app.kind_filter, "All");
+        app.search = format!("filter {index}");
+        app.sort_column = index;
+        app.descending = index % 2 == 0;
+        app.tree = index % 2 == 1;
+        app.selected_file = Some(format!("file {index}"));
+        app.selected_region = Some(index);
+        app.kind_filter = format!("kind {index}");
+    }
+    app.stack_show_unresolved = true;
+    app.comparison_group = 2;
+    app.overview_metric = overview::Metric::Ram;
+    app.contributor_ram = true;
+    for (index, view) in View::ALL.into_iter().enumerate() {
+        app.change_view(view);
+        app.change_view(view); // Clicking the active tab leaves its settings intact.
+        assert_eq!(app.search, format!("filter {index}"));
+        assert_eq!(app.sort_column, index);
+        assert_eq!(app.descending, index % 2 == 0);
+        assert_eq!(app.tree, index % 2 == 1);
+        assert_eq!(app.selected_file, Some(format!("file {index}")));
+        assert_eq!(app.selected_region, Some(index));
+        assert_eq!(app.kind_filter, format!("kind {index}"));
+    }
+    assert!(app.stack_show_unresolved);
+    assert_eq!(app.comparison_group, 2);
+    assert!(app.overview_metric == overview::Metric::Ram);
+    assert!(app.contributor_ram);
+
+    let mut preferences = app.preference_value();
+    for key in [
+        "search",
+        "sort_column",
+        "descending",
+        "tab_options",
+        "directories",
+        "metric",
+        "contributor_ram",
+        "stack_show_unresolved",
+        "comparison_group",
+    ] {
+        assert!(preferences.get(key).is_none(), "{key} must remain in RAM");
+    }
+    // Ignore display options written by older versions, too.
+    preferences["directories"] = true.into();
+    preferences["metric"] = "RAM".into();
+    preferences["contributor_ram"] = true.into();
+    let mut restarted = Explorer::default();
+    restarted.apply_preferences(&preferences);
+    assert!(restarted.search.is_empty());
+    assert_eq!(restarted.sort_column, 1);
+    assert!(!restarted.tree);
+    assert!(!restarted.contributor_ram);
+    assert!(restarted.overview_metric == overview::Metric::Flash);
 }
