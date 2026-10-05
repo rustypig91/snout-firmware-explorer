@@ -81,41 +81,45 @@ pub(super) fn compute(input: &LayoutInput) -> GraphLayout {
         neighbors.get_mut(from.as_str()).unwrap().push(to);
         neighbors.get_mut(to.as_str()).unwrap().push(from);
     }
-    let mut visited = BTreeSet::new();
-    let mut parts = vec![];
+    let mut component_ids = BTreeMap::new();
+    let mut components = vec![];
     for node in &input.nodes {
-        if visited.contains(node.id.as_str()) {
+        if component_ids.contains_key(node.id.as_str()) {
             continue;
         }
-        let mut members = BTreeSet::new();
+        let component = components.len();
         let mut pending = vec![node.id.as_str()];
         while let Some(id) = pending.pop() {
-            if !visited.insert(id) {
+            if component_ids.contains_key(id) {
                 continue;
             }
-            members.insert(id);
+            component_ids.insert(id, component);
             pending.extend(neighbors[id].iter().copied());
         }
-        if members.len() == input.nodes.len() {
+        if component_ids.len() == input.nodes.len() && component == 0 {
             return compute_connected(input);
         }
-        let part = LayoutInput {
-            nodes: input
-                .nodes
-                .iter()
-                .filter(|n| members.contains(n.id.as_str()))
-                .cloned()
-                .collect(),
-            edges: input
-                .edges
-                .iter()
-                .filter(|(f, _)| members.contains(f.as_str()))
-                .cloned()
-                .collect(),
-            ..input.clone()
-        };
-        parts.push(compute_connected(&part));
+        components.push(LayoutInput {
+            nodes: vec![],
+            edges: vec![],
+            grouped: input.grouped,
+            ram: input.ram,
+            vertical: input.vertical,
+        });
     }
+    // Partition once, preserving node and edge order within each component.
+    // Rescanning or cloning the entire input per isolated unit is quadratic.
+    for node in &input.nodes {
+        components[component_ids[node.id.as_str()]]
+            .nodes
+            .push(node.clone());
+    }
+    for edge in &input.edges {
+        components[component_ids[edge.0.as_str()]]
+            .edges
+            .push(edge.clone());
+    }
+    let mut parts: Vec<_> = components.iter().map(compute_connected).collect();
     parts.sort_by(|a, b| b.bounds.height().total_cmp(&a.bounds.height()));
     let area: f32 = parts.iter().map(|p| p.bounds.area()).sum();
     let width = (area * 1.5)
@@ -610,6 +614,37 @@ mod tests {
                 .expand(0.01)
                 .contains(edge.points[0]));
             assert!(geometry.cards[&edge.to]
+                .expand(0.01)
+                .contains(*edge.points.last().unwrap()));
+            assert!(route_is_clear(&edge.points, &geometry.cards));
+        }
+    }
+
+    #[test]
+    fn packing_preserves_edges_in_multiple_components() {
+        let mut input = input();
+        input.nodes = (0..1000)
+            .map(|i| NodeSpec {
+                id: format!("unit{i}"),
+                directory: "src".into(),
+                size: egui::vec2(120.0, 50.0),
+            })
+            .collect();
+        input.edges = vec![
+            ("unit0".into(), "unit1".into()),
+            ("unit501".into(), "unit500".into()),
+        ];
+        let geometry = compute(&input);
+        assert_eq!(geometry.cards.len(), input.nodes.len());
+        assert_eq!(geometry.edges.len(), input.edges.len());
+        for (from, to) in &input.edges {
+            let edge = geometry
+                .edges
+                .iter()
+                .find(|edge| &edge.from == from && &edge.to == to)
+                .unwrap();
+            assert!(geometry.cards[from].expand(0.01).contains(edge.points[0]));
+            assert!(geometry.cards[to]
                 .expand(0.01)
                 .contains(*edge.points.last().unwrap()));
             assert!(route_is_clear(&edge.points, &geometry.cards));
