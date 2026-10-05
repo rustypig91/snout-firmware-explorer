@@ -1118,6 +1118,7 @@ fn build_folder_scan_finds_adjacent_and_nested_reports() {
             .as_nanos()
     ));
     std::fs::create_dir_all(root.join("objects/nested")).unwrap();
+    let root = root.canonicalize().unwrap();
     std::fs::write(
         root.join("main.su"),
         "main.c:1:1:Reset_Handler\t32\tstatic\n",
@@ -1294,20 +1295,22 @@ fn refresh_restores_selection_and_layout_and_preserves_report_on_failure() {
 #[test]
 fn startup_folder_restores_saved_elf_unless_another_is_explicitly_selected() {
     let folder = tempfile::tempdir().unwrap();
-    let first = folder.path().join("first.elf");
-    let second = folder.path().join("second.elf");
+    // Match the canonical paths produced by startup parsing and build discovery.
+    let root = folder.path().canonicalize().unwrap();
+    let first = root.join("first.elf");
+    let second = root.join("second.elf");
     for path in [&first, &second] {
         std::fs::write(path, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
     }
     let value = serde_json::json!({
-        "version": 1, "folder": folder.path(), "firmware": first,
+        "version": 1, "folder": root, "firmware": first,
     });
     for explicit in [None, Some(second.clone())] {
         let mut app = Explorer::default();
         app.apply_preferences_with_workspace(&value, false);
         assert!(app.receiver.is_none());
         app.open_startup(&startup::Startup {
-            folder: Some(folder.path().to_owned()),
+            folder: Some(root.clone()),
             elf: explicit.clone(),
             ..Default::default()
         });
@@ -1324,15 +1327,17 @@ fn startup_folder_restores_saved_elf_unless_another_is_explicitly_selected() {
 #[test]
 fn explicit_startup_selection_restores_its_saved_layout_and_reloads_the_source() {
     let folder = tempfile::tempdir().unwrap();
-    let first = folder.path().join("first.elf");
-    let second = folder.path().join("second.elf");
-    let map = folder.path().join("manual.map");
+    // Match the canonical paths produced by startup parsing and build discovery.
+    let root = folder.path().canonicalize().unwrap();
+    let first = root.join("first.elf");
+    let second = root.join("second.elf");
+    let map = root.join("manual.map");
     for path in [&first, &second] {
         std::fs::write(path, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
     }
     std::fs::write(&map, include_bytes!("../../../fixtures/build/cortex-m.map")).unwrap();
     let mut original = Explorer::default();
-    original.scan_build(folder.path().to_owned());
+    original.scan_build(root.clone());
     finish_job(&mut original);
     original.open(second.clone());
     finish_job(&mut original);
@@ -1351,7 +1356,7 @@ fn explicit_startup_selection_restores_its_saved_layout_and_reloads_the_source()
     let mut restored = Explorer::default();
     restored.apply_preferences_with_workspace(&original.preference_value(), false);
     restored.open_startup(&startup::Startup {
-        folder: Some(folder.path().to_owned()),
+        folder: Some(root.clone()),
         elf: Some(second.clone()),
         ..Default::default()
     });
@@ -1370,11 +1375,13 @@ fn explicit_startup_selection_restores_its_saved_layout_and_reloads_the_source()
 #[test]
 fn startup_without_a_path_restores_last_folder_even_without_saved_firmware() {
     let folder = tempfile::tempdir().unwrap();
+    // Match the canonical paths produced by startup parsing and build discovery.
+    let root = folder.path().canonicalize().unwrap();
     let mut app = Explorer::default();
-    app.apply_preferences(&serde_json::json!({"version": 1, "folder": folder.path()}));
+    app.apply_preferences(&serde_json::json!({"version": 1, "folder": root}));
     app.open_startup(&startup::Startup::default());
     finish_job(&mut app);
-    assert_eq!(app.build.as_ref().unwrap().root, folder.path());
+    assert_eq!(app.build.as_ref().unwrap().root, root);
     assert!(app.analysis.is_none());
     assert!(app.receiver.is_none());
     assert!(app.error.is_none());
@@ -1416,21 +1423,23 @@ fn reopening_same_folder_restores_firmware_and_layout() {
 #[test]
 fn reopening_folder_with_missing_saved_elf_leaves_firmware_unselected() {
     let folder = tempfile::tempdir().unwrap();
-    let elf = folder.path().join("firmware.elf");
+    // Match the canonical paths produced by startup parsing and build discovery.
+    let root = folder.path().canonicalize().unwrap();
+    let elf = root.join("firmware.elf");
     std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
-    let value = serde_json::json!({"version": 1, "folder": folder.path(), "firmware": elf});
+    let value = serde_json::json!({"version": 1, "folder": root, "firmware": elf});
     let mut app = Explorer::default();
     app.apply_preferences_with_workspace(&value, false);
     std::fs::remove_file(elf).unwrap();
     app.open_startup(&startup::Startup {
-        folder: Some(folder.path().to_owned()),
+        folder: Some(root.clone()),
         ..Default::default()
     });
     finish_job(&mut app);
     assert!(app.analysis.is_none());
     assert!(app.receiver.is_none());
     assert!(app.error.is_none());
-    assert_eq!(app.build.as_ref().unwrap().root, folder.path());
+    assert_eq!(app.build.as_ref().unwrap().root, root);
 }
 
 #[test]

@@ -109,13 +109,18 @@ mod tests {
         let normalized = root.join("objects/../main.c.su");
         assert_eq!(
             build_relative_path(&inside.to_string_lossy(), Some(&root)),
-            std::path::Path::new("objects/main.c.su")
+            std::path::Path::new("objects")
+                .join("main.c.su")
                 .display()
                 .to_string()
         );
         assert_eq!(
             build_relative_path(&outside.to_string_lossy(), Some(&root)),
-            std::path::Path::new("../src/main.c").display().to_string()
+            std::path::Path::new("..")
+                .join("src")
+                .join("main.c")
+                .display()
+                .to_string()
         );
         assert_eq!(
             build_relative_path(&normalized.to_string_lossy(), Some(&root)),
