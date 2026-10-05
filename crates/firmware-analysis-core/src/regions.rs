@@ -22,9 +22,12 @@ pub fn region_usage(analysis: &Analysis, region: &MemoryRegion) -> RegionUsage {
     let mut ranges = Vec::new();
     let mut symbols = Vec::new();
     for section in analysis.sections.iter().filter(|s| s.allocated) {
-        let mut placements = vec![(section.address, section.runtime_size, "Runtime")];
+        let mut placements = Vec::new();
+        if section.runtime_size > 0 {
+            placements.push((section.address, section.runtime_size, "Runtime"));
+        }
         if let Some(load) = section.load_address.filter(|_| section.load_size > 0) {
-            if load == section.address {
+            if load == section.address && section.runtime_size > 0 {
                 placements[0].2 = "Load / runtime";
             } else {
                 placements.push((load, section.load_size, "Load image"));

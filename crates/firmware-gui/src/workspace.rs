@@ -406,6 +406,9 @@ impl Explorer {
             )?;
             let mut analysis = (*analysis).clone();
             analysis.dependencies = graph;
+            analysis
+                .warnings
+                .retain(|warning| !warning.starts_with("Dependency graph: "));
             Ok(Loaded::Dependencies(analysis, path))
         });
     }

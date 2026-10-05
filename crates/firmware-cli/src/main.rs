@@ -223,6 +223,29 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             serde_json::to_writer_pretty(&mut out, &analysis)?;
             writeln!(out)?;
         } else {
+            if let Some(tls) = &analysis.tls {
+                writeln!(out, "TLS template per thread: {} ({} initialized, {} zero-initialized), alignment {} B", bytes(tls.template_size), bytes(tls.initialized_size), bytes(tls.zero_initialized_size), tls.alignment)?;
+                writeln!(
+                    out,
+                    "Total TLS RAM: unknown; static RAM excludes TLS templates."
+                )?;
+                if matches!(
+                    args.command,
+                    Command::Analyze { .. } | Command::Symbols { .. }
+                ) {
+                    for symbol in &tls.symbols {
+                        writeln!(
+                            out,
+                            "  TLS +{:#x}: {}  {} [{}]",
+                            symbol.offset,
+                            bytes(symbol.size),
+                            symbol.name,
+                            symbol.section
+                        )?;
+                    }
+                }
+                writeln!(out)?;
+            }
             match args.command {
                 Command::Analyze { .. } => {
                     writeln!(out, "Rusty's Snout — Firmware Overview\n{}\nFlash payload: {}\nRAM at runtime (static): {}\nELF file size: {}\n{} / {}-bit / {} endian\nEntry point: {:#x}\n", analysis.path, bytes(analysis.totals.flash), bytes(analysis.totals.ram), bytes(analysis.metadata.file_size), analysis.metadata.architecture, analysis.metadata.bitness, analysis.metadata.endianness, analysis.metadata.entry_point)?;

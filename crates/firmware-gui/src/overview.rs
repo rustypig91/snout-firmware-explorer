@@ -118,6 +118,18 @@ impl Explorer {
                 self.firmware_heading(ui, a);
                 self.capacity_summary(ui, a);
                 self.ram_composition(ui, a);
+                if let Some(tls) = &a.tls {
+                    ui.group(|ui| {
+                        ui.strong("Thread-local storage");
+                        ui.label(format!("Template per thread: {} — {} initialized, {} zero-initialized; alignment {} B", bytes(tls.template_size), bytes(tls.initialized_size), bytes(tls.zero_initialized_size), tls.alignment));
+                        ui.label("Total TLS RAM is unknown. Static RAM excludes TLS templates; allocation may be inside existing stack reservations.");
+                        ui.collapsing(format!("{} TLS variables", tls.symbols.len()), |ui| {
+                            for symbol in &tls.symbols {
+                                ui.monospace(format!("+{:#x}  {}  {} [{}]", symbol.offset, bytes(symbol.size), symbol.name, symbol.section));
+                            }
+                        });
+                    });
+                }
                 self.growth_summary(ui);
                 let notes = self.visible_notes();
                 if let Some(first) = notes.first() {

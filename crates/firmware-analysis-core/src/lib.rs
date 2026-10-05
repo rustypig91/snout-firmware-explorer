@@ -9,6 +9,7 @@ pub mod map;
 mod model;
 pub mod regions;
 pub mod stack;
+mod tls;
 
 pub use elf::{analyze_bytes, analyze_path, validate_options};
 pub use model::*;
