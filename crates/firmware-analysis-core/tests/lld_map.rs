@@ -79,6 +79,20 @@ fn lld_64_bit_sections_ignore_nested_rows_and_script_assignments() {
 }
 
 #[test]
+fn lld_backward_location_counter_is_not_an_allocation_range() {
+    // lld 21 emits the unsigned delta when a script moves dot backward.
+    let text = "VMA LMA Size Align Out In Symbol\n\
+        20000040 20000040 14 16 .text\n\
+        20000054 20000054 ffffffffe7ffffac 1 . = 0x08000000\n\
+        8000000 8000000 4 4 .data\n";
+    let sections = parse_lld_sections(text).unwrap();
+    assert_eq!(sections.len(), 2);
+    assert_eq!(sections[0].name, ".text");
+    assert_eq!(sections[1].name, ".data");
+    assert_eq!(sections[1].vma, 0x08000000);
+}
+
+#[test]
 fn malformed_lld_placement_returns_errors_without_panicking() {
     for row in [
         "",

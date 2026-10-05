@@ -68,10 +68,23 @@ fn parse_ti_regions(text: &str) -> Result<AnalysisOptions, Error> {
         .next()
         .unwrap_or("")
         .to_ascii_uppercase();
-    if ["TMS320C28", "TMS320C54", "TMS320C55", "C2000"]
-        .iter()
-        .any(|target| banner.contains(target))
-    {
+    // Only the tool identification before "Linker" describes the target.
+    // Output filenames and paths can contain names of unrelated target families.
+    if banner.lines().any(|line| {
+        line.split_once(" LINKER").is_some_and(|(tool, _)| {
+            tool.split_whitespace().any(|word| {
+                [
+                    "TMS320C28",
+                    "TMS320C54",
+                    "TMS320C55",
+                    "TMS320C2000",
+                    "C2000",
+                ]
+                .iter()
+                .any(|target| word.starts_with(target))
+            })
+        })
+    }) {
         return Err(Error::Configuration(
             "TI CGT word-addressed targets are not supported by the byte-based memory model".into(),
         ));
@@ -297,8 +310,6 @@ pub fn parse_lld_sections(text: &str) -> Result<Vec<LldOutputSection>, Error> {
             }
         }
         let [vma, lma, size, alignment] = numbers;
-        vma.checked_add(size).ok_or_else(invalid)?;
-        lma.checked_add(size).ok_or_else(invalid)?;
         let name = rest.trim();
         if name.is_empty() {
             return Err(invalid());
@@ -309,6 +320,10 @@ pub fn parse_lld_sections(text: &str) -> Result<Vec<LldOutputSection>, Error> {
             && !rest[1..].starts_with(char::is_whitespace)
             && !name.contains('=')
         {
+            // Script assignments may encode a negative dot delta as a u64.
+            // Only output sections describe allocation ranges to validate.
+            vma.checked_add(size).ok_or_else(invalid)?;
+            lma.checked_add(size).ok_or_else(invalid)?;
             rows.push(LldOutputSection {
                 name: name.into(),
                 vma,

@@ -298,6 +298,28 @@ fn ti_legacy_table_and_hex_variants() {
 }
 
 #[test]
+fn ti_target_detection_does_not_use_the_output_filename() {
+    let text = TI_MAP.replace("<app.out>", "<C:/C2000/ARM/app.out>");
+    assert_eq!(
+        parse_map_regions(&text).unwrap(),
+        parse_map_regions(TI_MAP).unwrap()
+    );
+    for target in [
+        "TMS320C2800",
+        "TMS320C2000 COFF",
+        "TMS320C54x",
+        "TMS320C55x",
+        "C2000",
+    ] {
+        let text = TI_MAP.replace("ARM Linker", &format!("{target} Linker"));
+        assert!(parse_map_regions(&text)
+            .unwrap_err()
+            .to_string()
+            .contains("word-addressed"));
+    }
+}
+
+#[test]
 fn ti_invalid_and_unrepresentable_layouts_are_rejected() {
     for text in [
         TI_MAP.replace("20000000", "08000000"),
