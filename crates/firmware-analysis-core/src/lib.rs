@@ -5,6 +5,7 @@ pub mod compare;
 pub mod dependencies;
 mod dwarf;
 mod elf;
+pub mod map;
 mod model;
 pub mod regions;
 pub mod stack;

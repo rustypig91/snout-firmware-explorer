@@ -2451,3 +2451,97 @@ fn failed_stack_selection_does_not_display_the_previous_selection_report() {
     assert_eq!(app.saved_stack_reports(&elf), Some(vec![valid]));
     assert!(app.stack.is_none());
 }
+
+#[test]
+fn llvm_map_preview_and_manual_import_preserve_analysis_and_capacity() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/maps");
+    let map = root.join("llvm-lld.map");
+    let mut app = Explorer::default();
+    app.scan_build(root.clone());
+    finish_job(&mut app);
+    app.open(root.join("llvm-lld.elf"));
+    finish_job(&mut app);
+    app.configure(Some(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/cortex-m-memory.json"),
+    ));
+    finish_job(&mut app);
+    let analysis = app.analysis.clone().unwrap();
+    app.apply_map(map.clone());
+    finish_job(&mut app);
+    assert!(app
+        .error
+        .as_ref()
+        .unwrap()
+        .contains("not physical memory capacities"));
+    assert!(Arc::ptr_eq(&analysis, app.analysis.as_ref().unwrap()));
+    app.apply_dependency_map(map.clone());
+    finish_job(&mut app);
+    assert!(app.error.is_none());
+    let imported = app.analysis.as_ref().unwrap();
+    assert_eq!(imported.options, analysis.options);
+    assert_eq!(imported.dependencies.edges.len(), 16);
+    assert_eq!(
+        serde_json::to_value(&imported.symbols).unwrap(),
+        serde_json::to_value(&analysis.symbols).unwrap()
+    );
+    app.preview = Some((
+        map,
+        include_str!("../../../fixtures/maps/llvm-lld.map").into(),
+    ));
+    let ctx = egui::Context::default();
+    ctx.style_mut(|style| style.animation_time = 0.0);
+    let frame = |app: &mut Explorer, events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 820.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    app.artifact_preview(ui);
+                });
+            },
+        )
+    };
+    frame(&mut app, vec![]);
+    let output = frame(&mut app, vec![]);
+    assert!(output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == "Detected format: LLVM lld (ELF)")));
+    let pos = output
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.text() == "LLVM output section placement" => {
+                Some(t.pos + t.galley.size() * 0.5)
+            }
+            _ => None,
+        })
+        .unwrap();
+    for pressed in [true, false] {
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    let output = frame(&mut app, vec![]);
+    for heading in ["Runtime address", "Load address", "Size (bytes)"] {
+        assert!(
+            output
+                .shapes
+                .iter()
+                .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == heading)),
+            "Missing {heading}"
+        );
+    }
+}
