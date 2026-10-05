@@ -70,12 +70,23 @@ pub(crate) fn analyze(elf: &Elf, file_len: u64) -> Result<Option<TlsReport>, Err
     }
     let mut ranges = Vec::new();
     for (_, s) in &sections {
+        if !s.sh_addralign.max(1).is_power_of_two() || s.sh_addralign > alignment {
+            return Err(Error::Invalid(
+                "TLS section alignment is incompatible with the TLS template".into(),
+            ));
+        }
         if s.sh_addr < base || end(s.sh_addr, s.sh_size)? > end(base, size)? {
             return Err(Error::Invalid(
                 "TLS section lies outside the TLS template".into(),
             ));
         }
-        if s.sh_type != SHT_NOBITS {
+        if s.sh_type == SHT_NOBITS {
+            if s.sh_size > 0 && s.sh_addr < end(base, initialized)? {
+                return Err(Error::Invalid(
+                    "Zero-initialized TLS section overlaps the TLS initialization image".into(),
+                ));
+            }
+        } else {
             if end(s.sh_addr, s.sh_size)? > end(base, initialized)? {
                 return Err(Error::Invalid(
                     "Initialized TLS section lies outside the TLS initialization image".into(),
