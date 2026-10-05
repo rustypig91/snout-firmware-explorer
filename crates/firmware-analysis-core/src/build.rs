@@ -1,6 +1,6 @@
 //! Build folder discovery and automatic linker-map memory configuration import.
 pub use crate::map::{detect_map_format, parse_map_regions, MapFormat};
-use crate::{analyze_path, validate_options, Analysis, AnalysisOptions, Error};
+use crate::{analyze_path, Analysis, AnalysisOptions, Error};
 use std::{
     fs,
     io::Read,
@@ -12,7 +12,6 @@ pub enum ArtifactKind {
     Firmware,
     Map,
     StackUsage,
-    MemoryLayout,
 }
 impl ArtifactKind {
     pub fn label(self) -> &'static str {
@@ -20,7 +19,6 @@ impl ArtifactKind {
             Self::Firmware => "ELF firmware",
             Self::Map => "Linker map",
             Self::StackUsage => "Stack usage",
-            Self::MemoryLayout => "Memory layout",
         }
     }
 }
@@ -96,10 +94,7 @@ pub fn scan_folder(root: impl AsRef<Path>) -> Result<BuildFolder, Error> {
                 "map" => Some(ArtifactKind::Map),
                 "su" => Some(ArtifactKind::StackUsage),
                 "ld" | "lds" => None,
-                "json" => fs::read(&path)
-                    .ok()
-                    .and_then(|b| serde_json_layout(&b))
-                    .map(|_| ArtifactKind::MemoryLayout),
+                "json" => None,
                 _ => {
                     let mut header = [0; 18];
                     match fs::File::open(&path).and_then(|mut f| f.read(&mut header)) {
@@ -126,11 +121,6 @@ pub fn scan_folder(root: impl AsRef<Path>) -> Result<BuildFolder, Error> {
     }
     build.artifacts.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(build)
-}
-
-fn serde_json_layout(bytes: &[u8]) -> Option<AnalysisOptions> {
-    let options: AnalysisOptions = serde_json::from_slice(bytes).ok()?;
-    (!options.regions.is_empty() && validate_options(&options).is_ok()).then_some(options)
 }
 
 impl BuildFolder {
@@ -179,7 +169,10 @@ pub fn analyze_build_firmware(
                 Err(e) => notes.push(format!("{}: {e}; capacity remains unknown", map.display())),
             }
         } else {
-            notes.push("No unique matching map file found. Select a map and apply its memory regions, or load a memory layout.".into());
+            notes.push(
+                "No unique matching map file found. Select a map and apply its memory regions."
+                    .into(),
+            );
         }
     }
     let mut analysis = analyze_path(path, &options)?;

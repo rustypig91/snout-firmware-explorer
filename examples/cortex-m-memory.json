@@ -1,6 +1,0 @@
-{
-  "regions": [
-    { "name": "Flash", "start": 134217728, "size": 262144, "kind": "flash" },
-    { "name": "SRAM", "start": 536870912, "size": 65536, "kind": "ram" }
-  ]
-}

@@ -21,7 +21,7 @@ fn changing_layout_reloads_stack_reports_against_the_current_elf() {
         let root = directory.path().canonicalize().unwrap();
         let elf = root.join("app.elf");
         let report = root.join("app.su");
-        let layout = root.join(if use_map { "app.map" } else { "layout.json" });
+        let layout = root.join(if use_map { "app.map" } else { "layout.map" });
         std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
         std::fs::write(&report, "diag.c:22:36:diagnose\t24\tstatic\n").unwrap();
         std::fs::write(
@@ -29,7 +29,7 @@ fn changing_layout_reloads_stack_reports_against_the_current_elf() {
             if use_map {
                 "Memory Configuration\nName Origin Length Attributes\nFLASH 0x08000000 0x10000 xr\nRAM 0x20000000 0x10000 xrw\nLinker script and memory map\n"
             } else {
-                include_str!("../../../examples/cortex-m-memory.json")
+                include_str!("../../../fixtures/build/cortex-m.map")
             },
         )
         .unwrap();
@@ -93,7 +93,7 @@ fn changing_layout_rescans_stack_reports_after_a_rebuild() {
             std::fs::create_dir(&reports).unwrap();
             let old_report = reports.join("old.su");
             let new_report = reports.join("new.su");
-            let layout = root.join(if use_map { "app.map" } else { "layout.json" });
+            let layout = root.join(if use_map { "app.map" } else { "layout.map" });
             std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
             std::fs::write(&old_report, "diag.c:22:36:diagnose\t24\tstatic\n").unwrap();
             std::fs::write(
@@ -101,7 +101,7 @@ fn changing_layout_rescans_stack_reports_after_a_rebuild() {
                 if use_map {
                     "Memory Configuration\nName Origin Length Attributes\nFLASH 0x08000000 0x10000 xr\nRAM 0x20000000 0x10000 xrw\nLinker script and memory map\n"
                 } else {
-                    include_str!("../../../examples/cortex-m-memory.json")
+                    include_str!("../../../fixtures/build/cortex-m.map")
                 },
             )
             .unwrap();
@@ -328,16 +328,16 @@ fn same_named_symbols_at_different_addresses_expand_independently() {
 }
 
 #[test]
-fn refresh_reloads_uppercase_maps_and_json_layouts_and_keeps_comparison() {
+fn refresh_reloads_uppercase_maps_and_selected_maps_and_keeps_comparison() {
     let folder = tempfile::tempdir().unwrap();
     let elf = folder.path().join("app.elf");
     std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
     let map = folder.path().join("manual.MAP");
     std::fs::write(&map, include_bytes!("../../../fixtures/build/cortex-m.map")).unwrap();
-    let layout = folder.path().join("memory.JSON");
+    let layout = folder.path().join("memory.MAP");
     std::fs::write(
         &layout,
-        include_bytes!("../../../examples/cortex-m-memory.json"),
+        include_bytes!("../../../fixtures/build/cortex-m.map"),
     )
     .unwrap();
     let mut app = Explorer::default();
@@ -366,9 +366,15 @@ fn refresh_reloads_uppercase_maps_and_json_layouts_and_keeps_comparison() {
             )
             .unwrap();
         } else {
-            let mut options = app.options.clone();
-            options.regions[0].size *= 2;
-            std::fs::write(source, serde_json::to_vec(&options).unwrap()).unwrap();
+            std::fs::write(
+                source,
+                include_str!("../../../fixtures/build/cortex-m.map").replacen(
+                    "0x00040000",
+                    "0x00080000",
+                    1,
+                ),
+            )
+            .unwrap();
         }
         let previous = app.options.clone();
         std::fs::write(
@@ -482,7 +488,7 @@ fn active_map_follows_analysis_instead_of_preview_selection() {
     finish_job(&mut restored);
     assert!(restored.map_in_use(&other_map));
     app.configure(Some(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/cortex-m-memory.json"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/cortex-m.map"),
     ));
     finish_job(&mut app);
     assert!(!app.map_in_use(&map));
@@ -532,7 +538,7 @@ fn map_rediscovery_commits_layout_only_after_successful_analysis() {
     finish_job(&mut app);
     app.configure(Some(PathBuf::from(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../examples/cortex-m-memory.json"
+        "/../../fixtures/build/cortex-m.map"
     ))));
     finish_job(&mut app);
     assert!(app.error.is_none());
@@ -1167,8 +1173,10 @@ fn build_folder_scan_finds_adjacent_and_nested_reports() {
 }
 #[test]
 fn configured_region_symbols_render_and_search() {
-    let options =
-        serde_json::from_str(include_str!("../../../examples/cortex-m-memory.json")).unwrap();
+    let options = firmware_analysis_core::map::parse_map_regions(include_str!(
+        "../../../fixtures/build/cortex-m.map"
+    ))
+    .unwrap();
     let analysis = firmware_analysis_core::analyze_bytes(
         include_bytes!("../../../fixtures/build/cortex-m.elf"),
         "fixture",
@@ -1266,7 +1274,7 @@ fn refresh_restores_selection_and_layout_and_preserves_report_on_failure() {
     app.open(path.clone());
     finish_job(&mut app);
     app.configure(Some(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/cortex-m-memory.json"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/cortex-m.map"),
     ));
     finish_job(&mut app);
     app.view = View::MemoryMap;
@@ -1397,7 +1405,7 @@ fn reopening_same_folder_restores_firmware_and_layout() {
     app.open(elf.clone());
     finish_job(&mut app);
     app.configure(Some(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/cortex-m-memory.json"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/cortex-m.map"),
     ));
     finish_job(&mut app);
     let layout = app.options.clone();
@@ -1450,7 +1458,7 @@ fn preferences_restore_selected_firmware_layout_and_view() {
     original.open(original.build.as_ref().unwrap().root.join("cortex-m.elf"));
     finish_job(&mut original);
     original.configure(Some(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/cortex-m-memory.json"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/cortex-m.map"),
     ));
     finish_job(&mut original);
     original.view = View::Symbols;
@@ -1498,7 +1506,7 @@ fn notes_and_cached_rankings_follow_the_report_and_view() {
             .all(|w| metric.value(a.symbols[w[0]].usage) >= metric.value(a.symbols[w[1]].usage)));
     }
     app.configure(Some(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/cortex-m-memory.json"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/cortex-m.map"),
     ));
     finish_job(&mut app);
     let a = app.analysis.clone().unwrap();
@@ -2475,7 +2483,7 @@ fn llvm_map_preview_and_manual_import_preserve_analysis_and_capacity() {
     app.open(root.join("llvm-lld.elf"));
     finish_job(&mut app);
     app.configure(Some(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/cortex-m-memory.json"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/cortex-m.map"),
     ));
     finish_job(&mut app);
     let analysis = app.analysis.clone().unwrap();
@@ -2588,6 +2596,24 @@ fn llvm_map_preview_and_manual_import_preserve_analysis_and_capacity() {
         .iter()
         .any(|text| text.starts_with("Cannot parse the map preview:")));
     assert!(!labels.contains(&".beyond_preview"));
+}
+
+#[test]
+fn legacy_json_layout_preferences_are_replaced_by_map_regions() {
+    let build = firmware_analysis_core::build::scan_folder(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build"),
+    )
+    .unwrap();
+    let (analysis, layout, source) = workspace::analyze_selected(
+        &build,
+        &build.root.join("cortex-m.elf"),
+        Some(AnalysisOptions::default()),
+        Some("missing-legacy-layout.json".into()),
+    )
+    .unwrap();
+    assert!(layout.is_none());
+    assert_eq!(analysis.options.regions.len(), 2);
+    assert!(source.ends_with("cortex-m.map"));
 }
 
 #[test]

@@ -47,7 +47,7 @@ pub fn parse_map_regions(text: &str) -> Result<AnalysisOptions, Error> {
         MapFormat::GnuLd => parse_gnu_regions(text),
         MapFormat::TexasCgt => parse_ti_regions(text),
         MapFormat::LlvmLld => Err(Error::Configuration(
-            "LLVM lld maps describe section placement, not physical memory capacities. Load a memory-layout JSON to configure capacities; --cref can supply dependencies.".into(),
+            "LLVM lld maps describe section placement, not physical memory capacities. Physical capacities remain unknown; --cref can supply dependencies.".into(),
         )),
         MapFormat::Unknown => Err(Error::Configuration(
             "Unknown or ambiguous linker map format; recognized formats: GNU ld, Texas Instruments CGT, and LLVM lld (ELF)".into(),

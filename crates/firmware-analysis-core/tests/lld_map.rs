@@ -144,8 +144,10 @@ fn lld_cref_preserves_dwarf_and_elf_information() {
 fn matching_lld_map_loads_dependencies_with_or_without_explicit_capacity() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/maps");
     let build = scan_folder(root).unwrap();
-    let layout =
-        serde_json::from_str(include_str!("../../../examples/cortex-m-memory.json")).unwrap();
+    let layout = firmware_analysis_core::map::parse_map_regions(include_str!(
+        "../../../fixtures/build/cortex-m.map"
+    ))
+    .unwrap();
     for options in [None, Some(&layout)] {
         let analysis =
             analyze_build_firmware(&build, &build.root.join("llvm-lld.elf"), options).unwrap();

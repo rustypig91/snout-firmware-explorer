@@ -610,10 +610,10 @@ impl Explorer {
             ui.horizontal_wrapped(|ui| {
                 if ui.button("Load memory regions...").clicked() {
                     if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("JSON", &["json"])
+                        .add_filter("Linker map", &["map"])
                         .pick_file()
                     {
-                        self.configure(Some(path));
+                        self.apply_map(path);
                     }
                 }
                 if ui.button("Discover layout from matching map").clicked() {
@@ -627,7 +627,7 @@ impl Explorer {
         ui.separator();
         self.ensure_region_cache(a);
         if a.options.regions.is_empty() {
-            ui.label("Region capacity and free space are unknown. Use Load memory regions above to load a target layout JSON.");
+            ui.label("Region capacity and free space are unknown. Use Load memory regions above to import a linker map.");
         } else {
             if self
                 .selected_region

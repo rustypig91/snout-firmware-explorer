@@ -305,10 +305,10 @@ impl Explorer {
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| "ELF inference".into());
             let options = match path {
-                Some(path) => {
-                    serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
-                        .map_err(|e| e.to_string())?
-                }
+                Some(path) => firmware_analysis_core::map::parse_map_regions(
+                    &std::fs::read_to_string(path).map_err(|e| e.to_string())?,
+                )
+                .map_err(|e| e.to_string())?,
                 None => AnalysisOptions::default(),
             };
             firmware_analysis_core::validate_options(&options).map_err(|e| e.to_string())?;
