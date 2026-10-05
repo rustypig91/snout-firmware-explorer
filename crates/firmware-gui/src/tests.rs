@@ -2731,3 +2731,60 @@ fn tab_controls_are_independent_and_remembered_for_the_session() {
     assert!(!restarted.contributor_ram);
     assert!(restarted.overview_metric == overview::Metric::Flash);
 }
+
+#[test]
+fn replacing_data_invalidates_filters_in_inactive_tabs() {
+    for replacement in ["build", "firmware", "refresh", "layout", "failure"] {
+        let mut app = Explorer::default();
+        let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build");
+        app.scan_build(folder.clone());
+        finish_job(&mut app);
+        let elf = app.build.as_ref().unwrap().root.join("cortex-m.elf");
+        app.open(elf.clone());
+        finish_job(&mut app);
+        for view in View::ALL {
+            app.change_view(view);
+            app.search = "session search".into();
+            app.sort_column = 2;
+            app.descending = false;
+            app.tree = true;
+            app.kind_filter = "Function".into();
+            app.selected_file = Some("old/source.c".into());
+            app.selected_region = Some(0);
+        }
+        app.stack_show_unresolved = true;
+        match replacement {
+            "build" => app.scan_build(folder.clone()),
+            "firmware" => app.open(elf),
+            "refresh" => app.refresh(),
+            "layout" => app.configure(Some(folder.join("cortex-m.map"))),
+            "failure" => app.open(folder.join("missing.elf")),
+            _ => unreachable!(),
+        }
+        finish_job(&mut app);
+        // A build load can schedule restoration of the selected firmware.
+        if app.receiver.is_some() {
+            finish_job(&mut app);
+        }
+        assert_eq!(app.error.is_some(), replacement == "failure");
+        for view in View::ALL {
+            app.change_view(view);
+            assert_eq!(app.search, "session search", "{replacement}");
+            assert_eq!(app.sort_column, 2, "{replacement}");
+            assert!(!app.descending, "{replacement}");
+            assert!(app.tree, "{replacement}");
+            assert_eq!(app.kind_filter, "Function", "{replacement}");
+            assert_eq!(
+                app.selected_region,
+                (replacement == "failure").then_some(0),
+                "{replacement}"
+            );
+            assert_eq!(
+                app.selected_file.as_deref(),
+                matches!(replacement, "layout" | "failure").then_some("old/source.c"),
+                "{replacement}"
+            );
+        }
+        assert!(app.stack_show_unresolved, "{replacement}");
+    }
+}

@@ -402,10 +402,9 @@ impl Explorer {
                         self.baseline = None;
                         self.stack = None;
                         self.details = None;
-                        self.selected_region = None;
+                        self.clear_firmware_filters();
                         self.overview_section = None;
                         self.overview_unit = None;
-                        self.selected_file = None;
                         self.artifact_search.clear();
                         self.visible_rows = 0;
                         let restore = self
@@ -476,8 +475,7 @@ impl Explorer {
                             self.baseline = None;
                         }
                         self.replace_stack(stack);
-                        self.selected_file = None;
-                        self.selected_region = None;
+                        self.clear_firmware_filters();
                         self.overview_section = None;
                         self.overview_unit = None;
                         self.details = None;
@@ -516,7 +514,7 @@ impl Explorer {
                     Ok(Loaded::Config(options, analysis, source, stack, build)) => {
                         self.layout_source = source;
                         self.details = None;
-                        self.selected_region = None;
+                        self.clear_region_filters();
                         self.overview_section = None;
                         self.overview_unit = None;
                         self.layout_override = Some(options.clone());

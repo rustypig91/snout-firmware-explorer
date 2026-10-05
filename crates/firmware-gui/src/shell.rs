@@ -43,6 +43,21 @@ pub(super) fn configure_style(ctx: &egui::Context) {
 }
 
 impl Explorer {
+    pub(super) fn clear_region_filters(&mut self) {
+        self.selected_region = None;
+        for options in &mut self.tab_options {
+            options.selected_region = None;
+        }
+    }
+
+    pub(super) fn clear_firmware_filters(&mut self) {
+        self.clear_region_filters();
+        self.selected_file = None;
+        for options in &mut self.tab_options {
+            options.selected_file = None;
+        }
+    }
+
     pub(super) fn change_view(&mut self, view: View) {
         if self.view == view {
             return;
