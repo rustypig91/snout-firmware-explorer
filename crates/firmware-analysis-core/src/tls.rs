@@ -70,12 +70,23 @@ pub(crate) fn analyze(elf: &Elf, file_len: u64) -> Result<Option<TlsReport>, Err
     }
     let mut ranges = Vec::new();
     for (_, s) in &sections {
+        if !s.sh_addralign.max(1).is_power_of_two() || s.sh_addralign > alignment {
+            return Err(Error::Invalid(
+                "TLS section alignment is incompatible with the TLS template".into(),
+            ));
+        }
         if s.sh_addr < base || end(s.sh_addr, s.sh_size)? > end(base, size)? {
             return Err(Error::Invalid(
                 "TLS section lies outside the TLS template".into(),
             ));
         }
-        if s.sh_type != SHT_NOBITS {
+        if s.sh_type == SHT_NOBITS {
+            if s.sh_size > 0 && s.sh_addr < end(base, initialized)? {
+                return Err(Error::Invalid(
+                    "Zero-initialized TLS section overlaps the TLS initialization image".into(),
+                ));
+            }
+        } else {
             if end(s.sh_addr, s.sh_size)? > end(base, initialized)? {
                 return Err(Error::Invalid(
                     "Initialized TLS section lies outside the TLS initialization image".into(),
@@ -101,16 +112,17 @@ pub(crate) fn analyze(elf: &Elf, file_len: u64) -> Result<Option<TlsReport>, Err
     }
     let mut symbols = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
-    for raw in elf
+    for (raw, strtab) in elf
         .syms
         .iter()
-        .chain(elf.dynsyms.iter())
-        .filter(|s| s.st_type() == sym::STT_TLS && s.st_shndx != 0)
+        .map(|s| (s, &elf.strtab))
+        .chain(elf.dynsyms.iter().map(|s| (s, &elf.dynstrtab)))
+        .filter(|(s, _)| s.st_type() == sym::STT_TLS && s.st_shndx != 0)
     {
         let Some((_, section)) = sections.iter().find(|(i, _)| *i == raw.st_shndx) else {
             continue;
         };
-        let name = elf.strtab.get_at(raw.st_name).unwrap_or("");
+        let name = strtab.get_at(raw.st_name).unwrap_or("");
         if name.is_empty() || raw.st_size == 0 {
             continue;
         }
@@ -145,4 +157,55 @@ pub(crate) fn analyze(elf: &Elf, file_len: u64) -> Result<Option<TlsReport>, Err
         total_runtime_ram: None,
         symbols,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dynamic_tls_symbols_use_the_dynamic_string_table() {
+        let bytes = include_bytes!("../../../fixtures/build/cortex-m.elf");
+        let mut elf = Elf::parse(bytes).unwrap();
+        let raw = elf
+            .syms
+            .iter()
+            .find(|s| s.st_type() == sym::STT_OBJECT && s.st_size > 0)
+            .unwrap();
+        let name = elf.strtab.get_at(raw.st_name).unwrap().to_owned();
+        let section = &mut elf.section_headers[raw.st_shndx];
+        section.sh_flags |= u64::from(SHF_TLS);
+        let offset = raw.st_value - section.sh_addr;
+        let size = raw.st_size;
+        let mut symbol = raw;
+        symbol.st_value = offset;
+        symbol.st_info = (symbol.st_info & 0xf0) | sym::STT_TLS;
+        // Model a stripped dynamic ELF without a static symbol/string table.
+        // Symtab parses an actual encoded symbol to keep this test independent
+        // of the string-table selection in the implementation.
+        let mut encoded = [0u8; 16];
+        encoded[0..4].copy_from_slice(&(symbol.st_name as u32).to_le_bytes());
+        encoded[4..8].copy_from_slice(&(offset as u32).to_le_bytes());
+        encoded[8..12].copy_from_slice(&(size as u32).to_le_bytes());
+        encoded[12] = symbol.st_info;
+        encoded[14..16].copy_from_slice(&(symbol.st_shndx as u16).to_le_bytes());
+        elf.dynsyms = goblin::elf::sym::Symtab::parse(
+            &encoded,
+            0,
+            1,
+            goblin::container::Ctx::new(
+                goblin::container::Container::Little,
+                goblin::container::Endian::Little,
+            ),
+        )
+        .unwrap();
+        elf.dynstrtab = elf.strtab;
+        elf.strtab = Default::default();
+        elf.syms = Default::default();
+        let tls = analyze(&elf, bytes.len() as u64).unwrap().unwrap();
+        assert_eq!(tls.symbols.len(), 1);
+        assert_eq!(tls.symbols[0].name, name);
+        assert_eq!(tls.symbols[0].offset, offset);
+        assert_eq!(tls.symbols[0].size, size);
+    }
 }

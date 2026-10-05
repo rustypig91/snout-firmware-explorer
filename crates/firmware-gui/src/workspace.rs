@@ -30,14 +30,11 @@ pub(super) fn analyze_selected(
             .unwrap_or_default()
             .to_string_lossy()
             .to_ascii_lowercase();
-        match extension.as_str() {
-            "map" => {
-                layout = Some(
-                    parse_map_regions(&std::fs::read_to_string(source).map_err(|e| e.to_string())?)
-                        .map_err(|e| e.to_string())?,
-                )
-            }
-            _ => {}
+        if extension == "map" {
+            layout = Some(
+                parse_map_regions(&std::fs::read_to_string(source).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?,
+            );
         }
     }
     let analysis =
@@ -663,14 +660,13 @@ impl Explorer {
                 self.preview = None;
             }
             ui.add_enabled_ui(self.receiver.is_none(), |ui| {
-                match path
+                if path
                     .extension()
                     .unwrap_or_default()
                     .to_string_lossy()
                     .to_ascii_lowercase()
-                    .as_str()
+                    == "map"
                 {
-                    "map" => {
                         let format = detect_map_format(&text);
                         ui.label(format!("Detected format: {}", format.label()));
                         if format == MapFormat::TexasCgt {
@@ -686,8 +682,6 @@ impl Explorer {
                         } else {
                             ui.small("Select this map's radio button in the left menu to use its memory regions.");
                         }
-                    }
-                    _ => {}
                 }
             });
         });

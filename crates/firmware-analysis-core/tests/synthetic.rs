@@ -386,3 +386,64 @@ fn tls_symbol_values_are_offsets_not_runtime_addresses() {
     assert_eq!(variable.offset, offset);
     assert_eq!(variable.size, expected_size);
 }
+
+#[test]
+fn tls_rejects_zero_fill_inside_initialization_image_and_incompatible_alignment() {
+    for wide in [false, true] {
+        for big in [false, true] {
+            let (data, ph) = tls_segment_fixture(wide, big);
+            let header = if wide { 64 } else { 52 };
+            let stride = if wide { 64 } else { 40 };
+            let table = header + 4 + b"\0.custom\0.scratch\0.shstrtab\0.debug_info\0".len();
+            let width = if wide { 8 } else { 4 };
+            // No section overlap: the initialized segment extends into .scratch.
+            let mut invalid = data.clone();
+            put(
+                &mut invalid,
+                ph + if wide { 32 } else { 16 },
+                12,
+                width,
+                big,
+            );
+            assert!(
+                analyze_bytes(&invalid, "TLS zero fill", &Default::default())
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Zero-initialized TLS section")
+            );
+            for alignment in [3, 16] {
+                let mut invalid = data.clone();
+                put(
+                    &mut invalid,
+                    table + 2 * stride + if wide { 48 } else { 32 },
+                    alignment,
+                    width,
+                    big,
+                );
+                assert!(
+                    analyze_bytes(&invalid, "TLS alignment", &Default::default())
+                        .unwrap_err()
+                        .to_string()
+                        .contains("TLS section alignment")
+                );
+            }
+            // Without PT_TLS, putting zero fill before initialized data cannot
+            // be represented by an initialized prefix followed by a zero tail.
+            let mut invalid = data;
+            put(&mut invalid, if wide { 56 } else { 44 }, 0, 2, big);
+            put(
+                &mut invalid,
+                table + 2 * stride + if wide { 16 } else { 12 },
+                0x07fffff0,
+                width,
+                big,
+            );
+            assert!(
+                analyze_bytes(&invalid, "inferred TLS zero fill", &Default::default())
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Zero-initialized TLS section")
+            );
+        }
+    }
+}
