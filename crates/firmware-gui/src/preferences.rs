@@ -177,6 +177,7 @@ impl Explorer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::io::Read;
 
     #[test]
@@ -185,6 +186,13 @@ mod tests {
         let path = directory.path().join("config/workspace.json");
         let first = serde_json::json!({"version": 1, "firmware": "first.elf"});
         write_preferences(&path, &first).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()).unwrap(),
+            first
+        );
+        // Unix permits replacing a file while a reader holds its old inode.
+        // Windows replacement requires the destination to be closed.
+        #[cfg(unix)]
         let mut previous = std::fs::File::open(&path).unwrap();
         let next = serde_json::json!({"version": 1, "firmware": "next.elf"});
         write_preferences(&path, &next).unwrap();
@@ -192,12 +200,15 @@ mod tests {
             serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()).unwrap(),
             next
         );
-        let mut old_data = Vec::new();
-        previous.read_to_end(&mut old_data).unwrap();
-        assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&old_data).unwrap(),
-            first
-        );
+        #[cfg(unix)]
+        {
+            let mut old_data = Vec::new();
+            previous.read_to_end(&mut old_data).unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&old_data).unwrap(),
+                first
+            );
+        }
         assert_eq!(
             std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
             1
