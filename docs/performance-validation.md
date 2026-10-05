@@ -95,3 +95,39 @@ Synthetic input generation and initial fixture ELF decoding are outside this
 timer. This is a stack-stage measurement, not total application startup latency.
 The user's large project has not been profiled; ELF/DWARF decoding, map import
 and filesystem discovery can still contribute to startup time.
+
+
+# Full-window scrolling follow-up
+
+The earlier symbol-table benchmark did not render the build sidebar. With
+2,000 stack-report files across 200 directories, that sidebar recreated every
+expanded widget and repeatedly scanned paths and selection rules on every frame.
+This slowed scrolling in other views as well.
+
+The sidebar now caches its artifact filters, report hierarchy and selection
+counts, invalidating them when the build, analysis or report selection changes.
+Report trees and other artifact groups use fixed-height virtualized rows, drawing
+only the viewport. Long labels are truncated with full paths available on hover.
+Search reveals matching descendants while retaining complete directory selection
+counts. Folder expansion choices survive report reloads.
+
+Reproduce the full-window benchmark (50,000 symbols plus 2,000 report files):
+
+```text
+cargo test -p firmware-gui large_build_scrolling_latency --locked -- --ignored --nocapture
+```
+
+Windows debug-profile results against the initial PR implementation, measured
+with ten scrolling frames per area after one initial frame:
+
+| Full-window frame | Before median (ms) | After median (ms) | After maximum (ms) |
+| --- | ---: | ---: | ---: |
+| Scrolling sidebar | 758.15 | 6.30 | 6.55 |
+| Scrolling symbols | 775.85 | 6.54 | 6.65 |
+
+These are synthetic headless CPU-side timings; the user's Zephyr project is on
+another computer and was not profiled. Regression tests verify that only visible
+rows are drawn, the last file remains reachable by scrolling, filtering preserves
+ancestors and full folder counts, and existing sidebar selection/map interactions
+still work. Final validation: 191 workspace tests passed, four manual benchmarks
+ignored in ordinary test runs; formatting, Clippy and diff checks passed.
