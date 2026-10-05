@@ -104,6 +104,12 @@ impl GraphView {
             .is_some_and(|cached| Some(&cached.input) == self.requested_layout.as_ref())
     }
 
+    fn fit_graph(&mut self) {
+        self.zoom = 1.0;
+        self.pan = egui::Vec2::ZERO;
+        self.readable_size = false;
+    }
+
     fn select_edge(&mut self, from: &str, to: &str) {
         self.selected = None;
         self.edge = Some((from.into(), to.into()));
@@ -234,8 +240,7 @@ impl Explorer {
                 self.graph_view.focused = false;
             }
             if ui.button("Fit graph").clicked() {
-                self.graph_view.zoom = 1.0;
-                self.graph_view.pan = egui::Vec2::ZERO;
+                self.graph_view.fit_graph();
             }
             if ui.button("Readable size").clicked() {
                 self.graph_view.readable_size = true;
@@ -608,6 +613,21 @@ impl Explorer {
 mod tests {
     use super::*;
     use firmware_analysis_core::dependencies::{DependencyEdge, DependencyNode};
+
+    #[test]
+    fn fit_cancels_readable_size_waiting_for_layout() {
+        let mut state = GraphView {
+            readable_size: true,
+            zoom: 4.0,
+            pan: egui::vec2(100.0, -50.0),
+            ..GraphView::default()
+        };
+        assert!(!state.layout_ready());
+        state.fit_graph();
+        assert!(!state.readable_size);
+        assert_eq!(state.zoom, 1.0);
+        assert_eq!(state.pan, egui::Vec2::ZERO);
+    }
 
     #[test]
     fn zoom_reaches_readable_scale_even_for_very_large_graphs() {
