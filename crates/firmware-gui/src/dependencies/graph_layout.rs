@@ -157,7 +157,7 @@ pub(super) fn compute(input: &LayoutInput) -> GraphLayout {
     result
 }
 
-/// Linear traversal and column placement for large connected graphs. Routes
+/// Bounded traversal and column placement for large connected graphs. Routes
 /// leave each column through its gutters and run outside the cards, so no
 /// per-edge all-pairs obstacle search is needed.
 fn compute_large(input: &LayoutInput) -> GraphLayout {
@@ -182,6 +182,11 @@ fn compute_large(input: &LayoutInput) -> GraphLayout {
             queue.push_back(i);
         }
     }
+    // Sort cyclic seeds once, then visit each candidate at most once. Repeated
+    // full scans become quadratic for graphs with many separate cycles.
+    let mut seeds: Vec<_> = (0..rank.len()).collect();
+    seeds.sort_unstable_by_key(|&i| (std::cmp::Reverse(outgoing[i].len()), i));
+    let mut seeds = seeds.into_iter();
     loop {
         while let Some(i) = queue.pop_front() {
             for &next in &outgoing[i] {
@@ -193,9 +198,7 @@ fn compute_large(input: &LayoutInput) -> GraphLayout {
         }
         // Cyclic components have no zero-incoming root. Choose a deterministic
         // seed with many references rather than leaving their cards unplaced.
-        let next = (0..rank.len())
-            .filter(|&i| rank[i] == usize::MAX)
-            .max_by_key(|&i| (outgoing[i].len(), std::cmp::Reverse(i)));
+        let next = seeds.find(|&i| rank[i] == usize::MAX);
         let Some(next) = next else {
             break;
         };
@@ -1101,5 +1104,40 @@ fn large_connected_firmware_graph_preserves_cards_and_clear_routes() {
             assert!(route_is_clear(&edge.points, &geometry.cards));
         }
         assert_eq!(geometry.headings.is_empty(), !grouped);
+    }
+}
+
+#[test]
+fn large_grouped_graph_places_many_separate_cycles_deterministically() {
+    let count = 10_000;
+    let input = LayoutInput {
+        nodes: (0..count)
+            .map(|i| NodeSpec {
+                id: format!("unit{i:05}"),
+                directory: format!("directory{}", i % 20),
+                size: egui::vec2(120.0, 50.0),
+            })
+            .collect(),
+        edges: (0..count)
+            .map(|i| (format!("unit{i:05}"), format!("unit{:05}", i ^ 1)))
+            .collect(),
+        grouped: true,
+        ram: false,
+        vertical: false,
+    };
+    let start = std::time::Instant::now();
+    let geometry = compute(&input);
+    assert!(start.elapsed() < std::time::Duration::from_secs(3));
+    assert_eq!(geometry.cards.len(), count);
+    assert_eq!(geometry.edges.len(), count);
+    assert_eq!(geometry.headings.len(), 20);
+    assert!(geometry
+        .cards
+        .values()
+        .all(|card| geometry.bounds.contains_rect(*card)));
+    let repeated = compute(&input);
+    assert_eq!(geometry.cards, repeated.cards);
+    for (edge, repeated) in geometry.edges.iter().zip(&repeated.edges) {
+        assert_eq!(edge.points, repeated.points);
     }
 }
