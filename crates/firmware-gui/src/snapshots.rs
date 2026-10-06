@@ -253,6 +253,19 @@ fn collect(a: &Analysis, stack: Option<&StackReport>) -> BTreeMap<String, u64> {
     fn add<T: serde::Serialize>(v: &mut BTreeMap<String, u64>, d: &str, id: &str, item: &T) {
         fields(v, d, id, serde_json::to_value(item).unwrap(), "");
     }
+    fn add_unique<T: serde::Serialize>(
+        v: &mut BTreeMap<String, u64>,
+        seen: &mut HashSet<(String, String)>,
+        domain: &str,
+        id: &str,
+        item: &T,
+    ) {
+        if seen.insert((domain.into(), id.into())) {
+            add(v, domain, id, item);
+        } else {
+            v.insert(key(domain, id, "ambiguous"), 1);
+        }
+    }
     fn tree(v: &mut BTreeMap<String, u64>, node: &FileTree, path: &str) {
         add(v, "tree", path, &node.usage);
         for child in &node.children {
@@ -265,6 +278,7 @@ fn collect(a: &Analysis, stack: Option<&StackReport>) -> BTreeMap<String, u64> {
         }
     }
     let mut v = BTreeMap::new();
+    let mut seen = HashSet::new();
     add(&mut v, "totals", "", &a.totals);
     add(&mut v, "metadata", "", &a.metadata);
     add(&mut v, "unattributed", "", &a.unattributed);
@@ -282,14 +296,14 @@ fn collect(a: &Analysis, stack: Option<&StackReport>) -> BTreeMap<String, u64> {
     if let Some(tls) = &a.tls {
         add(&mut v, "tls", "", tls);
         for s in &tls.symbols {
-            add(&mut v, "tls_symbol", &s.name, s);
+            add_unique(&mut v, &mut seen, "tls_symbol", &s.name, s);
         }
     }
     for f in &a.files {
         add(&mut v, "file", &f.path, f);
     }
     for s in &a.sections {
-        add(&mut v, "section", &s.name, s);
+        add_unique(&mut v, &mut seen, "section", &s.name, s);
         for (ram, metric) in [(false, "flash"), (true, "ram")] {
             let (gap, uncovered) = super::insights::section_unattributed(a, s, ram);
             for (field, value) in [
@@ -314,7 +328,7 @@ fn collect(a: &Analysis, stack: Option<&StackReport>) -> BTreeMap<String, u64> {
     }
     for r in &a.memory_map {
         let id = serde_json::to_string(&(&r.name, &r.space)).unwrap();
-        add(&mut v, "range", &id, r);
+        add_unique(&mut v, &mut seen, "range", &id, r);
         v.insert(key("range", &id, "end"), r.address.saturating_add(r.size));
     }
     for r in &a.options.regions {
@@ -353,7 +367,7 @@ fn collect(a: &Analysis, stack: Option<&StackReport>) -> BTreeMap<String, u64> {
     }
     if let Some(stack) = stack {
         for e in &stack.entries {
-            add(&mut v, "stack", &stack_key(e), e);
+            add_unique(&mut v, &mut seen, "stack", &stack_key(e), e);
         }
     }
     v
@@ -405,10 +419,11 @@ impl Explorer {
         Some(&self.selected_snapshot()?.name)
     }
     pub(super) fn snapshot_old(&self, domain: &str, id: &str, field: &str) -> Option<u64> {
-        self.selected_snapshot()?
-            .values
-            .get(&key(domain, id, field))
-            .copied()
+        let snapshot = self.selected_snapshot()?;
+        if snapshot.values.contains_key(&key(domain, id, "ambiguous")) {
+            return None;
+        }
+        snapshot.values.get(&key(domain, id, field)).copied()
     }
     pub(super) fn snapshot_bytes(&self, domain: &str, id: &str, field: &str, value: u64) -> String {
         if let Some(snapshot) = self.selected_snapshot() {
@@ -449,6 +464,12 @@ impl Explorer {
         )
     }
     pub(super) fn snapshot_count(&self, domain: &str, id: &str, field: &str, value: u64) -> String {
+        if self
+            .selected_snapshot()
+            .is_some_and(|snapshot| snapshot.values.contains_key(&key(domain, id, "ambiguous")))
+        {
+            return format!("{value} (baseline ambiguous)");
+        }
         match self.snapshot_old(domain, id, field) {
             Some(old) if old != value => {
                 format!("{value} ({:+})", i128::from(value) - i128::from(old))
@@ -569,7 +590,7 @@ impl Explorer {
                             continue;
                         }
                         let loaded = (|| -> Result<Snapshot, String> {
-                            let stored: SnapshotFile = serde_json::from_slice(
+                            let mut stored: SnapshotFile = serde_json::from_slice(
                                 &std::fs::read(&path).map_err(|e| e.to_string())?,
                             )
                             .map_err(|e| e.to_string())?;
@@ -579,6 +600,10 @@ impl Explorer {
                             if snapshot_path(preferences, &build.root, &stored.snapshot)? != path {
                                 return Err("Snapshot identity does not match its file path".into());
                             }
+                            // Rebuild derived lookup data so reports saved by older versions
+                            // also benefit from identity and ambiguity fixes.
+                            stored.snapshot.values =
+                                collect(&stored.snapshot.analysis, stored.snapshot.stack.as_ref());
                             Ok(stored.snapshot)
                         })();
                         match loaded {
@@ -1234,6 +1259,95 @@ mod tests {
             .snapshot_bytes("symbol", &symbol_key(&symbol), "size", symbol.size)
             .ends_with("(baseline ambiguous)"));
     }
+    #[test]
+    fn duplicate_section_tls_range_and_stack_identities_do_not_produce_false_deltas() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        app.select_stack_reports(vec![root.join("app.su")]);
+        finish(&mut app);
+        let mut analysis = (**app.analysis.as_ref().unwrap()).clone();
+        let mut section = analysis.sections[0].clone();
+        section.size += 7;
+        let section_name = section.name.clone();
+        analysis.sections.push(section);
+        let mut range = analysis.memory_map[0].clone();
+        let range_id = serde_json::to_string(&(&range.name, &range.space)).unwrap();
+        range.size += 7;
+        analysis.memory_map.push(range);
+        analysis.tls = Some(firmware_analysis_core::TlsReport {
+            source: "test".into(),
+            initialized_size: 12,
+            zero_initialized_size: 0,
+            template_size: 12,
+            alignment: 4,
+            total_runtime_ram: None,
+            symbols: vec![
+                firmware_analysis_core::TlsSymbol {
+                    name: "local_tls".into(),
+                    offset: 0,
+                    size: 4,
+                    section: ".tdata".into(),
+                },
+                firmware_analysis_core::TlsSymbol {
+                    name: "local_tls".into(),
+                    offset: 4,
+                    size: 8,
+                    section: ".tdata".into(),
+                },
+            ],
+        });
+        app.analysis = Some(Arc::new(analysis));
+        let stack = app.stack.as_mut().unwrap();
+        let mut entry = stack.entries[0].clone();
+        let stack_id = stack_key(&entry);
+        entry.source_line += 1;
+        entry.local_bytes += 7;
+        stack.entries.push(entry);
+        app.take_snapshot("duplicates").unwrap();
+        app.select_snapshot(Some("duplicates".into())).unwrap();
+        let identities = [
+            ("section", section_name.as_str(), "size"),
+            ("range", range_id.as_str(), "size"),
+            ("tls_symbol", "local_tls", "size"),
+            ("stack", stack_id.as_str(), "local_bytes"),
+        ];
+        for (domain, id, field) in identities {
+            assert_eq!(app.snapshot_old(domain, id, field), None);
+            assert_eq!(
+                app.snapshot_bytes(domain, id, field, 4),
+                "4 B (baseline ambiguous)"
+            );
+            assert!(app
+                .snapshot_address(domain, id, field, 4)
+                .ends_with("(baseline ambiguous)"));
+            assert_eq!(
+                app.snapshot_count(domain, id, field, 4),
+                "4 (baseline ambiguous)"
+            );
+        }
+        // Old snapshot files can contain last-row-wins derived values. Loading
+        // must rebuild them from the captured report, preserving ambiguity.
+        let mut saved = app.snapshots.snapshots[0].clone();
+        for (domain, id, field) in identities {
+            saved.values.remove(&key(domain, id, "ambiguous"));
+            saved.values.insert(key(domain, id, field), 99);
+        }
+        write_snapshot(app.preferences_file.as_ref().unwrap(), &root, &saved, true).unwrap();
+        let mut restarted = open(&root);
+        restarted
+            .select_snapshot(Some("duplicates".into()))
+            .unwrap();
+        for (domain, id, field) in identities {
+            assert_eq!(restarted.snapshot_old(domain, id, field), None);
+            assert_eq!(
+                restarted.snapshot_bytes(domain, id, field, 4),
+                "4 B (baseline ambiguous)"
+            );
+        }
+    }
+
     #[test]
     fn failed_snapshot_save_does_not_change_baseline_or_snapshot_list() {
         let directory = tempfile::tempdir().unwrap();

@@ -174,6 +174,31 @@ fn metric_slices_for_display(
     slices
 }
 
+fn baseline_slices(
+    current: &Analysis,
+    baseline: &Analysis,
+    section: Option<usize>,
+    unit: Option<&UnitKey>,
+    metric: super::overview::Metric,
+) -> Result<Vec<Slice>, ()> {
+    let section = if let Some(index) = section {
+        let Some(current) = current.sections.iter().find(|s| s.index == index) else {
+            return Ok(Vec::new());
+        };
+        let mut matches = baseline.sections.iter().filter(|s| s.name == current.name);
+        let Some(old) = matches.next() else {
+            return Ok(Vec::new());
+        };
+        if matches.next().is_some() {
+            return Err(());
+        }
+        Some(old.index)
+    } else {
+        None
+    };
+    Ok(metric_slices(baseline, section, unit, metric))
+}
+
 // A display label can be shared by different units or symbols. Only compare
 // stable identities, and leave duplicate identities unknown rather than summing
 // multiple baseline rows into the delta for one current row.
@@ -225,35 +250,30 @@ impl Explorer {
             self.overview_metric,
             Some(self),
         );
-        let baseline_items = self.snapshot_analysis().map(|old| {
-            let section = self
-                .overview_section
-                .and_then(|i| a.sections.iter().find(|s| s.index == i))
-                .and_then(|s| old.sections.iter().find(|o| o.name == s.name))
-                .map(|s| s.index);
-            // A section absent from the baseline has no previous slices.
-            if self.overview_section.is_some() && section.is_none() {
-                Vec::new()
-            } else {
-                metric_slices(
-                    old,
-                    section,
-                    self.overview_unit.as_ref(),
-                    self.overview_metric,
-                )
-            }
+        let baseline = self.snapshot_analysis().map(|old| {
+            baseline_slices(
+                a,
+                old,
+                self.overview_section,
+                self.overview_unit.as_ref(),
+                self.overview_metric,
+            )
         });
+        let ambiguous_section = matches!(baseline, Some(Err(())));
+        let baseline_items = baseline.as_ref().and_then(|items| items.as_ref().ok());
         self.visible_rows = items.len();
         let total: u64 = items.iter().map(|s| s.size).sum();
         ui.label(format!(
             "{}: {}",
             self.overview_metric.label(),
-            self.snapshot_difference(
-                total,
-                baseline_items
-                    .as_ref()
-                    .map(|items| items.iter().map(|s| s.size).sum())
-            )
+            if ambiguous_section {
+                format!("{} (baseline ambiguous)", bytes(total))
+            } else {
+                self.snapshot_difference(
+                    total,
+                    baseline_items.map(|items| items.iter().map(|s| s.size).sum()),
+                )
+            }
         ));
         ui.weak("Select a row to explore")
             .on_hover_text("Aliases share unique bytes; zero-sized labels remain listed.");
@@ -267,9 +287,11 @@ impl Explorer {
             } else {
                 item.size as f32 / total as f32
             };
-            let old_size = baseline_items
-                .as_ref()
-                .map(|items| baseline_size(item, items));
+            let old_size = if ambiguous_section {
+                Some(Err(()))
+            } else {
+                baseline_items.map(|items| baseline_size(item, items))
+            };
             let size_label = if old_size == Some(Err(())) {
                 format!("{} (baseline ambiguous)", bytes(item.size))
             } else {
@@ -392,6 +414,41 @@ mod tests {
         assert_eq!(elf.name, dwarf.name);
         assert_eq!(baseline_size(elf, &units), Ok(15));
         assert_eq!(baseline_size(dwarf, &units), Ok(20));
+    }
+
+    #[test]
+    fn drilldown_does_not_choose_an_arbitrary_duplicate_baseline_section() {
+        let current = firmware_analysis_core::analyze_path(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../fixtures/build/cortex-m.elf"),
+            &Default::default(),
+        )
+        .unwrap();
+        let section = current.sections.iter().find(|s| s.usage.flash > 0).unwrap();
+        let mut baseline = current.clone();
+        let mut duplicate = section.clone();
+        duplicate.index = baseline.sections.iter().map(|s| s.index).max().unwrap() + 1;
+        baseline.sections.push(duplicate);
+        for unit in [None, Some(UnitKey::Other)] {
+            assert!(baseline_slices(
+                &current,
+                &baseline,
+                Some(section.index),
+                unit.as_ref(),
+                super::super::overview::Metric::Flash,
+            )
+            .is_err());
+        }
+        baseline.sections.retain(|s| s.name != section.name);
+        assert!(baseline_slices(
+            &current,
+            &baseline,
+            Some(section.index),
+            None,
+            super::super::overview::Metric::Flash,
+        )
+        .unwrap()
+        .is_empty());
     }
 
     #[test]
