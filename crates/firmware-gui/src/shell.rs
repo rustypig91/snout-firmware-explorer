@@ -202,45 +202,44 @@ impl Explorer {
     }
 
     pub(super) fn show(&mut self, ctx: &egui::Context) {
-        if let Some(path) = ctx.input(|i| i.raw.dropped_files.iter().find_map(|f| f.path.clone())) {
-            if self.receiver.is_none() {
-                match super::startup::parse([path.into_os_string()]) {
-                    Ok(Some(startup)) => self.open_startup(&startup),
-                    Ok(None) => {}
-                    Err(error) => self.error = Some(error),
+        let snapshot_modal_open = self.snapshot_dialog.is_some();
+        self.show_snapshot_dialog(ctx);
+        if !snapshot_modal_open {
+            if let Some(path) =
+                ctx.input(|i| i.raw.dropped_files.iter().find_map(|f| f.path.clone()))
+            {
+                if self.receiver.is_none() {
+                    match super::startup::parse([path.into_os_string()]) {
+                        Ok(Some(startup)) => self.open_startup(&startup),
+                        Ok(None) => {}
+                        Err(error) => self.error = Some(error),
+                    }
                 }
             }
-        }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::O))
-            && self.receiver.is_none()
-        {
-            self.pick_build();
-        }
-        // Leave Escape available for egui to dismiss the menu hierarchy too.
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.details = None;
-            self.show_notes = false;
-            self.show_about = false;
-        }
-        if self.view == View::Overview
-            && ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Extra1))
-        {
-            self.overview_back();
-        }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F5)) {
-            self.refresh();
-        }
-        if ctx.input_mut(|i| {
-            i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::C)
-        }) && self.receiver.is_none()
-            && self.analysis.is_some()
-        {
-            self.pick_baseline();
-        }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F1))
-            && self.receiver.is_none()
-        {
-            self.show_about = true;
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::O))
+                && self.receiver.is_none()
+            {
+                self.pick_build();
+            }
+            // Leave Escape available for egui to dismiss the menu hierarchy too.
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.details = None;
+                self.show_notes = false;
+                self.show_about = false;
+            }
+            if self.view == View::Overview
+                && ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Extra1))
+            {
+                self.overview_back();
+            }
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F5)) {
+                self.refresh();
+            }
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F1))
+                && self.receiver.is_none()
+            {
+                self.show_about = true;
+            }
         }
         let title = self
             .build
@@ -311,19 +310,13 @@ impl Explorer {
                             }
                             if ui
                                 .add_enabled(
-                                    self.analysis.is_some(),
-                                    egui::Button::new("Compare...").shortcut_text(
-                                        egui::RichText::new("Ctrl+Shift+C")
-                                            .color(egui::Color32::from_gray(145)),
-                                    ),
-                                )
-                                .on_hover_text(
-                                    "Select an older build; deltas show current minus older",
+                                    self.analysis.is_some() && self.receiver.is_none(),
+                                    egui::Button::new("Snapshot"),
                                 )
                                 .clicked()
                             {
+                                self.open_snapshot_manager();
                                 ui.close_menu();
-                                self.pick_baseline();
                             }
                             if ui
                                 .add_enabled(
@@ -405,6 +398,11 @@ impl Explorer {
                         );
                     ui.separator();
                     ui.small(format!("{} rows", self.visible_rows));
+                    if let Some(name) = self.snapshot_label() {
+                        ui.separator();
+                        ui.small(format!("Snapshot: {name}"))
+                            .on_hover_text("Selected comparison baseline · current minus snapshot");
+                    }
                 } else {
                     ui.small("Ready / Select or drop a build folder or ELF to begin");
                 }
@@ -471,6 +469,12 @@ impl Explorer {
         egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(error) = self.error.clone() {
                 ui.horizontal_wrapped(|ui| { ui.colored_label(egui::Color32::LIGHT_RED, error); if ui.small_button("Dismiss").clicked() { self.error = None; } }); ui.separator();
+            }
+            if let Some(error) = self.snapshot_error.clone() {
+                ui.horizontal_wrapped(|ui| { ui.colored_label(egui::Color32::LIGHT_RED, error); if ui.small_button("Dismiss snapshot error").clicked() { self.snapshot_error = None; } }); ui.separator();
+            }
+            if self.view != View::Overview && self.view != View::Compare {
+                if let Some(name) = self.snapshot_label() { ui.label(format!("Comparing to snapshot: {name} · current minus baseline")); ui.separator(); }
             }
             if self.view == View::Overview && self.artifact_preview(ui) { return; }
             let Some(a) = self.analysis.clone() else {

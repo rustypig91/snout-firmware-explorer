@@ -425,7 +425,9 @@ impl Explorer {
             if let Some(analysis) = &self.analysis {
                 self.load_firmware(PathBuf::from(&analysis.path), None, true);
             } else {
-                self.build_settings.remove(&build.root);
+                if let Some(settings) = self.build_settings.get_mut(&build.root) {
+                    settings.reset_choices();
+                }
                 self.remembered_firmware = None;
                 self.pending_restore = None;
                 self.preview = None;
