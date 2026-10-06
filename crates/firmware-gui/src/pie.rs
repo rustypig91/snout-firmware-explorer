@@ -35,7 +35,17 @@ enum Target {
     Unit(UnitKey),
 }
 
+#[derive(Clone, PartialEq, Eq)]
+enum SliceIdentity {
+    Section(String),
+    Unit(UnitKey),
+    Symbol(String),
+    Padding,
+}
+
+#[derive(Clone)]
 struct Slice {
+    identity: SliceIdentity,
     name: String,
     size: u64,
     target: Option<Target>,
@@ -74,6 +84,7 @@ fn metric_slices_for_display(
         if let Some(unit) = unit {
             for s in symbols.iter().filter(|s| unit_key(s) == *unit) {
                 slices.push(Slice {
+                    identity: SliceIdentity::Symbol(super::snapshots::symbol_key(s)),
                     name: s.demangled_name.clone(),
                     size: metric.value(s.usage),
                     target: None,
@@ -101,6 +112,7 @@ fn metric_slices_for_display(
             }
             if *unit == UnitKey::Other && remaining > 0 {
                 slices.push(Slice {
+                    identity: SliceIdentity::Padding,
                     name: "[padding / unknown contents]".into(),
                     size: remaining,
                     target: None,
@@ -118,6 +130,7 @@ fn metric_slices_for_display(
             }
             for (key, size) in units {
                 slices.push(Slice {
+                    identity: SliceIdentity::Unit(key.clone()),
                     name: display_path(key.label()).into_owned(), size,
                     tip: match &key {
                         UnitKey::Dwarf(_) => "DWARF compilation unit. Click to inspect functions and data symbols.",
@@ -137,6 +150,7 @@ fn metric_slices_for_display(
                     && (metric == super::overview::Metric::All || metric.section_size(s) > 0)
             })
             .map(|s| Slice {
+                identity: SliceIdentity::Section(s.name.clone()),
                 name: s.name.clone(),
                 size: metric.section_size(s),
                 target: Some(Target::Section(s.index)),
@@ -158,6 +172,19 @@ fn metric_slices_for_display(
     }
     slices.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(&b.name)));
     slices
+}
+
+// A display label can be shared by different units or symbols. Only compare
+// stable identities, and leave duplicate identities unknown rather than summing
+// multiple baseline rows into the delta for one current row.
+fn baseline_size(item: &Slice, baseline: &[Slice]) -> Result<u64, ()> {
+    let mut matches = baseline.iter().filter(|old| old.identity == item.identity);
+    let size = matches.next().map_or(0, |old| old.size);
+    if matches.next().is_some() {
+        Err(())
+    } else {
+        Ok(size)
+    }
 }
 
 pub(super) fn color(name: &str) -> egui::Color32 {
@@ -240,25 +267,21 @@ impl Explorer {
             } else {
                 item.size as f32 / total as f32
             };
+            let old_size = baseline_items
+                .as_ref()
+                .map(|items| baseline_size(item, items));
+            let size_label = if old_size == Some(Err(())) {
+                format!("{} (baseline ambiguous)", bytes(item.size))
+            } else {
+                self.snapshot_difference(item.size, old_size.and_then(Result::ok))
+            };
             let label = format!(
                 "{} - {} ({})",
                 item.name,
-                self.snapshot_difference(
-                    item.size,
-                    baseline_items.as_ref().map(|items| items
-                        .iter()
-                        .filter(|old| old.name == item.name)
-                        .map(|s| s.size)
-                        .sum())
-                ),
+                size_label,
                 self.snapshot_percentage(
                     fraction as f64 * 100.0,
-                    baseline_items.as_ref().map(|items| {
-                        let size: u64 = items
-                            .iter()
-                            .filter(|old| old.name == item.name)
-                            .map(|s| s.size)
-                            .sum();
+                    old_size.and_then(Result::ok).map(|size| {
                         if baseline_total == 0 {
                             0.0
                         } else {
@@ -302,6 +325,93 @@ impl Explorer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn baseline_slices_match_symbol_and_unit_identities_instead_of_display_labels() {
+        let mut analysis = firmware_analysis_core::analyze_path(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../fixtures/build/cortex-m.elf"),
+            &Default::default(),
+        )
+        .unwrap();
+        let mut first = analysis
+            .symbols
+            .iter()
+            .find(|s| s.size > 0)
+            .unwrap()
+            .clone();
+        let section = first.section_index;
+        first.name = "first".into();
+        first.demangled_name = "same label".into();
+        first.source_file = Some("first.c".into());
+        first.dwarf_compilation_unit = None;
+        first.compilation_unit = Some("unit.c".into());
+        first.usage.flash = 10;
+        let mut second = first.clone();
+        second.name = "second".into();
+        second.source_file = Some("second.c".into());
+        second.usage.flash = 20;
+        analysis.symbols = vec![first, second];
+        let unit = UnitKey::Elf("unit.c".into());
+        let baseline = metric_slices(
+            &analysis,
+            Some(section),
+            Some(&unit),
+            super::super::overview::Metric::Flash,
+        );
+        analysis.symbols[0].usage.flash = 15;
+        analysis.symbols[0].address += 1024;
+        analysis.symbols[0].source_line = Some(999);
+        let current = metric_slices(
+            &analysis,
+            Some(section),
+            Some(&unit),
+            super::super::overview::Metric::Flash,
+        );
+        let changed = current.iter().find(|s| s.size == 15).unwrap();
+        assert_eq!(baseline_size(changed, &baseline), Ok(10));
+        let unchanged = current.iter().find(|s| s.size == 20).unwrap();
+        assert_eq!(baseline_size(unchanged, &baseline), Ok(20));
+
+        // ELF and DWARF units can have the same displayed path but are distinct.
+        analysis.symbols[1].dwarf_compilation_unit = Some("unit.c".into());
+        let units = metric_slices(
+            &analysis,
+            Some(section),
+            None,
+            super::super::overview::Metric::Flash,
+        );
+        let elf = units
+            .iter()
+            .find(|s| s.identity == SliceIdentity::Unit(unit.clone()))
+            .unwrap();
+        let dwarf = units
+            .iter()
+            .find(|s| s.identity == SliceIdentity::Unit(UnitKey::Dwarf("unit.c".into())))
+            .unwrap();
+        assert_eq!(elf.name, dwarf.name);
+        assert_eq!(baseline_size(elf, &units), Ok(15));
+        assert_eq!(baseline_size(dwarf, &units), Ok(20));
+    }
+
+    #[test]
+    fn duplicate_baseline_slice_identities_are_unknown_and_missing_slices_are_zero() {
+        let item = Slice {
+            identity: SliceIdentity::Symbol("symbol".into()),
+            name: "symbol".into(),
+            size: 10,
+            target: None,
+            tip: String::new(),
+        };
+        assert_eq!(baseline_size(&item, &[]), Ok(0));
+        assert_eq!(baseline_size(&item, std::slice::from_ref(&item)), Ok(10));
+        assert_eq!(baseline_size(&item, &[item.clone(), item.clone()]), Err(()));
+        let padding = Slice {
+            identity: SliceIdentity::Padding,
+            ..item.clone()
+        };
+        assert_eq!(baseline_size(&padding, &[item]), Ok(0));
+    }
 
     #[test]
     fn every_drilldown_reconciles_and_preserves_all_symbols() {

@@ -665,21 +665,22 @@ impl Explorer {
     }
     pub(super) fn select_snapshot(&mut self, name: Option<String>) -> Result<(), String> {
         let firmware = self.snapshot_firmware().ok_or("Select firmware first")?;
-        let mut store = self.snapshots.clone();
+        let mut active = self.snapshots.active.clone();
         if let Some(name) = name {
-            if !store
+            if !self
+                .snapshots
                 .snapshots
                 .iter()
                 .any(|s| s.firmware == firmware && s.name == name)
             {
                 return Err("The selected snapshot does not exist for this firmware.".into());
             }
-            store.active.insert(firmware, name);
+            active.insert(firmware, name);
         } else {
-            store.active.remove(&firmware);
+            active.remove(&firmware);
         }
-        self.remember_snapshot_selection(&store.active)?;
-        self.snapshots = store;
+        self.remember_snapshot_selection(&active)?;
+        self.snapshots.active = active;
         self.sync_snapshot_comparison();
         self.report_revision = self.report_revision.wrapping_add(1);
         self.details = None;
