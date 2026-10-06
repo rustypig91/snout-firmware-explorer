@@ -695,13 +695,10 @@ impl Explorer {
                             Row::new(
                                 vec![
                                     s.demangled_name.clone(),
-                                    self.snapshot_address(
-                                        "symbol",
-                                        &symbol_key(s),
-                                        &super::snapshots::placement_field(
-                                            &region.name,
-                                            entry.placement,
-                                        ),
+                                    self.snapshot_placement_address(
+                                        s,
+                                        &region.name,
+                                        entry.placement,
                                         entry.address,
                                     ),
                                     self.snapshot_bytes("symbol", &symbol_key(s), "size", s.size),

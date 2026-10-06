@@ -332,7 +332,7 @@ fn collect(a: &Analysis, stack: Option<&StackReport>) -> BTreeMap<String, u64> {
         v.insert(key("range", &id, "end"), r.address.saturating_add(r.size));
     }
     for r in &a.options.regions {
-        add(&mut v, "region", &r.name, r);
+        add_unique(&mut v, &mut seen, "region", &r.name, r);
         let usage = firmware_analysis_core::regions::region_usage(a, r);
         v.insert(key("region", &r.name, "used"), usage.used);
         v.insert(key("region", &r.name, "free"), usage.free);
@@ -481,6 +481,27 @@ impl Explorer {
             }
             _ => value.to_string(),
         }
+    }
+    pub(super) fn snapshot_placement_address(
+        &self,
+        symbol: &Symbol,
+        region: &str,
+        placement: &str,
+        value: u64,
+    ) -> String {
+        if self.selected_snapshot().is_some_and(|snapshot| {
+            snapshot
+                .values
+                .contains_key(&key("region", region, "ambiguous"))
+        }) {
+            return format!("{value:#010x} (baseline ambiguous)");
+        }
+        self.snapshot_address(
+            "symbol",
+            &symbol_key(symbol),
+            &placement_field(region, placement),
+            value,
+        )
     }
     pub(super) fn snapshot_percentage(&self, value: f64, old: Option<f64>) -> String {
         let current = format!("{value:.1}%");
@@ -1346,6 +1367,72 @@ mod tests {
                 "4 B (baseline ambiguous)"
             );
         }
+    }
+
+    #[test]
+    fn duplicate_region_names_do_not_compare_against_the_last_region() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        let mut analysis = (**app.analysis.as_ref().unwrap()).clone();
+        let symbol = analysis
+            .symbols
+            .iter()
+            .find(|s| s.size > 0)
+            .unwrap()
+            .clone();
+        let region = firmware_analysis_core::MemoryRegion {
+            name: "shared".into(),
+            start: symbol.normalized_address,
+            size: symbol.size,
+            kind: firmware_analysis_core::MemoryKind::Flash,
+        };
+        analysis.options.regions = vec![
+            region.clone(),
+            firmware_analysis_core::MemoryRegion {
+                start: region.start + region.size + 1024,
+                size: region.size + 7,
+                ..region.clone()
+            },
+        ];
+        firmware_analysis_core::validate_options(&analysis.options).unwrap();
+        app.analysis = Some(Arc::new(analysis));
+        app.take_snapshot("duplicate regions").unwrap();
+        app.select_snapshot(Some("duplicate regions".into()))
+            .unwrap();
+        assert_eq!(app.snapshot_old("region", "shared", "size"), None);
+        assert_eq!(
+            app.snapshot_bytes("region", "shared", "size", region.size),
+            format!("{} (baseline ambiguous)", format_bytes(region.size))
+        );
+        assert_eq!(
+            app.snapshot_region_percentage("shared", region.size, region.size),
+            "100.0%"
+        );
+        let usage =
+            firmware_analysis_core::regions::region_usage(app.analysis.as_ref().unwrap(), &region);
+        let entry = usage
+            .symbols
+            .iter()
+            .find(|e| {
+                symbol_key(&app.analysis.as_ref().unwrap().symbols[e.symbol_index])
+                    == symbol_key(&symbol)
+            })
+            .unwrap();
+        assert!(app
+            .snapshot_placement_address(&symbol, "shared", entry.placement, entry.address)
+            .ends_with("(baseline ambiguous)"));
+        // Ambiguous placement must not hide the symbol's unambiguous size.
+        assert_eq!(
+            app.snapshot_old("symbol", &symbol_key(&symbol), "size"),
+            Some(symbol.size)
+        );
+        let mut restarted = open(&root);
+        restarted
+            .select_snapshot(Some("duplicate regions".into()))
+            .unwrap();
+        assert_eq!(restarted.snapshot_old("region", "shared", "used"), None);
     }
 
     #[test]
