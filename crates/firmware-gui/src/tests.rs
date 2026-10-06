@@ -2788,3 +2788,246 @@ fn replacing_data_invalidates_filters_in_inactive_tabs() {
         assert!(app.stack_show_unresolved, "{replacement}");
     }
 }
+
+#[test]
+fn recent_build_folders_are_unique_bounded_and_persisted() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = Explorer {
+        preferences_file: Some(directory.path().join("workspace.json")),
+        ..Default::default()
+    };
+    let folders: Vec<_> = (0..6)
+        .map(|index| {
+            let folder = directory.path().join(format!("build-{index}"));
+            std::fs::create_dir(&folder).unwrap();
+            folder.canonicalize().unwrap()
+        })
+        .collect();
+    for folder in &folders {
+        app.scan_build(folder.clone());
+        finish_job(&mut app);
+    }
+    assert_eq!(
+        app.recent_build_folders,
+        folders[1..].iter().rev().cloned().collect::<Vec<_>>()
+    );
+    // A different spelling of the same folder must not create a duplicate.
+    app.scan_build(folders[3].join("."));
+    finish_job(&mut app);
+    let expected = vec![
+        folders[3].clone(),
+        folders[5].clone(),
+        folders[4].clone(),
+        folders[2].clone(),
+        folders[1].clone(),
+    ];
+    assert_eq!(app.recent_build_folders, expected);
+    let mut restored = Explorer {
+        preferences_file: app.preferences_file.clone(),
+        ..Default::default()
+    };
+    restored.restore_preferences(false);
+    assert_eq!(restored.recent_build_folders, expected);
+    assert!(restored.receiver.is_none());
+    app.scan_build(directory.path().join("missing"));
+    finish_job(&mut app);
+    assert!(app.error.is_some());
+    assert_eq!(app.recent_build_folders, expected);
+}
+
+#[test]
+fn recent_build_folders_restore_legacy_and_sanitize_saved_history() {
+    let mut app = Explorer::default();
+    app.apply_preferences_with_workspace(
+        &serde_json::json!({"version": 1, "folder": "/old/build"}),
+        false,
+    );
+    assert_eq!(app.recent_build_folders, vec![PathBuf::from("/old/build")]);
+    app.apply_preferences_with_workspace(&serde_json::json!({"version": 1, "recent_build_folders": ["/build/a", "/build/a", "/build/b", "/build/c", "/build/d", "/build/e", "/build/f"]}), false);
+    assert_eq!(
+        app.recent_build_folders,
+        ["/build/a", "/build/b", "/build/c", "/build/d", "/build/e"].map(PathBuf::from)
+    );
+}
+
+#[test]
+fn recent_folder_submenu_opens_left_and_remains_clickable() {
+    check_recent_folder_submenu(1280.0, "build");
+}
+
+#[test]
+fn long_recent_folder_submenu_stays_left_and_clickable_in_small_windows() {
+    check_recent_folder_submenu(640.0, &"long-build-folder-".repeat(12));
+}
+
+fn check_recent_folder_submenu(width: f32, folder_name: &str) {
+    let directory = tempfile::tempdir().unwrap();
+    let folder = directory.path().join(folder_name);
+    std::fs::create_dir(&folder).unwrap();
+    let folder = folder.canonicalize().unwrap();
+    let mut app = Explorer::default();
+    app.recent_build_folders.push(folder.clone());
+    let ctx = egui::Context::default();
+    shell::configure_style(&ctx);
+    let frame = |app: &mut Explorer, events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 800.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.show(ctx),
+        )
+    };
+    let text_rect = |output: &egui::FullOutput, text: &str| {
+        output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text_shape) if text_shape.galley.text() == text => Some(
+                    egui::Rect::from_min_size(text_shape.pos, text_shape.galley.size()),
+                ),
+                _ => None,
+            })
+            .max_by(|a, b| a.left().total_cmp(&b.left()))
+            .unwrap_or_else(|| panic!("Missing {text}"))
+    };
+    frame(&mut app, vec![]);
+    let menu = text_rect(&frame(&mut app, vec![]), "Menu").center();
+    for pressed in [true, false] {
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(menu),
+                egui::Event::PointerButton {
+                    pos: menu,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    let output = frame(&mut app, vec![]);
+    let refresh = text_rect(&output, "Refresh");
+    let f5 = text_rect(&output, "F5");
+    assert!(f5.left() > refresh.right());
+    assert!((f5.center().y - refresh.center().y).abs() < 1.0);
+    let open_hint = text_rect(&output, "Ctrl+O");
+    assert!((open_hint.right() - f5.right()).abs() < 1.0);
+    assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Rescan folder")));
+    let recent = text_rect(&output, "◀ Open recent build folder");
+    frame(&mut app, vec![egui::Event::PointerMoved(recent.center())]);
+    frame(&mut app, vec![]);
+    let output = frame(&mut app, vec![]);
+    let child = text_rect(&output, &display::display_path(&folder.to_string_lossy()));
+    let parent = text_rect(&output, "Open build folder...");
+    assert!(
+        child.right() < parent.left(),
+        "Submenu must be left of parent: {child:?}, {parent:?}"
+    );
+    frame(
+        &mut app,
+        vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    );
+    let output = frame(&mut app, vec![]);
+    assert!(!output.shapes.iter().any(
+        |shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Refresh")
+    ), "Escape must dismiss the parent and recent-folder submenu");
+    for pressed in [true, false] {
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(menu),
+                egui::Event::PointerButton {
+                    pos: menu,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    frame(&mut app, vec![egui::Event::PointerMoved(recent.center())]);
+    frame(&mut app, vec![]);
+    let output = frame(&mut app, vec![]);
+    // The bounding rectangle of both menus includes empty space below the
+    // shorter submenu. Clicking there must dismiss the menu hierarchy.
+    let outside = egui::pos2(child.center().x, text_rect(&output, "About").center().y);
+    for pressed in [true, false] {
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(outside),
+                egui::Event::PointerButton {
+                    pos: outside,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    let output = frame(&mut app, vec![]);
+    assert!(!output.shapes.iter().any(
+        |shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Refresh")
+    ));
+    for pressed in [true, false] {
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(menu),
+                egui::Event::PointerButton {
+                    pos: menu,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    frame(&mut app, vec![egui::Event::PointerMoved(recent.center())]);
+    frame(&mut app, vec![]);
+    frame(&mut app, vec![]);
+    for pressed in [true, false] {
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(child.center()),
+                egui::Event::PointerButton {
+                    pos: child.center(),
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    assert!(app.receiver.is_some());
+    finish_job(&mut app);
+    assert_eq!(app.build.as_ref().unwrap().root, folder);
+    let output = frame(&mut app, vec![]);
+    assert!(!output.shapes.iter().any(
+        |shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Refresh")
+    ));
+    frame(
+        &mut app,
+        vec![egui::Event::Key {
+            key: egui::Key::F1,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    );
+    assert!(app.show_about);
+}

@@ -67,8 +67,14 @@ impl Explorer {
         });
     }
 
+    pub(super) fn remember_build_folder(&mut self, folder: PathBuf) {
+        self.recent_build_folders.retain(|path| path != &folder);
+        self.recent_build_folders.insert(0, folder);
+        self.recent_build_folders.truncate(5);
+    }
+
     pub(super) fn preference_value(&self) -> serde_json::Value {
-        serde_json::json!({"version": 1, "build_settings": self.build_settings, "check_updates_on_startup": self.updates.check_on_startup, "skipped_version": self.updates.skipped_version, "folder": self.build.as_ref().map(|b| &b.root), "firmware": self.analysis.as_ref().map(|a| &a.path), "layout": self.layout_override, "layout_source": self.layout_source, "view": self.view.label()})
+        serde_json::json!({"version": 1, "recent_build_folders": self.recent_build_folders, "build_settings": self.build_settings, "check_updates_on_startup": self.updates.check_on_startup, "skipped_version": self.updates.skipped_version, "folder": self.build.as_ref().map(|b| &b.root), "firmware": self.analysis.as_ref().map(|a| &a.path), "layout": self.layout_override, "layout_source": self.layout_source, "view": self.view.label()})
     }
     pub(super) fn save_preferences(&self) -> Result<(), Box<dyn std::error::Error>> {
         let Some(path) = &self.preferences_file else {
@@ -107,6 +113,25 @@ impl Explorer {
     ) {
         if value["version"].as_u64() != Some(1) {
             return;
+        }
+        self.recent_build_folders.clear();
+        let recent: Vec<PathBuf> =
+            serde_json::from_value(value["recent_build_folders"].clone()).unwrap_or_default();
+        for folder in recent {
+            let folder = folder.canonicalize().unwrap_or(folder);
+            if !self.recent_build_folders.contains(&folder) {
+                self.recent_build_folders.push(folder);
+            }
+            if self.recent_build_folders.len() == 5 {
+                break;
+            }
+        }
+        // Older preferences only stored the last open folder.
+        if self.recent_build_folders.is_empty() {
+            if let Some(folder) = value["folder"].as_str().map(PathBuf::from) {
+                let folder = folder.canonicalize().unwrap_or(folder);
+                self.remember_build_folder(folder);
+            }
         }
         self.build_settings =
             serde_json::from_value(value["build_settings"].clone()).unwrap_or_default();
