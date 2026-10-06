@@ -1086,11 +1086,11 @@ impl Explorer {
                                 }
                             });
                         }
-                        if ui.add_enabled(has_snapshots, egui::Button::new("Delete all snapshots"))
-                            .on_hover_text("Delete every snapshot for the current firmware")
-                            .clicked() { action = Some(Action::AskDeleteAll); }
                         ui.separator();
                         ui.horizontal(|ui| {
+                            if ui.add_enabled(has_snapshots, egui::Button::new("Delete all snapshots"))
+                                .on_hover_text("Delete every snapshot for the current firmware")
+                                .clicked() { action = Some(Action::AskDeleteAll); }
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| {
                                 if ui.button("Close").clicked() { action = Some(Action::Close); }
                                 if self.snapshot_label().is_some() && ui.button("Stop comparing").clicked() { action = Some(Action::Stop); }
