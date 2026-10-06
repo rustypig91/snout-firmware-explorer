@@ -2,6 +2,101 @@ use super::display::display_path;
 use super::{egui, Explorer, View};
 use firmware_analysis_core::format_bytes as bytes;
 
+// egui 0.30's nested menus only open to the right. Keep a separate left-hand
+// area and include it in the parent menu's hit bounds between frames.
+fn menu_with_left_submenu(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
+    let bar_id = ui.id();
+    let bounds_id = bar_id.with("recent_menu_bounds");
+    let mut state = egui::menu::BarState::load(ui.ctx(), bar_id);
+    let button = ui.button("Menu");
+    egui::menu::MenuRoot::stationary_click_interaction(&button, &mut state);
+    if let Some(root) = state.as_ref() {
+        if let Some(rect) = ui.ctx().data(|data| data.get_temp::<egui::Rect>(bounds_id)) {
+            root.menu_state.write().rect = rect;
+        }
+    }
+    let child_id = bar_id.with("recent_menu_rect");
+    ui.ctx()
+        .data_mut(|data| data.remove::<egui::Rect>(child_id));
+    state.show(&button, contents);
+    if let Some(root) = state.as_ref() {
+        let mut menu = root.menu_state.write();
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(bounds_id, menu.rect));
+        if let Some(child) = ui.ctx().data(|data| data.get_temp::<egui::Rect>(child_id)) {
+            menu.rect = menu.rect.union(child);
+        }
+    }
+    if state.as_ref().is_none() {
+        ui.ctx().data_mut(|data| {
+            data.remove::<egui::Rect>(bounds_id);
+            data.insert_temp(bar_id.with("recent_menu"), false);
+        });
+    }
+    state.store(ui.ctx(), bar_id);
+}
+
+fn left_recent_menu(
+    ui: &mut egui::Ui,
+    folders: &[std::path::PathBuf],
+    bar_id: egui::Id,
+) -> Option<std::path::PathBuf> {
+    let id = bar_id.with("recent_menu");
+    let button = ui.add_enabled(
+        !folders.is_empty(),
+        egui::Button::new("◀ Open recent build folder"),
+    );
+    let mut open = ui
+        .ctx()
+        .data(|data| data.get_temp::<bool>(id).unwrap_or(false));
+    if button.hovered() || button.clicked() {
+        open = true;
+    }
+    let mut selected = None;
+    if open && !folders.is_empty() {
+        let parent = ui.max_rect();
+        let margin = egui::Frame::menu(ui.style()).total_margin();
+        let anchor = egui::pos2(
+            parent.left() - margin.left - ui.spacing().menu_spacing,
+            button.rect.top() - margin.top,
+        );
+        let popup = egui::Area::new(id)
+            .order(egui::Order::Foreground)
+            .pivot(egui::Align2::RIGHT_TOP)
+            .fixed_pos(anchor)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::menu(ui.style()).show(ui, |ui| {
+                    ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
+                        for folder in folders {
+                            if ui.button(display_path(&folder.to_string_lossy())).clicked() {
+                                selected = Some(folder.clone());
+                            }
+                        }
+                    });
+                });
+            });
+        ui.ctx()
+            .set_sublayer(ui.layer_id(), popup.response.layer_id);
+        let hovering_other = ui.rect_contains_pointer(parent) && !button.hovered();
+        if hovering_other
+            || selected.is_some()
+            || ui.input(|input| input.key_pressed(egui::Key::Escape))
+        {
+            open = false;
+        }
+        if open {
+            ui.ctx().data_mut(|data| {
+                data.insert_temp(bar_id.with("recent_menu_rect"), popup.response.rect)
+            });
+        }
+    }
+    ui.ctx().data_mut(|data| data.insert_temp(id, open));
+    if selected.is_some() {
+        ui.close_menu();
+    }
+    selected
+}
+
 pub(super) fn configure_style(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
     style.visuals = egui::Visuals::dark();
@@ -122,6 +217,18 @@ impl Explorer {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F5)) {
             self.refresh();
         }
+        if ctx.input_mut(|i| {
+            i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::C)
+        }) && self.receiver.is_none()
+            && self.analysis.is_some()
+        {
+            self.pick_baseline();
+        }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F1))
+            && self.receiver.is_none()
+        {
+            self.show_about = true;
+        }
         let title = self
             .build
             .as_ref()
@@ -155,27 +262,35 @@ impl Explorer {
                     }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .add_enabled(
-                            self.receiver.is_none() && self.build.is_some(),
-                            egui::Button::new("Refresh"),
-                        )
-                        .on_hover_text("Rescan and reload selected firmware (F5)")
-                        .clicked()
-                    {
-                        self.refresh();
-                    }
                     ui.add_enabled_ui(self.receiver.is_none(), |ui| {
-                        ui.menu_button("Menu", |ui| {
-                            if ui.button("Open build folder...").clicked() {
+                        let bar_id = ui.id();
+                        menu_with_left_submenu(ui, |ui| {
+                            if ui
+                                .add(
+                                    egui::Button::new("Open build folder...").shortcut_text(
+                                        egui::RichText::new("Ctrl+O")
+                                            .color(egui::Color32::from_gray(145)),
+                                    ),
+                                )
+                                .clicked()
+                            {
                                 ui.close_menu();
                                 self.pick_build();
+                            }
+                            if let Some(folder) =
+                                left_recent_menu(ui, &self.recent_build_folders, bar_id)
+                            {
+                                self.scan_build(folder);
                             }
                             if ui
                                 .add_enabled(
                                     self.build.is_some(),
-                                    egui::Button::new("Rescan folder"),
+                                    egui::Button::new("Refresh").shortcut_text(
+                                        egui::RichText::new("F5")
+                                            .color(egui::Color32::from_gray(145)),
+                                    ),
                                 )
+                                .on_hover_text("Rescan and reload selected firmware")
                                 .clicked()
                             {
                                 ui.close_menu();
@@ -184,7 +299,10 @@ impl Explorer {
                             if ui
                                 .add_enabled(
                                     self.analysis.is_some(),
-                                    egui::Button::new("Compare..."),
+                                    egui::Button::new("Compare...").shortcut_text(
+                                        egui::RichText::new("Ctrl+Shift+C")
+                                            .color(egui::Color32::from_gray(145)),
+                                    ),
                                 )
                                 .on_hover_text(
                                     "Select an older build; deltas show current minus older",
@@ -241,7 +359,12 @@ impl Explorer {
                                 ));
                                 ui.close_menu();
                             }
-                            if ui.button("About").clicked() {
+                            if ui
+                                .add(egui::Button::new("About").shortcut_text(
+                                    egui::RichText::new("F1").color(egui::Color32::from_gray(145)),
+                                ))
+                                .clicked()
+                            {
                                 self.show_about = true;
                                 ui.close_menu();
                             }

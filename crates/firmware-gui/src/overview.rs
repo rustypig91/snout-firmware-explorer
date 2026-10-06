@@ -237,7 +237,7 @@ impl Explorer {
             if ui
                 .add_enabled(
                     self.receiver.is_none(),
-                    egui::Button::new("Configure memory regions..."),
+                    egui::Button::new("Select linker map..."),
                 )
                 .clicked()
             {

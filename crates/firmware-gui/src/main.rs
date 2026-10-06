@@ -151,6 +151,7 @@ struct Explorer {
     report_revision: u64,
     table_cache: views::TableCache,
     preferences_file: Option<PathBuf>,
+    recent_build_folders: Vec<PathBuf>,
     analysis: Option<Arc<Analysis>>,
     graph_view: dependencies::GraphView,
     build: Option<Arc<firmware_analysis_core::build::BuildFolder>>,
@@ -200,6 +201,7 @@ impl Default for Explorer {
             report_revision: 0,
             table_cache: Default::default(),
             preferences_file: None,
+            recent_build_folders: Vec::new(),
             analysis: None,
             graph_view: Default::default(),
             build: None,
@@ -392,6 +394,7 @@ impl Explorer {
                     Ok(Loaded::ResetBuildSettings(_)) => unreachable!(),
                     Ok(Loaded::Refresh(_)) => unreachable!(),
                     Ok(Loaded::Build(build)) => {
+                        self.remember_build_folder(build.root.clone());
                         self.build = Some(Arc::new(build));
                         self.analysis = None;
                         self.graph_view = Default::default();
