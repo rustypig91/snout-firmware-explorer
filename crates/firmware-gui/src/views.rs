@@ -4,7 +4,10 @@ use super::{Explorer, View};
 use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
 use firmware_analysis_core::{format_bytes as bytes, Analysis, FileTree};
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{OnceCell, RefCell},
+    rc::Rc,
+};
 
 pub const ACCENT: egui::Color32 = egui::Color32::from_rgb(113, 185, 219);
 pub(super) const TEXT_SELECTION: egui::Color32 = egui::Color32::from_rgb(48, 105, 163);
@@ -15,7 +18,8 @@ struct Row {
     cells: Vec<String>,
     search_cells: Vec<String>,
     values: Vec<Option<i128>>,
-    tip: String,
+    tip: OnceCell<String>,
+    tip_builder: Option<Box<dyn Fn() -> String>>,
     action: Option<String>,
     bar_columns: Vec<usize>,
 }
@@ -35,8 +39,8 @@ struct RowKey {
 
 #[derive(Default)]
 pub(super) struct TableCache {
-    rows: RefCell<Option<(RowKey, Rc<Vec<Row>>)>>,
-    prepared: Option<Rc<PreparedTable>>,
+    rows: [RefCell<Option<(RowKey, Rc<Vec<Row>>)>>; View::ALL.len()],
+    prepared: [Option<Rc<PreparedTable>>; View::ALL.len()],
 }
 
 struct PreparedTable {
@@ -76,10 +80,22 @@ impl Row {
             search_cells: cells.iter().map(|cell| cell.to_lowercase()).collect(),
             cells,
             values,
-            tip,
+            tip: OnceCell::from(tip),
+            tip_builder: None,
             action: None,
             bar_columns: vec![],
         }
+    }
+
+    fn with_lazy_tip(mut self, build: impl Fn() -> String + 'static) -> Self {
+        self.tip = OnceCell::new();
+        self.tip_builder = Some(Box::new(build));
+        self
+    }
+
+    fn tip(&self) -> &String {
+        self.tip
+            .get_or_init(|| self.tip_builder.as_ref().unwrap()())
     }
 
     fn with_bars(mut self, columns: &[usize]) -> Self {
@@ -100,7 +116,7 @@ impl Explorer {
             comparison_group: self.comparison_group,
             build_root: self.build.as_ref().map(|b| b.root.clone()),
         };
-        let mut cache = self.table_cache.rows.borrow_mut();
+        let mut cache = self.table_cache.rows[self.view as usize].borrow_mut();
         if let Some((old, rows)) = &*cache {
             if *old == key {
                 return rows.clone();
@@ -114,7 +130,7 @@ impl Explorer {
     fn prepare_table(&mut self, rows: Rc<Vec<Row>>, columns: usize) -> Rc<PreparedTable> {
         let search = self.search.to_lowercase();
         let sort = self.sort_column.min(columns - 1);
-        if let Some(cached) = &self.table_cache.prepared {
+        if let Some(cached) = &self.table_cache.prepared[self.view as usize] {
             if Rc::ptr_eq(&cached.source, &rows)
                 && cached.search == search
                 && cached.sort == sort
@@ -123,9 +139,7 @@ impl Explorer {
                 return cached.clone();
             }
         }
-        let filtered = self
-            .table_cache
-            .prepared
+        let filtered = self.table_cache.prepared[self.view as usize]
             .as_ref()
             .filter(|cached| Rc::ptr_eq(&cached.source, &rows) && cached.search == search);
         let (mut indices, bar_maxima) = if let Some(cached) = filtered {
@@ -167,7 +181,7 @@ impl Explorer {
             indices,
             bar_maxima,
         });
-        self.table_cache.prepared = Some(prepared.clone());
+        self.table_cache.prepared[self.view as usize] = Some(prepared.clone());
         prepared
     }
 
@@ -213,14 +227,14 @@ impl Explorer {
             let current = rows.iter().position(|item| {
                 self.details
                     .as_ref()
-                    .is_some_and(|(name, tip)| name == &item.cells[0] && tip == &item.tip)
+                    .is_some_and(|(name, tip)| name == &item.cells[0] && tip == item.tip())
             });
             let next = match current {
                 None => 0,
                 Some(index) if down => (index + 1).min(rows.len() - 1),
                 Some(index) => index.saturating_sub(1),
             };
-            self.details = Some((rows[next].cells[0].clone(), rows[next].tip.clone()));
+            self.details = Some((rows[next].cells[0].clone(), rows[next].tip().clone()));
             scroll_to = Some(next);
         }
         let mut clicked = None;
@@ -278,12 +292,12 @@ impl Explorer {
                             + (headers.len() - 1) as f32 * body.ui_mut().spacing().item_spacing.x;
                         let expanded = self.details.as_ref().and_then(|(name, tip)| {
                             rows.iter()
-                                .position(|item| name == &item.cells[0] && tip == &item.tip)
+                                .position(|item| name == &item.cells[0] && tip == item.tip())
                         });
                         let detail_text = expanded.map(|index| {
                             let ui = body.ui_mut();
                             ui.painter().layout(
-                                rows[index].tip.clone(),
+                                rows[index].tip().clone(),
                                 egui::TextStyle::Body.resolve(ui.style()),
                                 ui.visuals().text_color(),
                                 (width - 24.0).max(100.0),
@@ -385,7 +399,7 @@ impl Explorer {
                                 self.details = if open {
                                     None
                                 } else {
-                                    Some((item.cells[0].clone(), item.tip.clone()))
+                                    Some((item.cells[0].clone(), item.tip().clone()))
                                 };
                             }
                             if let Some((ui, background, clip)) = detail_ui {
@@ -512,65 +526,92 @@ impl Explorer {
         if let Some(file) = &self.selected_file {
             ui.weak(display_path(file));
         }
-        let rows = self.cached_rows(a as *const Analysis as usize, || { a
-            .symbols
-            .iter()
-            .filter(|s| self.kind_filter == "All" || s.kind == self.kind_filter)
-            .filter(|s| {
-                self.selected_file.as_ref().is_none_or(|file| {
-                    let owner = s
-                        .source_file
-                        .as_ref()
-                        .or(s.compilation_unit.as_ref())
-                        .map(|s| s.replace('\\', "/"))
-                        .unwrap_or_else(|| "[unattributed]".into());
-                    &owner == file
+        let comparing = self.snapshot_label().is_some();
+        let rows = self.cached_rows(a as *const Analysis as usize, || {
+            // Keep symbol details in the existing shared report and format them
+            // only when a row is opened. Standalone renderers may supply a borrow.
+            let source = display.clone().or_else(|| self.analysis.clone())
+                .filter(|source| std::ptr::eq(source.as_ref(), a))
+                .unwrap_or_else(|| std::sync::Arc::new(a.clone()));
+            a.symbols
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| self.kind_filter == "All" || s.kind == self.kind_filter)
+                .filter(|(_, s)| {
+                    self.selected_file.as_ref().is_none_or(|file| {
+                        let owner = s
+                            .source_file
+                            .as_ref()
+                            .or(s.compilation_unit.as_ref())
+                            .map(|s| s.replace('\\', "/"))
+                            .unwrap_or_else(|| "[unattributed]".into());
+                        &owner == file
+                    })
                 })
-            })
-            .map(|s| {
-                Row::new(
-                    vec![
-                        s.demangled_name.clone(),
-                        self.snapshot_bytes("symbol", &symbol_key(s), "size", s.size),
-                        self.snapshot_bytes("symbol", &symbol_key(s), "usage.flash", s.usage.flash),
-                        self.snapshot_bytes("symbol", &symbol_key(s), "usage.ram", s.usage.ram),
-                        s.kind.clone(),
-                        s.section.clone(),
-                        self.snapshot_address("symbol", &symbol_key(s), "address", s.address),
-                    ],
-                    &[
-                        (1, s.size.into()),
-                        (2, s.usage.flash.into()),
-                        (3, s.usage.ram.into()),
-                        (6, s.address.into()),
-                    ],
-                    format!(
-                        "Address: {}\nSection: {} (index {})\n{}{}Weak symbol: {}\nSource: {}:{}\nCompilation unit: {}\n{}",
-                        self.snapshot_address("symbol", &symbol_key(s), "address", s.address),
-                        s.section,
-                        s.section_index,
-                        if s.name != s.demangled_name {
-                            format!("Linker name: {}\n", s.name)
-                        } else {
-                            String::new()
-                        },
-                        if s.address != s.normalized_address {
-                            format!("Normalized address: {}\n", self.snapshot_address("symbol", &symbol_key(s), "normalized_address", s.normalized_address))
-                        } else {
-                            String::new()
-                        },
-                        s.weak,
-                        display_path(s.source_file.as_deref().unwrap_or("Unknown")),
-                        s.source_line
-                            .map(|l| l.to_string())
-                            .unwrap_or_else(|| "?".into()),
-                        display_path(s.compilation_unit.as_deref().unwrap_or("Unknown")),
-                        s.attribution
-                    ),
-                )
-                .with_bars(&[1, 2, 3])
-            })
-            .collect() });
+                .map(|(index, s)| {
+                    // Identity serialization and snapshot lookups are only needed
+                    // when a baseline is selected. Reuse the identity for all fields.
+                    let id = if comparing { symbol_key(s) } else { String::new() };
+                    let symbol_bytes = |field, value| {
+                        if comparing { self.snapshot_bytes("symbol", &id, field, value) } else { bytes(value) }
+                    };
+                    let symbol_address = |field, value| {
+                        if comparing { self.snapshot_address("symbol", &id, field, value) } else { format!("{value:#010x}") }
+                    };
+                    Row::new(
+                        vec![
+                            s.demangled_name.clone(),
+                            symbol_bytes("size", s.size),
+                            symbol_bytes("usage.flash", s.usage.flash),
+                            symbol_bytes("usage.ram", s.usage.ram),
+                            s.kind.clone(),
+                            s.section.clone(),
+                            symbol_address("address", s.address),
+                        ],
+                        &[
+                            (1, s.size.into()),
+                            (2, s.usage.flash.into()),
+                            (3, s.usage.ram.into()),
+                            (6, s.address.into()),
+                        ],
+                        String::new(),
+                    )
+                    .with_lazy_tip({
+                        let source = source.clone();
+                        let address = symbol_address("address", s.address);
+                        let normalized = (s.address != s.normalized_address)
+                            .then(|| symbol_address("normalized_address", s.normalized_address));
+                        move || {
+                            let s = &source.symbols[index];
+                            format!(
+                                "Address: {}\nSection: {} (index {})\n{}{}Weak symbol: {}\nSource: {}:{}\nCompilation unit: {}\n{}",
+                                address,
+                                s.section,
+                                s.section_index,
+                                if s.name != s.demangled_name {
+                                    format!("Linker name: {}\n", s.name)
+                                } else {
+                                    String::new()
+                                },
+                                if s.address != s.normalized_address {
+                                    format!("Normalized address: {}\n", normalized.as_deref().unwrap())
+                                } else {
+                                    String::new()
+                                },
+                                s.weak,
+                                display_path(s.source_file.as_deref().unwrap_or("Unknown")),
+                                s.source_line
+                                    .map(|l| l.to_string())
+                                    .unwrap_or_else(|| "?".into()),
+                                display_path(s.compilation_unit.as_deref().unwrap_or("Unknown")),
+                                s.attribution
+                            )
+                        }
+                    })
+                    .with_bars(&[1, 2, 3])
+                })
+                .collect()
+        });
         self.table(
             ui,
             &[
@@ -1179,6 +1220,53 @@ fn tree(
 #[cfg(test)]
 mod cache_tests {
     use super::*;
+
+    #[test]
+    fn switching_tabs_retains_rows_and_prepared_order() {
+        let mut app = Explorer {
+            view: View::Symbols,
+            ..Default::default()
+        };
+        let symbols = app.cached_rows(1, rows);
+        let ordered = app.prepare_table(symbols.clone(), 2);
+        app.change_view(View::Sections);
+        let sections = app.cached_rows(1, rows);
+        app.prepare_table(sections, 2);
+        app.change_view(View::Symbols);
+        let reused = app.cached_rows(1, || panic!("switching tabs rebuilt symbols"));
+        assert!(Rc::ptr_eq(&symbols, &reused));
+        assert!(Rc::ptr_eq(&ordered, &app.prepare_table(reused, 2)));
+        app.report_revision += 1;
+        assert!(!Rc::ptr_eq(&symbols, &app.cached_rows(1, rows)));
+    }
+
+    #[test]
+    fn symbol_details_are_formatted_only_when_opened() {
+        let analysis = std::sync::Arc::new(
+            firmware_analysis_core::analyze_bytes(
+                include_bytes!("../../../fixtures/build/cortex-m.elf"),
+                "fixture.elf",
+                &Default::default(),
+            )
+            .unwrap(),
+        );
+        let mut app = Explorer {
+            view: View::Symbols,
+            analysis: Some(analysis.clone()),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| app.symbols(ui, &analysis));
+        });
+        let cache = app.table_cache.rows[View::Symbols as usize].borrow();
+        let rows = &cache.as_ref().unwrap().1;
+        assert!(!rows.is_empty());
+        assert!(rows.iter().all(|row| row.tip.get().is_none()));
+        assert!(rows[0].tip().contains("Source:"));
+        assert!(rows[0].tip().contains("Address:"));
+        assert!(rows.iter().skip(1).all(|row| row.tip.get().is_none()));
+    }
 
     fn rows() -> Vec<Row> {
         [("Alpha", 100), ("Beta", 9), ("beta", 9)]

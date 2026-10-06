@@ -1,4 +1,5 @@
 //! Reproducible headless UI timings; run with --ignored --nocapture --test-threads=1.
+//! Set SNOUT_PERF_ELF to benchmark a real firmware image instead of synthetic symbols.
 use super::*;
 
 #[test]
@@ -10,18 +11,29 @@ fn large_report_latency() {
         &Default::default(),
     )
     .unwrap();
-    let template = analysis.symbols[0].clone();
-    analysis.symbols = (0..50_000)
-        .map(|i| {
-            let mut symbol = template.clone();
-            symbol.demangled_name = format!("function_{i:05}");
-            symbol.name = symbol.demangled_name.clone();
-            symbol.size = (i * 7919 % 65536) as u64;
-            symbol
-        })
-        .collect();
+    if let Ok(path) = std::env::var("SNOUT_PERF_ELF") {
+        analysis = firmware_analysis_core::analyze_path(
+            &std::path::PathBuf::from(path),
+            &Default::default(),
+        )
+        .unwrap();
+    } else {
+        let template = analysis.symbols[0].clone();
+        analysis.symbols = (0..50_000)
+            .map(|i| {
+                let mut symbol = template.clone();
+                symbol.demangled_name = format!("function_{i:05}");
+                symbol.name = symbol.demangled_name.clone();
+                symbol.size = (i * 7919 % 65536) as u64;
+                symbol
+            })
+            .collect();
+    }
+    let analysis = Arc::new(analysis);
+    println!("Benchmarking {} symbols", analysis.symbols.len());
     let mut app = Explorer {
         view: View::Symbols,
+        analysis: Some(analysis.clone()),
         ..Default::default()
     };
     let ctx = egui::Context::default();
@@ -41,17 +53,27 @@ fn large_report_latency() {
         );
         start.elapsed().as_secs_f64() * 1000.0
     };
-    println!("50,000 symbols, cold frame: {:.3} ms", frame(&mut app));
+    println!("cold frame: {:.3} ms", frame(&mut app));
     let mut times: Vec<_> = (0..30).map(|_| frame(&mut app)).collect();
     times.sort_by(f64::total_cmp);
     println!(
         "unchanged frame median: {:.3} ms; p95: {:.3} ms",
         times[15], times[28]
     );
-    app.search = "function_1".into();
+    app.search = analysis.symbols[analysis.symbols.len() / 2]
+        .demangled_name
+        .chars()
+        .take(5)
+        .collect();
     println!("search interaction: {:.3} ms", frame(&mut app));
     app.descending = !app.descending;
     println!("sort interaction: {:.3} ms", frame(&mut app));
+    app.change_view(View::Sections);
+    let _ = ctx.run(Default::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| app.sections(ui, &analysis));
+    });
+    app.change_view(View::Symbols);
+    println!("return to Symbols: {:.3} ms", frame(&mut app));
 }
 
 #[test]
