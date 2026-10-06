@@ -340,7 +340,10 @@ fn refresh_reloads_uppercase_maps_and_selected_maps_and_keeps_comparison() {
         include_bytes!("../../../fixtures/build/cortex-m.map"),
     )
     .unwrap();
-    let mut app = Explorer::default();
+    let mut app = Explorer {
+        preferences_file: Some(folder.path().join("workspace.json")),
+        ..Explorer::default()
+    };
     app.scan_build(folder.path().to_owned());
     finish_job(&mut app);
     app.open(elf.clone());
@@ -352,9 +355,9 @@ fn refresh_reloads_uppercase_maps_and_selected_maps_and_keeps_comparison() {
             app.configure(Some(source.clone()));
         }
         finish_job(&mut app);
-        let old = app.analysis.as_ref().unwrap().as_ref().clone();
-        app.job(move || Ok(Loaded::Baseline(old)));
-        finish_job(&mut app);
+        let name = source.file_name().unwrap().to_str().unwrap().to_owned();
+        app.take_snapshot(&name).unwrap();
+        app.select_snapshot(Some(name)).unwrap();
         if source == &map {
             std::fs::write(
                 source,
@@ -387,7 +390,7 @@ fn refresh_reloads_uppercase_maps_and_selected_maps_and_keeps_comparison() {
         assert!(app.error.is_none(), "{:?}", app.error);
         assert_ne!(app.options, previous);
         assert!(app.comparison.is_some());
-        assert!(app.baseline.is_some());
+        assert!(app.snapshot_analysis().is_some());
         if source == &map {
             assert_eq!(app.comparison.as_ref().unwrap().ram_delta, 32);
             assert!(app

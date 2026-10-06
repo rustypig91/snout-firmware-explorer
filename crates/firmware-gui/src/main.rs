@@ -16,6 +16,7 @@ mod performance;
 mod pie;
 mod preferences;
 mod shell;
+mod snapshots;
 #[cfg(test)]
 mod tests;
 mod views;
@@ -113,7 +114,6 @@ enum Loaded {
     ),
     Build(firmware_analysis_core::build::BuildFolder),
     Text(PathBuf, String),
-    Baseline(Analysis),
     SelectedStack(StackReport, workspace::StackSelection),
     Config(
         AnalysisOptions,
@@ -134,6 +134,8 @@ struct RememberedFirmware {
 }
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 struct BuildSettings {
+    #[serde(default)]
+    snapshots: snapshots::SnapshotStore,
     firmware: Option<PathBuf>,
     layouts: std::collections::BTreeMap<PathBuf, SavedLayout>,
     #[serde(default)]
@@ -141,12 +143,28 @@ struct BuildSettings {
     #[serde(default)]
     stack_reports: std::collections::BTreeMap<PathBuf, workspace::StackSelection>,
 }
+impl BuildSettings {
+    fn reset_choices(&mut self) {
+        let snapshots = std::mem::take(&mut self.snapshots);
+        *self = Self {
+            snapshots,
+            ..Default::default()
+        };
+    }
+}
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct SavedLayout {
     options: AnalysisOptions,
     source: String,
 }
 struct Explorer {
+    snapshots: snapshots::SnapshotStore,
+    snapshot_dialog: Option<snapshots::Dialog>,
+    snapshot_name: String,
+    snapshot_error: Option<String>,
+    snapshot_dialog_error: Option<String>,
+    snapshot_message: Option<String>,
+    snapshot_job: Option<snapshots::SaveJob>,
     browser_cache: Option<artifact_browser::BrowserCache>,
     report_revision: u64,
     table_cache: views::TableCache,
@@ -159,7 +177,6 @@ struct Explorer {
     preview: Option<(PathBuf, String)>,
     layout_override: Option<AnalysisOptions>,
     comparison: Option<Comparison>,
-    baseline: Option<Arc<Analysis>>,
     stack: Option<StackReport>,
     stack_show_unresolved: bool,
     options: AnalysisOptions,
@@ -197,6 +214,13 @@ struct Explorer {
 impl Default for Explorer {
     fn default() -> Self {
         Self {
+            snapshots: Default::default(),
+            snapshot_dialog: None,
+            snapshot_name: String::new(),
+            snapshot_error: None,
+            snapshot_dialog_error: None,
+            snapshot_message: None,
+            snapshot_job: None,
             browser_cache: None,
             report_revision: 0,
             table_cache: Default::default(),
@@ -209,7 +233,6 @@ impl Default for Explorer {
             preview: None,
             layout_override: None,
             comparison: None,
-            baseline: None,
             stack: None,
             stack_show_unresolved: false,
             options: AnalysisOptions::default(),
@@ -350,22 +373,6 @@ impl Explorer {
             workspace::configured_report(options, analysis, source, build.as_deref(), reports)
         });
     }
-    fn pick_baseline(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("ELF firmware", &["elf", "axf", "out"])
-            .add_filter("All files", &["*"])
-            .pick_file()
-        {
-            if self.analysis.is_some() {
-                let options = self.options.clone();
-                self.job(move || {
-                    analyze_path(path, &options)
-                        .map(Loaded::Baseline)
-                        .map_err(|e| e.to_string())
-                });
-            }
-        }
-    }
     fn poll(&mut self) {
         match self.receiver.as_ref().map(|r| r.try_recv()) {
             Some(Ok(result)) => {
@@ -373,11 +380,12 @@ impl Explorer {
                 self.table_cache = Default::default();
                 self.receiver = None;
                 self.region_cache_key = 0;
-                let refreshed = matches!(&result, Ok(Loaded::Refresh(_)));
                 let result = result.map(|loaded| match loaded {
                     Loaded::ResetBuildSettings(loaded) => {
                         if let Some(build) = &self.build {
-                            self.build_settings.remove(&build.root);
+                            if let Some(settings) = self.build_settings.get_mut(&build.root) {
+                                settings.reset_choices();
+                            }
                         }
                         self.remembered_firmware = None;
                         self.pending_restore = None;
@@ -396,13 +404,13 @@ impl Explorer {
                     Ok(Loaded::Build(build)) => {
                         self.remember_build_folder(build.root.clone());
                         self.build = Some(Arc::new(build));
+                        self.load_snapshots();
                         self.analysis = None;
                         self.graph_view = Default::default();
                         self.preview = None;
                         self.options = AnalysisOptions::default();
                         self.layout_override = None;
                         self.comparison = None;
-                        self.baseline = None;
                         self.stack = None;
                         self.details = None;
                         self.clear_firmware_filters();
@@ -468,15 +476,6 @@ impl Explorer {
                         self.preview = None;
                         self.analysis = Some(Arc::new(a));
                         self.graph_view = Default::default();
-                        if refreshed {
-                            self.comparison = self
-                                .baseline
-                                .as_ref()
-                                .map(|old| compare(old, self.analysis.as_ref().unwrap()));
-                        } else {
-                            self.comparison = None;
-                            self.baseline = None;
-                        }
                         self.replace_stack(stack);
                         self.clear_firmware_filters();
                         self.overview_section = None;
@@ -496,12 +495,6 @@ impl Explorer {
                         self.graph_view = Default::default();
                         self.preview = None;
                         self.change_view(View::Dependencies);
-                    }
-                    Ok(Loaded::Baseline(old)) => {
-                        self.comparison =
-                            self.analysis.as_ref().map(|current| compare(&old, current));
-                        self.baseline = Some(Arc::new(old));
-                        self.change_view(View::Compare);
                     }
                     Ok(Loaded::SelectedStack(s, paths)) => {
                         if let (Some(build), Some(analysis)) = (&self.build, &self.analysis) {
@@ -530,7 +523,6 @@ impl Explorer {
                         self.graph_view = Default::default();
                         self.preview = None;
                         self.comparison = None;
-                        self.baseline = None;
                     }
                     Err(error) => self.error = Some(error),
                 }
@@ -555,6 +547,7 @@ impl Explorer {
                         source: self.layout_source.clone(),
                     });
                 }
+                self.sync_snapshot_comparison();
                 self.persist_preferences();
             }
             Some(Err(mpsc::TryRecvError::Disconnected)) => {
@@ -592,7 +585,9 @@ impl eframe::App for Explorer {
         }
         self.poll_updates(ctx);
         self.show(ctx);
-        self.show_updates(ctx);
+        if self.snapshot_dialog.is_none() {
+            self.show_updates(ctx);
+        }
     }
 }
 fn main() -> eframe::Result {

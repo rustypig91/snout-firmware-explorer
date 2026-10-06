@@ -1,5 +1,5 @@
 use super::{display::short_path, egui, Explorer};
-use firmware_analysis_core::{dependencies::DependencyGraph, format_bytes, Analysis};
+use firmware_analysis_core::{dependencies::DependencyGraph, Analysis};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod graph_layout;
@@ -308,7 +308,7 @@ impl Explorer {
                             ui.heading("Selected unit");
                             ui.label(&node.label);
                             ui.small(&node.evidence);
-                            if let Some(usage) = node.usage { ui.label(format!("Flash {} · RAM {}", format_bytes(usage.flash), format_bytes(usage.ram))); }
+                            if let Some(usage) = node.usage { ui.label(format!("Flash {} · RAM {}", self.snapshot_bytes("dependency", &node.id, "flash", usage.flash), self.snapshot_bytes("dependency", &node.id, "ram", usage.ram))); }
                             else { ui.label("Memory contribution unknown"); }
                             for object in &node.objects { ui.small(object); }
                             for (outgoing, title) in [(true, "Depends on"), (false, "Used by")] {
@@ -328,7 +328,7 @@ impl Explorer {
                         }
                     } else {
                         ui.heading("Dependency map");
-                        ui.label(format!("{} units / objects\n{} dependency connections", graph.nodes.len(), graph.edges.len()));
+                        ui.label(format!("{} units / objects\n{} dependency connections", self.snapshot_count("counts", "", "dependency_nodes", graph.nodes.len() as u64), self.snapshot_count("counts", "", "dependency_edges", graph.edges.len() as u64)));
                         ui.label("Select a node to inspect dependencies. Select an arrow to see the symbols connecting its units.");
                     }
                 });
@@ -381,7 +381,14 @@ impl Explorer {
                     "{}\n{} {}",
                     label,
                     if self.graph_view.ram { "RAM" } else { "Flash" },
-                    bytes.map(format_bytes).unwrap_or_else(|| "unknown".into())
+                    bytes
+                        .map(|value| self.snapshot_bytes(
+                            "dependency",
+                            &node.id,
+                            if self.graph_view.ram { "ram" } else { "flash" },
+                            value
+                        ))
+                        .unwrap_or_else(|| "unknown".into())
                 );
                 (
                     node.id.as_str(),
@@ -596,8 +603,8 @@ impl Explorer {
                 node.usage
                     .map(|u| format!(
                         "Flash {} · RAM {}",
-                        format_bytes(u.flash),
-                        format_bytes(u.ram)
+                        self.snapshot_bytes("dependency", &node.id, "flash", u.flash),
+                        self.snapshot_bytes("dependency", &node.id, "ram", u.ram)
                     ))
                     .unwrap_or_else(|| "Memory contribution unknown".into())
             ));

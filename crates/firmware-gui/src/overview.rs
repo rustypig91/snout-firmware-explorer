@@ -1,6 +1,7 @@
 use super::display::{display_path, short_path};
+use super::snapshots::{stack_key, symbol_key};
 use super::{egui, Explorer, View};
-use firmware_analysis_core::{format_bytes as bytes, Analysis, Section, Usage};
+use firmware_analysis_core::{Analysis, Section, Usage};
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Metric {
     Flash,
@@ -121,11 +122,11 @@ impl Explorer {
                 if let Some(tls) = &a.tls {
                     ui.group(|ui| {
                         ui.strong("Thread-local storage");
-                        ui.label(format!("Template per thread: {} — {} initialized, {} zero-initialized; alignment {} B", bytes(tls.template_size), bytes(tls.initialized_size), bytes(tls.zero_initialized_size), tls.alignment));
+                        ui.label(format!("Template per thread: {} — {} initialized, {} zero-initialized; alignment {}", self.snapshot_bytes("tls", "", "template_size", tls.template_size), self.snapshot_bytes("tls", "", "initialized_size", tls.initialized_size), self.snapshot_bytes("tls", "", "zero_initialized_size", tls.zero_initialized_size), self.snapshot_bytes("tls", "", "alignment", tls.alignment)));
                         ui.label("Total TLS RAM is unknown. Static RAM excludes TLS templates; allocation may be inside existing stack reservations.");
-                        ui.collapsing(format!("{} TLS variables", tls.symbols.len()), |ui| {
+                        ui.collapsing(format!("{} TLS variables", self.snapshot_count("counts", "", "tls", tls.symbols.len() as u64)), |ui| {
                             for symbol in &tls.symbols {
-                                ui.monospace(format!("+{:#x}  {}  {} [{}]", symbol.offset, bytes(symbol.size), symbol.name, symbol.section));
+                                ui.monospace(format!("{}  {}  {} [{}]", self.snapshot_address("tls_symbol", &symbol.name, "offset", symbol.offset), self.snapshot_bytes("tls_symbol", &symbol.name, "size", symbol.size), symbol.name, symbol.section));
                             }
                         });
                     });
@@ -166,6 +167,11 @@ impl Explorer {
     fn firmware_heading(&mut self, ui: &mut egui::Ui, a: &Analysis) {
         let path = std::path::Path::new(&a.path);
         ui.heading(path.file_name().unwrap_or_default().to_string_lossy());
+        if let Some(name) = self.snapshot_label() {
+            ui.label(format!(
+                "Comparing to snapshot: {name} · current minus baseline"
+            ));
+        }
         let relative = self
             .build
             .as_ref()
@@ -178,8 +184,8 @@ impl Explorer {
             a.metadata.bitness
         ));
         ui.collapsing("Firmware details", |ui| {
-            ui.label(format!("{} endian | Entry {:#x} | ELF {}",
-                a.metadata.endianness, a.metadata.entry_point, bytes(a.metadata.file_size)));
+            ui.label(format!("{} endian | Entry {} | ELF {}",
+                a.metadata.endianness, self.snapshot_address("metadata", "", "entry_point", a.metadata.entry_point), self.snapshot_bytes("metadata", "", "file_size", a.metadata.file_size)));
             ui.label(display_path(&a.path));
             ui.small("ELF file size includes debug information and headers; it is not programmed image size.");
         });
@@ -208,23 +214,34 @@ impl Explorer {
             ),
         ] {
             if !a.options.regions.iter().any(|r| r.kind == kind) {
-                ui.label(format!("{label}: {} used | Capacity unknown", bytes(used)))
-                    .on_hover_text(help);
+                ui.label(format!(
+                    "{label}: {} used | Capacity unknown",
+                    self.snapshot_bytes(
+                        "totals",
+                        "",
+                        if label == "Flash" { "flash" } else { "ram" },
+                        used
+                    )
+                ))
+                .on_hover_text(help);
             }
         }
         for (i, region) in a.options.regions.iter().enumerate() {
             let usage = &self.region_cache[i];
-            let fraction = usage.used as f64 / region.size.max(1) as f64;
+
             // Keep the text separate from the bar so narrow windows can wrap it.
             ui.label(format!(
-                "{}: {} used / {} total ({:.1}%) | {} remaining",
+                "{}: {} used / {} total ({}) | {} remaining",
                 region.name,
-                bytes(usage.used),
-                bytes(region.size),
-                fraction * 100.0,
-                bytes(usage.free)
+                self.snapshot_bytes("region", &region.name, "used", usage.used),
+                self.snapshot_bytes("region", &region.name, "size", region.size),
+                self.snapshot_region_percentage(&region.name,usage.used,region.size),
+                self.snapshot_bytes("region", &region.name, "free", usage.free)
             )).on_hover_text("Remaining space excludes static ELF occupancy only; runtime heap and stack may use it.");
-            ui.add(egui::ProgressBar::new(fraction as f32).desired_height(8.0));
+            ui.add(
+                egui::ProgressBar::new((usage.used as f64 / region.size.max(1) as f64) as f32)
+                    .desired_height(8.0),
+            );
         }
         ui.horizontal_wrapped(|ui| {
             let source = if self.layout_source.is_empty() {
@@ -254,7 +271,7 @@ impl Explorer {
                 *roles.entry(super::insights::ram_role(section)).or_default() += section.usage.ram;
             }
             for (role, size) in roles {
-                ui.label(format!("{role}: {}", bytes(size)));
+                ui.label(format!("{role}: {}", self.snapshot_bytes("ram_role", role, "size", size)));
             }
         });
     }
@@ -358,8 +375,9 @@ impl Explorer {
             .filter(|f| f.path != "[unattributed]")
             .count();
         ui.label(format!(
-            "DWARF: {dwarf} | {} symbols | {files} attributed files/units",
-            a.symbols.len()
+            "DWARF: {dwarf} | {} symbols | {} attributed files/units",
+            self.snapshot_count("counts", "", "symbols", a.symbols.len() as u64),
+            self.snapshot_count("counts", "", "files", files as u64)
         ));
         for (label, total, unknown) in [
             ("Flash", a.totals.flash, a.unattributed.flash),
@@ -368,17 +386,25 @@ impl Explorer {
             let coverage = if total == 0 {
                 "n/a".into()
             } else {
-                format!(
-                    "{:.1}%",
-                    total.saturating_sub(unknown) as f64 * 100.0 / total as f64
+                let field = if label == "RAM" { "ram" } else { "flash" };
+                let old = self
+                    .snapshot_old("totals", "", field)
+                    .zip(self.snapshot_old("unattributed", "", field))
+                    .filter(|(total, _)| *total != 0)
+                    .map(|(total, unknown)| {
+                        total.saturating_sub(unknown) as f64 * 100.0 / total as f64
+                    });
+                self.snapshot_percentage(
+                    total.saturating_sub(unknown) as f64 * 100.0 / total as f64,
+                    old,
                 )
             };
             ui.label(format!(
                 "{label}: {coverage} file attribution | {} unattributed",
-                bytes(unknown)
+                self.snapshot_bytes("unattributed", "", if label == "Flash" { "flash" } else { "ram" }, unknown)
             )).on_hover_text("Unattributed bytes include unknown owners, padding and reservations; they do not necessarily indicate a parsing failure.");
             if unknown > 0 {
-                ui.collapsing(format!("Explain {} unattributed {label}", bytes(unknown)), |ui| {
+                ui.collapsing(format!("Explain {} unattributed {label}", self.snapshot_bytes("unattributed", "", if label == "Flash" { "flash" } else { "ram" }, unknown)), |ui| {
                     let ram = label == "RAM";
                     let mut gaps: Vec<_> = a.sections.iter().map(|s| (s, super::insights::section_unattributed(a, s, ram)))
                         .filter(|(_, (gap, _))| *gap > 0).collect();
@@ -393,8 +419,8 @@ impl Explorer {
                         } else {
                             "unknown source owners and uncovered bytes"
                         };
-                        if ui.link(format!("{} in {} · {reason}", bytes(gap), section.name))
-                            .on_hover_text(format!("{} uncovered by sized symbols; {} in symbols without a source owner", bytes(uncovered), bytes(gap - uncovered)))
+                        if ui.link(format!("{} in {} · {reason}", self.snapshot_bytes("section", &section.name, if ram { "unattributed.ram" } else { "unattributed.flash" }, gap), section.name))
+                            .on_hover_text(format!("{} uncovered by sized symbols; {} in symbols without a source owner", self.snapshot_bytes("section", &section.name, if ram { "uncovered.ram" } else { "uncovered.flash" }, uncovered), self.snapshot_bytes("section", &section.name, if ram { "unowned.ram" } else { "unowned.flash" }, gap - uncovered)))
                             .clicked() {
                             self.change_view(View::Overview);
                             self.overview_metric = if ram { Metric::Ram } else { Metric::Flash };
@@ -416,7 +442,7 @@ impl Explorer {
             self.change_view(View::Sections);
         }
         let entries = self.stack.as_ref().map_or(0, |s| s.entries.len());
-        ui.label(format!("Stack reports: {entries} local frames | Call-chain total unknown"))
+        ui.label(format!("Stack reports: {} local frames | Call-chain total unknown",self.snapshot_count("counts", "", "stack", entries as u64)))
             .on_hover_text("Compiler .su reports describe individual frames. The app does not construct a call graph, so caller/callee nesting, recursion, indirect calls and interrupt overhead cannot be totaled.");
         if let Some(report) = &self.stack {
             let largest = report
@@ -428,7 +454,12 @@ impl Explorer {
                 if ui
                     .link(format!(
                         "Largest matched frame: {} · {} ({})",
-                        bytes(entry.local_bytes),
+                        self.snapshot_bytes(
+                            "stack",
+                            &stack_key(entry),
+                            "local_bytes",
+                            entry.local_bytes
+                        ),
                         entry.function,
                         entry.qualifier
                     ))
@@ -480,7 +511,16 @@ impl Explorer {
             if ui
                 .link(format!(
                     "{} | {}",
-                    bytes(metric.value(file.usage)),
+                    self.snapshot_bytes(
+                        "file",
+                        &file.path,
+                        if metric == Metric::Ram {
+                            "usage.ram"
+                        } else {
+                            "usage.flash"
+                        },
+                        metric.value(file.usage)
+                    ),
                     short_path(&file.path, a.files.iter().map(|f| f.path.as_str()))
                 ))
                 .on_hover_text(display_path(&file.path))
@@ -502,17 +542,31 @@ impl Explorer {
             let symbol = &a.symbols[index];
             ui.collapsing(
                 format!(
-                    "{} | {} ({:#x})",
-                    bytes(metric.value(symbol.usage)),
+                    "{} | {} ({})",
+                    self.snapshot_bytes(
+                        "symbol",
+                        &symbol_key(symbol),
+                        if metric == Metric::Ram {
+                            "usage.ram"
+                        } else {
+                            "usage.flash"
+                        },
+                        metric.value(symbol.usage)
+                    ),
                     symbol.demangled_name,
-                    symbol.normalized_address
+                    self.snapshot_address(
+                        "symbol",
+                        &symbol_key(symbol),
+                        "normalized_address",
+                        symbol.normalized_address
+                    )
                 ),
                 |ui| {
                     ui.label(format!(
                         "{} | {} | ELF size {}",
                         symbol.kind,
                         symbol.section,
-                        bytes(symbol.size)
+                        self.snapshot_bytes("symbol", &symbol_key(symbol), "size", symbol.size)
                     ));
                     ui.label(format!(
                         "Source: {} | {}",

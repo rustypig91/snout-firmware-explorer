@@ -102,6 +102,16 @@ impl Explorer {
         } else {
             self.apply_preferences_with_workspace(&value, false);
         }
+        // Delete only after reading an authoritative build-settings map. Missing,
+        // corrupt or unsupported preferences must never turn into an empty keep-list.
+        if value["version"].as_u64() == Some(1)
+            && serde_json::from_value::<std::collections::BTreeMap<PathBuf, super::BuildSettings>>(
+                value["build_settings"].clone(),
+            )
+            .is_ok()
+        {
+            self.cleanup_snapshots();
+        }
     }
     pub(super) fn apply_preferences(&mut self, value: &serde_json::Value) {
         self.apply_preferences_with_workspace(value, true);
