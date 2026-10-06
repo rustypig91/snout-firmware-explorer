@@ -13,17 +13,8 @@ pub(super) fn analyze_selected(
     build: &firmware_analysis_core::build::BuildFolder,
     path: &std::path::Path,
     mut layout: Option<super::AnalysisOptions>,
-    mut source: Option<String>,
+    source: Option<String>,
 ) -> Result<(super::Analysis, Option<super::AnalysisOptions>, String), String> {
-    // Discard legacy JSON layout preferences; rediscover capacities from maps.
-    if source.as_ref().is_some_and(|source| {
-        std::path::Path::new(source)
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
-    }) {
-        source = None;
-        layout = None;
-    }
     if let Some(source) = &source {
         let extension = std::path::Path::new(source)
             .extension()
@@ -72,45 +63,12 @@ pub(super) fn read_dependency_map(analysis: &mut super::Analysis, path: &std::pa
 
 /// Persist directory rules and explicit exceptions instead of a snapshot of files.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(from = "StoredStackSelection")]
 pub(super) struct StackSelection {
     pub paths: Vec<PathBuf>,
     pub excluded: Vec<PathBuf>,
     pub auto_directories: Vec<PathBuf>,
 }
 
-#[derive(serde::Deserialize)]
-#[serde(untagged)]
-enum StoredStackSelection {
-    Legacy(Vec<PathBuf>),
-    Rules {
-        #[serde(default)]
-        paths: Vec<PathBuf>,
-        #[serde(default)]
-        excluded: Vec<PathBuf>,
-        #[serde(default)]
-        auto_directories: Vec<PathBuf>,
-    },
-}
-impl From<StoredStackSelection> for StackSelection {
-    fn from(value: StoredStackSelection) -> Self {
-        match value {
-            StoredStackSelection::Legacy(paths) => Self {
-                paths,
-                ..Default::default()
-            },
-            StoredStackSelection::Rules {
-                paths,
-                excluded,
-                auto_directories,
-            } => Self {
-                paths,
-                excluded,
-                auto_directories,
-            },
-        }
-    }
-}
 impl StackSelection {
     pub fn contains(&self, path: &std::path::Path) -> bool {
         // The most specific rule wins. Automatic siblings override an unchecked
@@ -851,10 +809,13 @@ mod tests {
     }
 
     #[test]
-    fn old_saved_file_and_folder_lists_still_deserialize() {
-        let paths = vec![PathBuf::from("build/a.su"), PathBuf::from("build/objects")];
-        let selection: StackSelection = serde_json::from_value(serde_json::json!(paths)).unwrap();
-        assert_eq!(selection.paths, paths);
-        assert!(selection.contains(std::path::Path::new("build/objects/new.su")));
+    fn stack_selection_uses_only_the_current_rules_format() {
+        assert!(
+            serde_json::from_value::<StackSelection>(serde_json::json!(["build/a.su"])).is_err()
+        );
+        let selection = StackSelection::default();
+        let restored: StackSelection =
+            serde_json::from_value(serde_json::to_value(&selection).unwrap()).unwrap();
+        assert_eq!(restored, selection);
     }
 }

@@ -692,7 +692,7 @@ impl Explorer {
                             continue;
                         }
                         let loaded = (|| -> Result<Snapshot, String> {
-                            let mut stored: SnapshotFile = serde_json::from_slice(
+                            let stored: SnapshotFile = serde_json::from_slice(
                                 &std::fs::read(&path).map_err(|e| e.to_string())?,
                             )
                             .map_err(|e| e.to_string())?;
@@ -702,10 +702,6 @@ impl Explorer {
                             if snapshot_path(preferences, &build.root, &stored.snapshot)? != path {
                                 return Err("Snapshot identity does not match its file path".into());
                             }
-                            // Rebuild derived lookup data so reports saved by older versions
-                            // also benefit from identity and ambiguity fixes.
-                            stored.snapshot.values =
-                                collect(&stored.snapshot.analysis, stored.snapshot.stack.as_ref());
                             Ok(stored.snapshot)
                         })();
                         match loaded {
@@ -1307,13 +1303,8 @@ mod tests {
         assert!(app.snapshots.snapshots.is_empty());
     }
     #[test]
-    fn legacy_persisted_baseline_selection_is_ignored() {
-        let store: SnapshotStore = serde_json::from_value(serde_json::json!({
-            "active": {"app.elf": "baseline"}
-        }))
-        .unwrap();
-        assert!(store.active.is_empty());
-        let mut store = store;
+    fn baseline_selection_is_not_serialized() {
+        let mut store = SnapshotStore::default();
         store.active.insert("app.elf".into(), "baseline".into());
         assert!(serde_json::to_value(store).unwrap().get("active").is_none());
     }
@@ -1558,14 +1549,6 @@ mod tests {
                 "4 (baseline ambiguous)"
             );
         }
-        // Old snapshot files can contain last-row-wins derived values. Loading
-        // must rebuild them from the captured report, preserving ambiguity.
-        let mut saved = app.snapshots.snapshots[0].clone();
-        for (domain, id, field) in identities {
-            saved.values.remove(&key(domain, id, "ambiguous"));
-            saved.values.insert(key(domain, id, field), 99);
-        }
-        write_snapshot(app.preferences_file.as_ref().unwrap(), &root, &saved, true).unwrap();
         let mut restarted = open(&root);
         restarted
             .select_snapshot(Some("duplicates".into()))

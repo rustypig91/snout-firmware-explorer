@@ -1,4 +1,4 @@
-use super::{AnalysisOptions, Explorer, Loaded, RememberedFirmware, View};
+use super::{Explorer, Loaded, View};
 use std::path::{Path, PathBuf};
 
 pub(super) fn preferences_path() -> Option<PathBuf> {
@@ -99,7 +99,7 @@ impl Explorer {
     }
 
     pub(super) fn preference_value(&self) -> serde_json::Value {
-        serde_json::json!({"version": 1, "recent_build_folders": self.recent_build_folders, "build_settings": self.build_settings, "check_updates_on_startup": self.updates.check_on_startup, "skipped_version": self.updates.skipped_version, "folder": self.build.as_ref().map(|b| &b.root), "firmware": self.analysis.as_ref().map(|a| &a.path), "layout": self.layout_override, "layout_source": self.layout_source, "view": self.view.label()})
+        serde_json::json!({"version": 1, "recent_build_folders": self.recent_build_folders, "build_settings": self.build_settings, "check_updates_on_startup": self.updates.check_on_startup, "skipped_version": self.updates.skipped_version, "folder": self.build.as_ref().map(|b| &b.root), "view": self.view.label()})
     }
     pub(super) fn save_preferences(&self) -> Result<(), Box<dyn std::error::Error>> {
         let Some(path) = &self.preferences_file else {
@@ -161,13 +161,6 @@ impl Explorer {
                 break;
             }
         }
-        // Older preferences only stored the last open folder.
-        if self.recent_build_folders.is_empty() {
-            if let Some(folder) = value["folder"].as_str().map(PathBuf::from) {
-                let folder = folder.canonicalize().unwrap_or(folder);
-                self.remember_build_folder(folder);
-            }
-        }
         self.build_settings =
             serde_json::from_value(value["build_settings"].clone()).unwrap_or_default();
         self.updates.check_on_startup = value["check_updates_on_startup"].as_bool().unwrap_or(true);
@@ -186,43 +179,6 @@ impl Explorer {
         else {
             return;
         };
-        if let Some(firmware) = value["firmware"]
-            .as_str()
-            .map(PathBuf::from)
-            .filter(|p| p.is_file())
-            .and_then(|p| p.canonicalize().ok())
-            .filter(|p| p.starts_with(&folder))
-        {
-            let layout: Option<AnalysisOptions> = serde_json::from_value(value["layout"].clone())
-                .ok()
-                .flatten();
-            let layout = layout.filter(|l| firmware_analysis_core::validate_options(l).is_ok());
-            let settings = self.build_settings.entry(folder.clone()).or_default();
-            if settings.firmware.is_none() {
-                settings.firmware = Some(firmware.clone());
-            }
-            if let Some(options) = &layout {
-                settings
-                    .layouts
-                    .entry(firmware.clone())
-                    .or_insert_with(|| super::SavedLayout {
-                        options: options.clone(),
-                        source: value["layout_source"]
-                            .as_str()
-                            .unwrap_or("Saved layout")
-                            .into(),
-                    });
-            }
-            self.remembered_firmware = Some(RememberedFirmware {
-                folder: folder.clone(),
-                path: firmware,
-                layout,
-                source: value["layout_source"]
-                    .as_str()
-                    .unwrap_or("Saved layout")
-                    .into(),
-            });
-        }
         if restore_workspace {
             self.scan_build(folder);
         }

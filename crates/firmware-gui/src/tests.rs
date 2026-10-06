@@ -1314,7 +1314,8 @@ fn startup_folder_restores_saved_elf_unless_another_is_explicitly_selected() {
         std::fs::write(path, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
     }
     let value = serde_json::json!({
-        "version": 1, "folder": root, "firmware": first,
+        "version": 1, "folder": root,
+        "build_settings": {root.to_string_lossy(): {"firmware": first, "layouts": {}}},
     });
     for explicit in [None, Some(second.clone())] {
         let mut app = Explorer::default();
@@ -1438,7 +1439,9 @@ fn reopening_folder_with_missing_saved_elf_leaves_firmware_unselected() {
     let root = folder.path().canonicalize().unwrap();
     let elf = root.join("firmware.elf");
     std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
-    let value = serde_json::json!({"version": 1, "folder": root, "firmware": elf});
+    let value = serde_json::json!({"version": 1, "folder": root,
+        "build_settings": {root.to_string_lossy(): {"firmware": elf, "layouts": {}}},
+    });
     let mut app = Explorer::default();
     app.apply_preferences_with_workspace(&value, false);
     std::fs::remove_file(elf).unwrap();
@@ -2602,24 +2605,6 @@ fn llvm_map_preview_and_manual_import_preserve_analysis_and_capacity() {
 }
 
 #[test]
-fn legacy_json_layout_preferences_are_replaced_by_map_regions() {
-    let build = firmware_analysis_core::build::scan_folder(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build"),
-    )
-    .unwrap();
-    let (analysis, layout, source) = workspace::analyze_selected(
-        &build,
-        &build.root.join("cortex-m.elf"),
-        Some(AnalysisOptions::default()),
-        Some("missing-legacy-layout.json".into()),
-    )
-    .unwrap();
-    assert!(layout.is_none());
-    assert_eq!(analysis.options.regions.len(), 2);
-    assert!(source.ends_with("cortex-m.map"));
-}
-
-#[test]
 fn overview_displays_tls_template_and_unknown_runtime_ram() {
     let mut app = Explorer::default();
     let mut a = firmware_analysis_core::analyze_bytes(
@@ -2839,13 +2824,31 @@ fn recent_build_folders_are_unique_bounded_and_persisted() {
 }
 
 #[test]
-fn recent_build_folders_restore_legacy_and_sanitize_saved_history() {
+fn preferences_do_not_convert_obsolete_workspace_fields() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let elf = root.join("firmware.elf");
+    std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
     let mut app = Explorer::default();
     app.apply_preferences_with_workspace(
-        &serde_json::json!({"version": 1, "folder": "/old/build"}),
+        &serde_json::json!({
+            "version": 1, "folder": root, "firmware": elf,
+            "layout": AnalysisOptions::default(), "layout_source": "old.json",
+        }),
         false,
     );
-    assert_eq!(app.recent_build_folders, vec![PathBuf::from("/old/build")]);
+    assert!(app.recent_build_folders.is_empty());
+    assert!(app.build_settings.is_empty());
+    assert!(app.remembered_firmware.is_none());
+    let saved = app.preference_value();
+    for field in ["firmware", "layout", "layout_source"] {
+        assert!(saved.get(field).is_none());
+    }
+}
+
+#[test]
+fn recent_build_folders_sanitize_saved_history() {
+    let mut app = Explorer::default();
     app.apply_preferences_with_workspace(&serde_json::json!({"version": 1, "recent_build_folders": ["/build/a", "/build/a", "/build/b", "/build/c", "/build/d", "/build/e", "/build/f"]}), false);
     assert_eq!(
         app.recent_build_folders,
