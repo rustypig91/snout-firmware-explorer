@@ -209,6 +209,34 @@ fn write_snapshot(
     saved.map_err(|e| format!("Could not save snapshot to {}: {}", path.display(), e.error))?;
     Ok(())
 }
+fn remove_empty_directory(path: &Path) -> Result<(), String> {
+    match std::fs::remove_dir(path) {
+        Ok(()) => Ok(()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+            ) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(format!("{}: {error}", path.display())),
+    }
+}
+fn prune_empty_snapshot_directories(path: &Path) -> Result<(), String> {
+    for entry in std::fs::read_dir(path).map_err(|error| format!("{}: {error}", path.display()))? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        // Follow only real directories, never links outside snapshot storage.
+        if entry
+            .file_type()
+            .map_err(|error| error.to_string())?
+            .is_dir()
+        {
+            prune_empty_snapshot_directories(&entry.path())?;
+        }
+    }
+    remove_empty_directory(path)
+}
 #[derive(Clone)]
 pub(super) enum Dialog {
     Manager,
@@ -561,16 +589,22 @@ impl Explorer {
                     .file_type()
                     .map_err(|error| error.to_string())?
                     .is_dir()
-                    && !retained.contains(&path)
                 {
-                    std::fs::remove_dir_all(&path)
-                        .map_err(|error| format!("{}: {error}", path.display()))?;
+                    if retained.contains(&path) {
+                        prune_empty_snapshot_directories(&path)?;
+                    } else {
+                        std::fs::remove_dir_all(&path)
+                            .map_err(|error| format!("{}: {error}", path.display()))?;
+                    }
                 }
                 Ok(())
             })();
             if let Err(error) = result {
                 errors.push(error);
             }
+        }
+        if let Err(error) = remove_empty_directory(&directory) {
+            errors.push(error);
         }
         if !errors.is_empty() {
             self.snapshot_error = Some(format!(
@@ -892,6 +926,13 @@ impl Explorer {
         self.snapshots
             .snapshots
             .retain(|s| s.firmware != firmware || s.name != name);
+        // Remove empty firmware/build/storage folders, stopping at the config folder.
+        for folder in path.ancestors().skip(1).take(3) {
+            if let Err(error) = remove_empty_directory(folder) {
+                self.snapshot_error = Some(format!("Could not clean up snapshots: {error}"));
+                break;
+            }
+        }
         self.report_revision = self.report_revision.wrapping_add(1);
         self.details = None;
         Ok(())
@@ -1596,6 +1637,69 @@ mod tests {
         assert!(unrelated.is_file());
     }
     #[test]
+    fn startup_prunes_empty_snapshot_directories_for_registered_builds() {
+        let directory = tempfile::tempdir().unwrap();
+        let preferences = directory.path().join("workspace.json");
+        let empty_root = directory.path().join("empty-build");
+        let kept_root = directory.path().join("kept-build");
+        let empty = build_directory(&preferences, &empty_root).unwrap();
+        let kept = build_directory(&preferences, &kept_root).unwrap();
+        std::fs::create_dir_all(empty.join("firmware/nested-empty")).unwrap();
+        std::fs::create_dir_all(kept.join("empty-firmware")).unwrap();
+        std::fs::create_dir_all(kept.join("saved-firmware")).unwrap();
+        let saved = kept.join("saved-firmware/baseline.json");
+        std::fs::write(&saved, b"preserve even corrupt snapshots").unwrap();
+        let settings = BTreeMap::from([
+            (empty_root.clone(), super::super::BuildSettings::default()),
+            (kept_root.clone(), super::super::BuildSettings::default()),
+        ]);
+        std::fs::write(
+            &preferences,
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1, "build_settings": settings
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut app = Explorer {
+            preferences_file: Some(preferences.clone()),
+            ..Default::default()
+        };
+        app.restore_preferences(false);
+        assert!(app.snapshot_error.is_none(), "{:?}", app.snapshot_error);
+        assert!(!empty.exists());
+        assert!(!kept.join("empty-firmware").exists());
+        assert!(saved.is_file());
+        assert!(app.build_settings.contains_key(&empty_root));
+        assert!(app.build_settings.contains_key(&kept_root));
+        std::fs::remove_file(saved).unwrap();
+        app.restore_preferences(false);
+        assert!(!directory.path().join("snapshots").exists());
+        assert!(preferences.is_file());
+    }
+
+    #[test]
+    fn deleting_the_last_snapshot_prunes_empty_folders_and_allows_saving_again() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        app.take_snapshot("first").unwrap();
+        app.take_snapshot("second").unwrap();
+        let preferences = app.preferences_file.clone().unwrap();
+        let path = snapshot_path(&preferences, &root, &app.snapshots.snapshots[0]).unwrap();
+        app.delete_snapshot("first").unwrap();
+        assert!(path.parent().unwrap().is_dir());
+        app.delete_snapshot("second").unwrap();
+        assert!(!directory.path().join("snapshots").exists());
+        assert!(preferences.is_file());
+        app.take_snapshot("new").unwrap();
+        let mut restarted = open(&root);
+        assert_eq!(restarted.snapshots.snapshots.len(), 1);
+        restarted.select_snapshot(Some("new".into())).unwrap();
+    }
+
+    #[test]
     fn startup_cleanup_skips_missing_corrupt_or_unsupported_build_settings() {
         let directory = tempfile::tempdir().unwrap();
         let preferences = directory.path().join("workspace.json");
@@ -1638,7 +1742,19 @@ mod tests {
         let orphan = snapshots.join("orphan-build");
         std::fs::create_dir(&orphan).unwrap();
         std::os::unix::fs::symlink(&outside, orphan.join("firmware-link")).unwrap();
-        std::fs::write(&preferences, b"{\"version\":1,\"build_settings\":{}}").unwrap();
+        let root = directory.path().join("registered-build");
+        let kept = build_directory(&preferences, &root).unwrap();
+        std::fs::create_dir_all(kept.join("empty-firmware")).unwrap();
+        std::os::unix::fs::symlink(&outside, kept.join("firmware-link")).unwrap();
+        let settings = BTreeMap::from([(root, super::super::BuildSettings::default())]);
+        std::fs::write(
+            &preferences,
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1, "build_settings": settings
+            }))
+            .unwrap(),
+        )
+        .unwrap();
         let mut app = Explorer {
             preferences_file: Some(preferences),
             ..Default::default()
@@ -1647,6 +1763,8 @@ mod tests {
         assert!(outside.join("keep.json").is_file());
         assert!(snapshots.join("orphan-link").is_symlink());
         assert!(!orphan.exists());
+        assert!(kept.join("firmware-link").is_symlink());
+        assert!(!kept.join("empty-firmware").exists());
     }
     #[test]
     fn snapshot_manager_stays_stationary_at_fractional_display_scales() {
