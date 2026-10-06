@@ -3,7 +3,7 @@ use super::Explorer;
 use eframe::egui;
 use firmware_analysis_core::{format_bytes as bytes, Analysis};
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) enum UnitKey {
     Dwarf(String),
     Elf(String),
@@ -35,7 +35,7 @@ enum Target {
     Unit(UnitKey),
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 enum SliceIdentity {
     Section(String),
     Unit(UnitKey),
@@ -284,16 +284,20 @@ impl Explorer {
             .overview_section
             .and_then(|index| a.sections.iter().find(|s| s.index == index))
             .and_then(|section| current.sections.iter().find(|s| s.name == section.name));
-        let current_items = if self.overview_section.is_some() && current_section.is_none() {
-            Vec::new()
-        } else {
-            metric_slices(
-                current,
-                current_section.map(|s| s.index),
-                self.overview_unit.as_ref(),
-                self.overview_metric,
-            )
-        };
+        let current_items: std::collections::HashSet<_> =
+            if baseline.is_none() || self.overview_section.is_none() || current_section.is_none() {
+                Default::default()
+            } else {
+                metric_slices(
+                    current,
+                    current_section.map(|s| s.index),
+                    self.overview_unit.as_ref(),
+                    self.overview_metric,
+                )
+                .into_iter()
+                .map(|item| item.identity)
+                .collect()
+            };
         if let Some(baseline_items) = baseline_items {
             for old in baseline_items {
                 if !items.iter().any(|item| item.identity == old.identity) {
@@ -341,13 +345,13 @@ impl Explorer {
             } else {
                 baseline_items.map(|items| baseline_size(item, items))
             };
-            let present = match &item.identity {
-                SliceIdentity::Section(name) => current.sections.iter().any(|s| &s.name == name),
-                _ => current_items
-                    .iter()
-                    .any(|current| current.identity == item.identity),
-            };
-            let removed = self.snapshot_label().is_some() && !present;
+            let removed = baseline.is_some()
+                && match &item.identity {
+                    SliceIdentity::Section(name) => {
+                        !current.sections.iter().any(|s| &s.name == name)
+                    }
+                    _ => !current_items.contains(&item.identity),
+                };
             let size_label = if removed {
                 super::snapshots::removed_bytes(old_size.and_then(Result::ok))
             } else if old_size == Some(Err(())) {

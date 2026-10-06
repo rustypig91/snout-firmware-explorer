@@ -2706,6 +2706,54 @@ mod tests {
     }
 
     #[test]
+    fn overview_keeps_zero_byte_current_symbols_present_in_baseline_drilldowns() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        app.take_snapshot("baseline").unwrap();
+        app.select_snapshot(Some("baseline".into())).unwrap();
+        let mut current = (**app.analysis.as_ref().unwrap()).clone();
+        let symbol = current
+            .symbols
+            .iter_mut()
+            .find(|s| s.usage.flash > 0)
+            .unwrap();
+        let name = symbol.demangled_name.clone();
+        app.overview_section = Some(symbol.section_index);
+        app.overview_unit = Some(if let Some(unit) = &symbol.dwarf_compilation_unit {
+            super::super::pie::UnitKey::Dwarf(unit.clone())
+        } else if let Some(unit) = &symbol.compilation_unit {
+            super::super::pie::UnitKey::Elf(unit.clone())
+        } else {
+            super::super::pie::UnitKey::Other
+        });
+        app.overview_metric = super::super::overview::Metric::Flash;
+        symbol.size = 0;
+        symbol.usage = Default::default();
+        app.analysis = Some(Arc::new(current.clone()));
+        app.sync_snapshot_comparison();
+        let ctx = egui::Context::default();
+        let output = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| app.overview_pie(ui, &current));
+        });
+        let label = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text)
+                    if text.galley.text().starts_with(&format!("{name} - ")) =>
+                {
+                    Some(text.galley.text())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert!(label.contains("0 B (-"), "{label}");
+        assert!(!label.contains("removed"), "{label}");
+    }
+
+    #[test]
     fn default_tabs_and_compare_share_the_snapshot_baseline() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
