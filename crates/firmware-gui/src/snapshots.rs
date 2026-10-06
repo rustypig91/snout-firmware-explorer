@@ -141,43 +141,22 @@ struct SnapshotFile {
     build_folder: PathBuf,
     snapshot: Snapshot,
 }
-fn component(label: &str, identity: &str) -> String {
-    let label: String = label
-        .chars()
-        .take(48)
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    format!(
-        "{}-{:x}",
-        if label.is_empty() { "snapshot" } else { &label },
-        Sha256::digest(identity.as_bytes())
-    )
+fn component(identity: &str) -> String {
+    // Three components share the Windows path budget with the configuration
+    // directory. Keep 128 bits of identity and store display names in the JSON.
+    format!("{:x}", Sha256::digest(identity.as_bytes()))[..32].into()
 }
 fn build_directory(preferences: &Path, root: &Path) -> Result<PathBuf, String> {
     let parent = preferences
         .parent()
         .ok_or("Missing user configuration directory")?;
     let identity = root.to_string_lossy();
-    let label = root.file_name().unwrap_or_default().to_string_lossy();
-    Ok(parent.join("snapshots").join(component(&label, &identity)))
+    Ok(parent.join("snapshots").join(component(&identity)))
 }
 fn snapshot_path(preferences: &Path, root: &Path, snapshot: &Snapshot) -> Result<PathBuf, String> {
-    let firmware = Path::new(&snapshot.firmware)
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy();
     Ok(build_directory(preferences, root)?
-        .join(component(&firmware, &snapshot.firmware))
-        .join(format!(
-            "{}.json",
-            component(&snapshot.name, &snapshot.name)
-        )))
+        .join(component(&snapshot.firmware))
+        .join(format!("{}.json", component(&snapshot.name))))
 }
 fn write_snapshot(
     preferences: &Path,
@@ -193,14 +172,30 @@ fn write_snapshot(
     })
     .map_err(|e| e.to_string())?;
     let parent = path.parent().unwrap();
-    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    let mut staged = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(parent).map_err(|e| {
+        format!(
+            "Could not create snapshot directory {}: {e}",
+            parent.display()
+        )
+    })?;
+    // Rust canonicalization supplies a verbatim (extended-length) path on Windows.
+    // tempfile passes paths straight to Win32 for both staging and persistence,
+    // so both must use this directory even when APPDATA itself is very long.
+    let parent = std::fs::canonicalize(parent).map_err(|e| {
+        format!(
+            "Could not resolve snapshot directory {}: {e}",
+            parent.display()
+        )
+    })?;
+    let destination = parent.join(path.file_name().unwrap());
+    let mut staged = tempfile::NamedTempFile::new_in(&parent)
+        .map_err(|e| format!("Could not stage snapshot in {}: {e}", parent.display()))?;
     serde_json::to_writer_pretty(&mut staged, &value).map_err(|e| e.to_string())?;
     staged.as_file().sync_all().map_err(|e| e.to_string())?;
     let saved = if overwrite {
-        staged.persist(&path)
+        staged.persist(&destination)
     } else {
-        staged.persist_noclobber(&path)
+        staged.persist_noclobber(&destination)
     };
     saved.map_err(|e| format!("Could not save snapshot to {}: {}", path.display(), e.error))?;
     Ok(())
@@ -754,13 +749,9 @@ impl Explorer {
             .ok_or("Select a build folder first")?
             .root;
         // Check disk too, so a damaged or externally created file is never silently replaced.
-        let firmware_label = Path::new(&firmware)
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy();
         let path = build_directory(preferences, root)?
-            .join(component(&firmware_label, &firmware))
-            .join(format!("{}.json", component(&name, &name)));
+            .join(component(&firmware))
+            .join(format!("{}.json", component(&name)));
         self.snapshot_dialog_error = None;
         self.snapshot_message = None;
         if path.exists()
@@ -1096,6 +1087,60 @@ mod tests {
         )
         .unwrap();
         std::fs::write(root.join("app.su"), "diag.c:22:36:diagnose\t24\tstatic\n").unwrap();
+    }
+    #[test]
+    fn snapshot_paths_fit_the_windows_path_budget_with_long_display_names() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        app.take_snapshot(&"baseline".repeat(20)).unwrap();
+        let mut snapshot = app.snapshots.snapshots[0].clone();
+        snapshot.firmware = format!("nested/{}.elf", "firmware".repeat(20));
+        // An ordinary Windows configuration directory. Its platform-independent
+        // length plus the generated relative path must stay below MAX_PATH.
+        let config = "C:\\Users\\Christopher\\AppData\\Roaming\\snout-firmware-explorer";
+        let preferences = directory.path().join("workspace.json");
+        let path = snapshot_path(&preferences, &root, &snapshot).unwrap();
+        let relative = path.strip_prefix(directory.path()).unwrap();
+        assert!(config.len() + 1 + relative.as_os_str().len() < 260);
+        assert_eq!(path.file_stem().unwrap().len(), 32);
+        snapshot.firmware = format!("other/{}.elf", "firmware".repeat(20));
+        assert_ne!(snapshot_path(&preferences, &root, &snapshot).unwrap(), path);
+    }
+    #[test]
+    fn snapshots_save_overwrite_reload_and_delete_with_paths_longer_than_max_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory
+            .path()
+            .join("long-config-directory-".repeat(5))
+            .join("nested-config-directory-".repeat(5));
+        let root = directory.path().join("build");
+        fixture(&root);
+        let preferences = config.join("workspace.json");
+        let mut app = open(&root);
+        app.preferences_file = Some(preferences.clone());
+        let name = "Before update: CON / firmware? 🐽";
+        app.take_snapshot(name).unwrap();
+        let mut snapshot = app.snapshots.snapshots[0].clone();
+        let path = snapshot_path(&preferences, &root, &snapshot).unwrap();
+        assert!(path.as_os_str().len() > 260);
+        assert!(path.is_file());
+        assert!(write_snapshot(&preferences, &root, &snapshot, false).is_err());
+        snapshot.analysis.totals.ram += 1024;
+        write_snapshot(&preferences, &root, &snapshot, true).unwrap();
+        app.load_snapshots();
+        assert!(app.snapshot_error.is_none(), "{:?}", app.snapshot_error);
+        assert_eq!(app.snapshots.snapshots.len(), 1);
+        assert_eq!(app.snapshots.snapshots[0].name, name);
+        assert_eq!(
+            app.snapshots.snapshots[0].analysis.totals,
+            snapshot.analysis.totals
+        );
+        app.delete_snapshot(name).unwrap();
+        assert!(!path.exists());
+        app.load_snapshots();
+        assert!(app.snapshots.snapshots.is_empty());
     }
     #[test]
     fn legacy_persisted_baseline_selection_is_ignored() {

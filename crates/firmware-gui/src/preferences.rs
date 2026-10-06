@@ -30,6 +30,31 @@ fn write_preferences(
 }
 
 impl Explorer {
+    pub(super) fn open_configuration_folder(&self) -> Result<(), String> {
+        let folder = self
+            .preferences_file
+            .as_ref()
+            .and_then(|path| path.parent())
+            .ok_or("Configuration folder is unavailable")?;
+        std::fs::create_dir_all(folder)
+            .map_err(|error| format!("Could not create configuration folder: {error}"))?;
+        #[cfg(target_os = "windows")]
+        let launcher = "explorer.exe";
+        #[cfg(target_os = "macos")]
+        let launcher = "open";
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        let launcher = "xdg-open";
+        let mut child = std::process::Command::new(launcher)
+            .arg(folder)
+            .spawn()
+            .map_err(|error| format!("Could not open configuration folder: {error}"))?;
+        // Reap the launcher without blocking the UI while the file explorer runs.
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+        Ok(())
+    }
+
     pub(super) fn refresh(&mut self) {
         if self.receiver.is_some() {
             return;

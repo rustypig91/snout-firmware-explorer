@@ -331,6 +331,20 @@ impl Explorer {
                             ui.separator();
                             if ui
                                 .add_enabled(
+                                    self.preferences_file.is_some(),
+                                    egui::Button::new("Open configuration folder"),
+                                )
+                                .on_hover_text("Open Snout's workspace settings and snapshots in your file explorer")
+                                .clicked()
+                            {
+                                ui.close_menu();
+                                if let Err(error) = self.open_configuration_folder() {
+                                    self.error = Some(error);
+                                }
+                            }
+                            ui.separator();
+                            if ui
+                                .add_enabled(
                                     self.updates.idle(),
                                     egui::Button::new("Check for updates"),
                                 )
