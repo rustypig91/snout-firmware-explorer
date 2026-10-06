@@ -3,33 +3,34 @@ use super::{egui, Explorer, View};
 use firmware_analysis_core::format_bytes as bytes;
 
 // egui 0.30's nested menus only open to the right. Keep a separate left-hand
-// area and include it in the parent menu's hit bounds between frames.
+// area and include it in the parent menu's hit test between frames.
 fn menu_with_left_submenu(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
     let bar_id = ui.id();
-    let bounds_id = bar_id.with("recent_menu_bounds");
+    let child_id = bar_id.with("recent_menu_rect");
     let mut state = egui::menu::BarState::load(ui.ctx(), bar_id);
     let button = ui.button("Menu");
-    egui::menu::MenuRoot::stationary_click_interaction(&button, &mut state);
     if let Some(root) = state.as_ref() {
-        if let Some(rect) = ui.ctx().data(|data| data.get_temp::<egui::Rect>(bounds_id)) {
-            root.menu_state.write().rect = rect;
+        if let Some(child) = ui.ctx().data(|data| data.get_temp::<egui::Rect>(child_id)) {
+            // Only extend the hit bounds when the pointer is actually in the
+            // child. A permanent union also counts empty space beside either
+            // menu as inside, preventing outside clicks from dismissing it.
+            if ui.input(|input| {
+                input
+                    .pointer
+                    .interact_pos()
+                    .is_some_and(|pos| child.contains(pos))
+            }) {
+                let mut menu = root.menu_state.write();
+                menu.rect = menu.rect.union(child);
+            }
         }
     }
-    let child_id = bar_id.with("recent_menu_rect");
+    egui::menu::MenuRoot::stationary_click_interaction(&button, &mut state);
     ui.ctx()
         .data_mut(|data| data.remove::<egui::Rect>(child_id));
     state.show(&button, contents);
-    if let Some(root) = state.as_ref() {
-        let mut menu = root.menu_state.write();
-        ui.ctx()
-            .data_mut(|data| data.insert_temp(bounds_id, menu.rect));
-        if let Some(child) = ui.ctx().data(|data| data.get_temp::<egui::Rect>(child_id)) {
-            menu.rect = menu.rect.union(child);
-        }
-    }
     if state.as_ref().is_none() {
         ui.ctx().data_mut(|data| {
-            data.remove::<egui::Rect>(bounds_id);
             data.insert_temp(bar_id.with("recent_menu"), false);
         });
     }

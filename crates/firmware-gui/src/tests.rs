@@ -2918,6 +2918,44 @@ fn recent_folder_submenu_opens_left_and_remains_clickable() {
         child.right() < parent.left(),
         "Submenu must be left of parent: {child:?}, {parent:?}"
     );
+    // The bounding rectangle of both menus includes empty space below the
+    // shorter submenu. Clicking there must dismiss the menu hierarchy.
+    let outside = egui::pos2(child.center().x, text_rect(&output, "About").center().y);
+    for pressed in [true, false] {
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(outside),
+                egui::Event::PointerButton {
+                    pos: outside,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    let output = frame(&mut app, vec![]);
+    assert!(!output.shapes.iter().any(
+        |shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Refresh")
+    ));
+    for pressed in [true, false] {
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(menu),
+                egui::Event::PointerButton {
+                    pos: menu,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    frame(&mut app, vec![egui::Event::PointerMoved(recent.center())]);
+    frame(&mut app, vec![]);
+    frame(&mut app, vec![]);
     for pressed in [true, false] {
         frame(
             &mut app,
