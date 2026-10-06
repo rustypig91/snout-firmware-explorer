@@ -147,7 +147,22 @@ fn metric_slices_for_display(
             .iter()
             .filter(|s| {
                 s.allocated
-                    && (metric == super::overview::Metric::All || metric.section_size(s) > 0)
+                    && (metric == super::overview::Metric::All
+                        || metric.section_size(s) > 0
+                        || app.is_some_and(|app| {
+                            app.snapshot_removed("section", &s.name)
+                                && app
+                                    .snapshot_old(
+                                        "section",
+                                        &s.name,
+                                        if metric == super::overview::Metric::Ram {
+                                            "usage.ram"
+                                        } else {
+                                            "usage.flash"
+                                        },
+                                    )
+                                    .is_some_and(|size| size > 0)
+                        }))
             })
             .map(|s| Slice {
                 identity: SliceIdentity::Section(s.name.clone()),
@@ -224,7 +239,9 @@ impl Explorer {
             self.overview_section = None;
         }
     }
-    pub(super) fn overview_pie(&mut self, ui: &mut egui::Ui, a: &Analysis) {
+    pub(super) fn overview_pie(&mut self, ui: &mut egui::Ui, current: &Analysis) {
+        let display = self.baseline_display_analysis();
+        let a = display.as_deref().unwrap_or(current);
         ui.horizontal_wrapped(|ui| {
             if self.overview_section.is_some() && ui.button("Back").clicked() {
                 self.overview_back();
@@ -243,7 +260,7 @@ impl Explorer {
                 ui.label(format!("/ {}", display_path(unit.label())));
             }
         });
-        let items = metric_slices_for_display(
+        let mut items = metric_slices_for_display(
             a,
             self.overview_section,
             self.overview_unit.as_ref(),
@@ -261,6 +278,38 @@ impl Explorer {
         });
         let ambiguous_section = matches!(baseline, Some(Err(())));
         let baseline_items = baseline.as_ref().and_then(|items| items.as_ref().ok());
+        // Presence is independent of byte size: zero-sized current labels are
+        // still current, while baseline-only rows take no current chart space.
+        let current_section = self
+            .overview_section
+            .and_then(|index| a.sections.iter().find(|s| s.index == index))
+            .and_then(|section| current.sections.iter().find(|s| s.name == section.name));
+        let current_items = if self.overview_section.is_some() && current_section.is_none() {
+            Vec::new()
+        } else {
+            metric_slices(
+                current,
+                current_section.map(|s| s.index),
+                self.overview_unit.as_ref(),
+                self.overview_metric,
+            )
+        };
+        if let Some(baseline_items) = baseline_items {
+            for old in baseline_items {
+                if !items.iter().any(|item| item.identity == old.identity) {
+                    let mut item = old.clone();
+                    item.size = 0;
+                    if let SliceIdentity::Section(name) = &item.identity {
+                        item.target = a
+                            .sections
+                            .iter()
+                            .find(|s| &s.name == name)
+                            .map(|s| Target::Section(s.index));
+                    }
+                    items.push(item);
+                }
+            }
+        }
         self.visible_rows = items.len();
         let total: u64 = items.iter().map(|s| s.size).sum();
         ui.label(format!(
@@ -292,8 +341,21 @@ impl Explorer {
             } else {
                 baseline_items.map(|items| baseline_size(item, items))
             };
-            let size_label = if old_size == Some(Err(())) {
+            let present = match &item.identity {
+                SliceIdentity::Section(name) => current.sections.iter().any(|s| &s.name == name),
+                _ => current_items
+                    .iter()
+                    .any(|current| current.identity == item.identity),
+            };
+            let removed = self.snapshot_label().is_some() && !present;
+            let size_label = if removed {
+                super::snapshots::removed_bytes(old_size.and_then(Result::ok))
+            } else if old_size == Some(Err(())) {
                 format!("{} (baseline ambiguous)", bytes(item.size))
+            } else if baseline_items
+                .is_some_and(|old| !old.iter().any(|old| old.identity == item.identity))
+            {
+                format!("{} (new)", bytes(item.size))
             } else {
                 self.snapshot_difference(item.size, old_size.and_then(Result::ok))
             };

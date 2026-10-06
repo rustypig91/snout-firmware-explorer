@@ -436,6 +436,8 @@ impl Explorer {
         clicked
     }
     pub(super) fn directory_tree(&mut self, ui: &mut egui::Ui, a: &Analysis) {
+        let display = self.baseline_display_analysis();
+        let a = display.as_deref().unwrap_or(a);
         let mut selected = None;
         egui::ScrollArea::both().show(ui, |ui| {
             tree(ui, &a.tree, "", "project", "", &mut selected, self);
@@ -451,6 +453,8 @@ impl Explorer {
         }
     }
     pub(super) fn files(&mut self, ui: &mut egui::Ui, a: &Analysis) {
+        let display = self.baseline_display_analysis();
+        let a = display.as_deref().unwrap_or(a);
         let build_root = self.build.as_ref().map(|build| build.root.as_path());
         let rows = self.cached_rows(a as *const Analysis as usize, || {
             a.files
@@ -503,6 +507,8 @@ impl Explorer {
         }
     }
     pub(super) fn symbols(&mut self, ui: &mut egui::Ui, a: &Analysis) {
+        let display = self.baseline_display_analysis();
+        let a = display.as_deref().unwrap_or(a);
         if let Some(file) = &self.selected_file {
             ui.weak(display_path(file));
         }
@@ -586,6 +592,8 @@ impl Explorer {
         );
     }
     pub(super) fn sections(&mut self, ui: &mut egui::Ui, a: &Analysis) {
+        let display = self.baseline_display_analysis();
+        let a = display.as_deref().unwrap_or(a);
         let rows = self.cached_rows(a as *const Analysis as usize, || { a.sections.iter().map(|s| Row::new(vec![s.name.clone(), self.snapshot_bytes("section", &s.name, "size", s.size), self.snapshot_bytes("section", &s.name, "usage.flash", s.usage.flash), self.snapshot_bytes("section", &s.name, "usage.ram", s.usage.ram), self.snapshot_address("section", &s.name, "address", s.address), s.load_address.map(|v| self.snapshot_address("section", &s.name, "load_address", v)).unwrap_or_else(|| load_address(None, s.load_size)), classification(s.classification).into()], &[(1,s.size.into()),(2,s.usage.flash.into()),(3,s.usage.ram.into()),(4,s.address.into()),(5,s.load_address.unwrap_or(0).into())],
             format!("Load size: {} / runtime size: {}\nAlignment: {} / flags: {:#x}\nAllocated: {} / writable: {} / executable: {}\n{}", self.snapshot_bytes("section", &s.name, "load_size", s.load_size),self.snapshot_bytes("section", &s.name, "runtime_size", s.runtime_size),self.snapshot_bytes("section", &s.name, "alignment", s.alignment),s.flags,s.allocated,s.writable,s.executable,s.evidence)).with_bars(&[1, 2, 3])).collect() });
         self.table(
@@ -615,6 +623,8 @@ impl Explorer {
         );
     }
     pub(super) fn memory_map(&mut self, ui: &mut egui::Ui, a: &Analysis) {
+        let display = self.baseline_display_analysis();
+        let a = display.as_deref().unwrap_or(a);
         ui.add_enabled_ui(self.receiver.is_none(), |ui| {
             ui.horizontal_wrapped(|ui| {
                 if ui.button("Load memory regions...").clicked() {
@@ -811,7 +821,8 @@ impl Explorer {
             }
             ui.label("Use .su reports from this build (-fstack-usage). Inspect missing ELF functions and ambiguous matches below; call-chain analysis and runtime stack high-water measurements are needed for total stack sizing.");
         });
-        let Some(report) = &self.stack else {
+        let display_stack = self.baseline_display.as_ref().and_then(|d| d.stack.clone());
+        let Some(report) = display_stack.as_deref().or(self.stack.as_ref()) else {
             self.visible_rows = 0;
             ui.add_space(15.0);
             ui.label("Build with -fstack-usage, then select report files or directories under Stack usage in the left menu.");
@@ -866,9 +877,11 @@ impl Explorer {
         let unresolved = report
             .entries
             .iter()
-            .filter(|e| e.symbol_candidates.is_empty())
+            .filter(|e| {
+                !self.snapshot_removed("stack", &stack_key(e)) && e.symbol_candidates.is_empty()
+            })
             .count();
-        let no_matches = unresolved == report.entries.len();
+        let no_matches = unresolved == self.stack.as_ref().map_or(0, |s| s.entries.len());
         if no_matches && unresolved > 0 {
             ui.weak("No reports match symbols in this ELF. Showing all reports; verify that they belong to this build.");
         } else {
@@ -884,7 +897,10 @@ impl Explorer {
                 .entries
                 .iter()
                 .filter(|e| {
-                    no_matches || self.stack_show_unresolved || !e.symbol_candidates.is_empty()
+                    self.snapshot_removed("stack", &stack_key(e))
+                        || no_matches
+                        || self.stack_show_unresolved
+                        || !e.symbol_candidates.is_empty()
                 })
                 .map(|e| {
                     Row::new(

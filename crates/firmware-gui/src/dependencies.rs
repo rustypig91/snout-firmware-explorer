@@ -227,6 +227,9 @@ fn curve_distance(points: &[egui::Pos2], pointer: egui::Pos2) -> f32 {
 
 impl Explorer {
     pub(super) fn dependency_view(&mut self, ui: &mut egui::Ui, analysis: &Analysis) {
+        let current_nodes = analysis.dependencies.nodes.len();
+        let display = self.baseline_display_analysis();
+        let analysis = display.as_deref().unwrap_or(analysis);
         let graph = &analysis.dependencies;
         ui.horizontal_wrapped(|ui| {
             ui.label("Compilation units");
@@ -328,7 +331,7 @@ impl Explorer {
                         }
                     } else {
                         ui.heading("Dependency map");
-                        ui.label(format!("{} units / objects\n{} dependency connections", self.snapshot_count("counts", "", "dependency_nodes", graph.nodes.len() as u64), self.snapshot_count("counts", "", "dependency_edges", graph.edges.len() as u64)));
+                        ui.label(format!("{} units / objects\n{} dependency connections", self.snapshot_count("counts", "", "dependency_nodes", current_nodes as u64), self.snapshot_count("counts", "", "dependency_edges", graph.edges.len() as u64)));
                         ui.label("Select a node to inspect dependencies. Select an arrow to see the symbols connecting its units.");
                     }
                 });

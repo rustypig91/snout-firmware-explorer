@@ -405,6 +405,13 @@ fn collect(a: &Analysis, stack: Option<&StackReport>) -> BTreeMap<String, u64> {
     }
     v
 }
+pub(super) fn removed_bytes(old: Option<u64>) -> String {
+    match old {
+        Some(0) => "0 B (removed)".into(),
+        Some(old) => format!("0 B (-{}; removed)", format_bytes(old)),
+        None => "0 B (removed; baseline ambiguous)".into(),
+    }
+}
 fn annotate(current: String, value: u64, old: Option<u64>, address: bool) -> String {
     match old {
         Some(old) if old != value => {
@@ -443,6 +450,18 @@ impl Explorer {
             .snapshot_analysis()
             .zip(self.analysis.as_deref())
             .map(|(baseline, current)| super::compare(baseline, current));
+        self.baseline_display =
+            self.snapshot_analysis()
+                .zip(self.analysis.as_deref())
+                .map(|(old, current)| {
+                    super::baseline_display::BaselineDisplay::new(
+                        current,
+                        old,
+                        self.stack.as_ref(),
+                        self.selected_snapshot().and_then(|s| s.stack.as_ref()),
+                    )
+                });
+        self.region_cache_key = 0;
         self.table_cache = Default::default();
     }
     pub(super) fn snapshot_analysis(&self) -> Option<&Analysis> {
@@ -459,6 +478,17 @@ impl Explorer {
         snapshot.values.get(&key(domain, id, field)).copied()
     }
     pub(super) fn snapshot_bytes(&self, domain: &str, id: &str, field: &str, value: u64) -> String {
+        if self.snapshot_removed(domain, id) {
+            let old = self.snapshot_old(domain, id, field);
+            if old.is_none()
+                && self.selected_snapshot().is_some_and(|snapshot| {
+                    !snapshot.values.contains_key(&key(domain, id, "ambiguous"))
+                })
+            {
+                return "0 B (removed; baseline unknown)".into();
+            }
+            return removed_bytes(old);
+        }
         if let Some(snapshot) = self.selected_snapshot() {
             if snapshot.values.contains_key(&key(domain, id, "ambiguous")) {
                 return format!("{} (baseline ambiguous)", format_bytes(value));
@@ -481,6 +511,12 @@ impl Explorer {
         field: &str,
         value: u64,
     ) -> String {
+        if self.snapshot_removed(domain, id) {
+            return self
+                .snapshot_old(domain, id, field)
+                .map(|old| format!("— (removed; baseline {old:#010x})"))
+                .unwrap_or_else(|| "— (removed; baseline ambiguous)".into());
+        }
         if let Some(snapshot) = self.selected_snapshot() {
             if snapshot.values.contains_key(&key(domain, id, "ambiguous")) {
                 return format!("{value:#010x} (baseline ambiguous)");
@@ -497,6 +533,12 @@ impl Explorer {
         )
     }
     pub(super) fn snapshot_count(&self, domain: &str, id: &str, field: &str, value: u64) -> String {
+        if self.snapshot_removed(domain, id) {
+            return self
+                .snapshot_old(domain, id, field)
+                .map(|old| format!("0 (-{old}; removed)"))
+                .unwrap_or_else(|| "0 (removed; baseline ambiguous)".into());
+        }
         if self
             .selected_snapshot()
             .is_some_and(|snapshot| snapshot.values.contains_key(&key(domain, id, "ambiguous")))
@@ -1532,7 +1574,11 @@ mod tests {
             assert_eq!(restarted.snapshot_old(domain, id, field), None);
             assert_eq!(
                 restarted.snapshot_bytes(domain, id, field, 4),
-                "4 B (baseline ambiguous)"
+                if restarted.snapshot_removed(domain, id) {
+                    "0 B (removed; baseline ambiguous)"
+                } else {
+                    "4 B (baseline ambiguous)"
+                }
             );
         }
     }
@@ -2345,6 +2391,337 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn removed_entries_are_visible_across_baseline_views_without_changing_current_reports() {
+        use super::super::{overview::Metric, View};
+        use firmware_analysis_core::dependencies::DependencyNode;
+        use firmware_analysis_core::{
+            Classification, FileTree, FileUsage, MemoryKind, MemoryRange, MemoryRegion, Usage,
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        let original = (**app.analysis.as_ref().unwrap()).clone();
+        let mut old = original.clone();
+        let mut section = old.sections.iter().find(|s| s.allocated).unwrap().clone();
+        section.index = old.sections.iter().map(|s| s.index).max().unwrap() + 1;
+        section.name = ".probe_removed".into();
+        section.address = 0x20008000;
+        section.load_address = None;
+        section.size = 1740;
+        section.runtime_size = 1740;
+        section.load_size = 0;
+        section.usage = Usage {
+            flash: 0,
+            ram: 1740,
+        };
+        section.classification = Classification::NoLoadRam;
+        let mut symbol = old.symbols[0].clone();
+        symbol.name = "moved_probe".into();
+        symbol.demangled_name = symbol.name.clone();
+        symbol.kind = "Global".into();
+        symbol.source_file = Some("old_probe.c".into());
+        symbol.compilation_unit = Some("old_probe.c".into());
+        symbol.dwarf_compilation_unit = Some("old_probe.c".into());
+        symbol.section_index = section.index;
+        symbol.section = section.name.clone();
+        symbol.address = section.address;
+        symbol.normalized_address = symbol.address;
+        symbol.size = 1740;
+        symbol.usage = section.usage;
+        let symbol_id = symbol_key(&symbol);
+        old.sections.push(section.clone());
+        old.symbols.push(symbol.clone());
+        old.files.push(FileUsage {
+            path: "old_probe.c".into(),
+            attribution: "test".into(),
+            usage: symbol.usage,
+            symbol_count: 1,
+        });
+        old.tree = FileTree {
+            name: "project".into(),
+            usage: symbol.usage,
+            children: vec![FileTree {
+                name: "old_probe.c".into(),
+                usage: symbol.usage,
+                children: vec![],
+            }],
+        };
+        old.options.regions.push(MemoryRegion {
+            name: "probe_RAM".into(),
+            start: section.address,
+            size: 4096,
+            kind: MemoryKind::Ram,
+        });
+        old.memory_map.push(MemoryRange {
+            name: ".probe_removed".into(),
+            address: section.address,
+            size: 1740,
+            space: "Runtime".into(),
+            evidence: "test".into(),
+        });
+        old.dependencies.nodes.push(DependencyNode {
+            id: "old_probe.c".into(),
+            label: "old_probe.c".into(),
+            objects: vec![],
+            usage: Some(symbol.usage),
+            evidence: "test".into(),
+        });
+        old.tls = Some(firmware_analysis_core::TlsReport {
+            source: "test".into(),
+            initialized_size: 1740,
+            zero_initialized_size: 0,
+            template_size: 1740,
+            alignment: 4,
+            total_runtime_ram: None,
+            symbols: vec![firmware_analysis_core::TlsSymbol {
+                name: "probe_tls".into(),
+                offset: 0,
+                size: 1740,
+                section: ".tdata".into(),
+            }],
+        });
+        let mut stack = app.stack.clone().unwrap();
+        let mut frame = stack.entries[0].clone();
+        frame.function = "probe_frame".into();
+        frame.local_bytes = 1740;
+        frame.symbol_candidates = vec!["moved_probe".into()];
+        let frame_id = stack_key(&frame);
+        stack.entries.push(frame);
+        app.analysis = Some(Arc::new(old.clone()));
+        app.stack = Some(stack);
+        app.take_snapshot("baseline").unwrap();
+        app.select_snapshot(Some("baseline".into())).unwrap();
+
+        // Keep the section and physical region, but move the symbol to another
+        // file. A separate baseline-only section tests historical drilldowns.
+        let mut current = original.clone();
+        current.sections.push(section.clone());
+        symbol.source_file = Some("new_probe.c".into());
+        symbol.compilation_unit = Some("new_probe.c".into());
+        symbol.dwarf_compilation_unit = Some("new_probe.c".into());
+        current.symbols.push(symbol.clone());
+        current.files.push(FileUsage {
+            path: "new_probe.c".into(),
+            attribution: "test".into(),
+            usage: symbol.usage,
+            symbol_count: 1,
+        });
+        current.tree = FileTree {
+            name: "project".into(),
+            usage: symbol.usage,
+            children: vec![FileTree {
+                name: "new_probe.c".into(),
+                usage: symbol.usage,
+                children: vec![],
+            }],
+        };
+        current.options.regions = old.options.regions.clone();
+        let mut removed_section = section.clone();
+        removed_section.index += 1;
+        removed_section.name = ".other_probe_removed".into();
+        // Add this extra section to the captured baseline, then rebuild its values.
+        app.snapshots.snapshots[0]
+            .analysis
+            .sections
+            .push(removed_section.clone());
+        app.snapshots.snapshots[0].values = collect(
+            &app.snapshots.snapshots[0].analysis,
+            app.snapshots.snapshots[0].stack.as_ref(),
+        );
+        app.analysis = Some(Arc::new(current.clone()));
+        app.stack = None;
+        app.sync_snapshot_comparison();
+        assert_eq!(
+            app.snapshot_bytes("symbol", &symbol_id, "usage.ram", 0),
+            "0 B (-1.70 KiB; removed)"
+        );
+        assert_eq!(
+            app.snapshot_bytes("symbol", &symbol_key(&symbol), "usage.ram", 1740),
+            "1.70 KiB (new)"
+        );
+        assert_eq!(
+            app.snapshot_bytes("file", "old_probe.c", "usage.flash", 0),
+            "0 B (removed)"
+        );
+        assert!(app
+            .snapshot_address("symbol", &symbol_id, "address", 0)
+            .contains("removed; baseline 0x20008000"));
+        assert_eq!(
+            app.snapshot_bytes("stack", &frame_id, "local_bytes", 0),
+            "0 B (-1.70 KiB; removed)"
+        );
+        let display = app.baseline_display_analysis().unwrap();
+        assert_eq!(display.totals, current.totals);
+        assert_eq!(
+            app.analysis.as_ref().unwrap().symbols.len(),
+            current.symbols.len()
+        );
+        assert_eq!(display.symbols.len(), current.symbols.len() + 1);
+        let region = display
+            .options
+            .regions
+            .iter()
+            .find(|r| r.name == "probe_RAM")
+            .unwrap();
+        let usage = app.display_region_usage(&display, region);
+        let actual_usage = firmware_analysis_core::regions::region_usage(&current, region);
+        assert_eq!(
+            (usage.used, usage.free),
+            (actual_usage.used, actual_usage.free)
+        );
+        assert!(usage
+            .symbols
+            .iter()
+            .any(|e| symbol_key(&display.symbols[e.symbol_index]) == symbol_id));
+
+        let ctx = egui::Context::default();
+        let render = |app: &mut Explorer, view: View| {
+            app.change_view(view);
+            app.search = "probe".into();
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1600.0, 1200.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| match view {
+                        View::Files => app.files(ui, &current),
+                        View::Symbols => app.symbols(ui, &current),
+                        View::Sections => app.sections(ui, &current),
+                        View::MemoryMap => app.memory_map(ui, &current),
+                        View::Stack => app.stack_view(ui),
+                        View::Overview => app.overview_pie(ui, &current),
+                        _ => unreachable!(),
+                    });
+                },
+            );
+            output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(t) => Some(t.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        for view in [
+            View::Files,
+            View::Symbols,
+            View::Sections,
+            View::MemoryMap,
+            View::Stack,
+        ] {
+            let texts = render(&mut app, view);
+            assert!(
+                texts.iter().any(|t| t.contains("0 B (-1.70 KiB; removed)")),
+                "{}: {texts:?}",
+                view.label()
+            );
+        }
+        app.overview_metric = Metric::Ram;
+        let texts = render(&mut app, View::Overview);
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains(".other_probe_removed") && t.contains("removed")),
+            "{texts:?}"
+        );
+        app.overview_section = Some(section.index);
+        let texts = render(&mut app, View::Overview);
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("old_probe.c") && t.contains("removed")),
+            "{texts:?}"
+        );
+        app.overview_unit = Some(super::super::pie::UnitKey::Dwarf("old_probe.c".into()));
+        let texts = render(&mut app, View::Overview);
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("moved_probe") && t.contains("removed")),
+            "{texts:?}"
+        );
+        app.change_view(View::MemoryMap);
+        app.selected_region = Some(
+            current
+                .options
+                .regions
+                .iter()
+                .position(|r| r.name == "probe_RAM")
+                .unwrap(),
+        );
+        let texts = render(&mut app, View::MemoryMap);
+        assert!(
+            texts.iter().any(|t| t.contains("0 B (-1.70 KiB; removed)")),
+            "{texts:?}"
+        );
+
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1600.0, 1200.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.directory_tree(ui, &current));
+            },
+        );
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(t) if t.galley.text().contains("old_probe.c") && t.galley.text().contains("removed"))));
+        assert_eq!(
+            app.snapshot_bytes("tls_symbol", "probe_tls", "size", 0),
+            "0 B (-1.70 KiB; removed)"
+        );
+        assert_eq!(display.tls.as_ref().unwrap().template_size, 0);
+        assert_eq!(display.tls.as_ref().unwrap().symbols[0].size, 0);
+        assert_eq!(
+            display.dependencies.edges.len(),
+            current.dependencies.edges.len()
+        );
+        assert_eq!(
+            app.snapshot_bytes("dependency", "old_probe.c", "ram", 0),
+            "0 B (-1.70 KiB; removed)"
+        );
+        app.change_view(View::Dependencies);
+        app.search = "old_probe".into();
+        let output = super::super::dependencies::settle_graph(&mut app, |app| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1600.0, 1200.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| app.dependency_view(ui, &current));
+                },
+            )
+        });
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(t) if t.galley.text().contains("old_probe.c") && t.galley.text().contains("removed"))));
+
+        app.take_snapshot("current").unwrap();
+        let saved = app
+            .snapshots
+            .snapshots
+            .iter()
+            .find(|s| s.name == "current")
+            .unwrap();
+        assert_eq!(saved.analysis.symbols.len(), current.symbols.len());
+        assert!(!saved.analysis.files.iter().any(|f| f.path == "old_probe.c"));
+        app.select_snapshot(None).unwrap();
+        assert!(app.baseline_display.is_none());
+        let texts = render(&mut app, View::Symbols);
+        assert!(!texts.iter().any(|t| t.contains("; removed)")), "{texts:?}");
+    }
+
     #[test]
     fn default_tabs_and_compare_share_the_snapshot_baseline() {
         let directory = tempfile::tempdir().unwrap();
