@@ -61,15 +61,26 @@ fn left_recent_menu(
             parent.left() - margin.left - ui.spacing().menu_spacing,
             button.rect.top() - margin.top,
         );
+        // Bound the popup to the space left of its parent. Otherwise long
+        // paths make Area's screen constraint move it over the parent menu.
+        let width = (anchor.x - ui.ctx().screen_rect().left() - margin.sum().x).clamp(1.0, 400.0);
         let popup = egui::Area::new(id)
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::RIGHT_TOP)
             .fixed_pos(anchor)
+            .default_width(width + margin.sum().x)
+            .sense(egui::Sense::hover())
             .show(ui.ctx(), |ui| {
                 egui::Frame::menu(ui.style()).show(ui, |ui| {
+                    ui.set_width(width);
                     ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
                         for folder in folders {
-                            if ui.button(display_path(&folder.to_string_lossy())).clicked() {
+                            let path = folder.to_string_lossy();
+                            if ui
+                                .add(egui::Button::new(display_path(&path)).truncate())
+                                .on_hover_text(display_path(&path))
+                                .clicked()
+                            {
                                 selected = Some(folder.clone());
                             }
                         }

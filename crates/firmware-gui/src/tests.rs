@@ -2852,8 +2852,19 @@ fn recent_build_folders_restore_legacy_and_sanitize_saved_history() {
 
 #[test]
 fn recent_folder_submenu_opens_left_and_remains_clickable() {
+    check_recent_folder_submenu(1280.0, "build");
+}
+
+#[test]
+fn long_recent_folder_submenu_stays_left_and_clickable_in_small_windows() {
+    check_recent_folder_submenu(640.0, &"long-build-folder-".repeat(12));
+}
+
+fn check_recent_folder_submenu(width: f32, folder_name: &str) {
     let directory = tempfile::tempdir().unwrap();
-    let folder = directory.path().canonicalize().unwrap();
+    let folder = directory.path().join(folder_name);
+    std::fs::create_dir(&folder).unwrap();
+    let folder = folder.canonicalize().unwrap();
     let mut app = Explorer::default();
     app.recent_build_folders.push(folder.clone());
     let ctx = egui::Context::default();
@@ -2863,7 +2874,7 @@ fn recent_folder_submenu_opens_left_and_remains_clickable() {
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
-                    egui::vec2(1280.0, 800.0),
+                    egui::vec2(width, 800.0),
                 )),
                 events,
                 ..Default::default()
