@@ -242,6 +242,7 @@ pub(super) enum Dialog {
     Manager,
     Overwrite(String),
     Delete(String),
+    DeleteAll,
     Saving(String),
 }
 pub(super) struct SaveJob {
@@ -937,6 +938,32 @@ impl Explorer {
         self.details = None;
         Ok(())
     }
+    fn delete_all_snapshots(&mut self) -> Result<usize, String> {
+        let firmware = self.snapshot_firmware().ok_or("Select firmware first")?;
+        let names: Vec<_> = self
+            .snapshots
+            .snapshots
+            .iter()
+            .filter(|snapshot| snapshot.firmware == firmware)
+            .map(|snapshot| snapshot.name.clone())
+            .collect();
+        let mut deleted = 0;
+        let mut errors = Vec::new();
+        for name in names {
+            match self.delete_snapshot(&name) {
+                Ok(()) => deleted += 1,
+                Err(error) => errors.push(format!("“{name}”: {error}")),
+            }
+        }
+        if errors.is_empty() {
+            Ok(deleted)
+        } else {
+            Err(format!(
+                "Deleted {deleted} snapshots. Could not delete the remaining snapshots: {}",
+                errors.join("; ")
+            ))
+        }
+    }
     pub(super) fn show_snapshot_dialog(&mut self, ctx: &egui::Context) {
         self.poll_snapshot_save();
         let Some(dialog) = self.snapshot_dialog.clone() else {
@@ -947,6 +974,8 @@ impl Explorer {
             Overwrite(String),
             AskDelete(String),
             Delete(String),
+            AskDeleteAll,
+            DeleteAll,
             Compare(String),
             Stop,
             Back,
@@ -1009,6 +1038,17 @@ impl Explorer {
                             if ui.button("Cancel").clicked() { action = Some(Action::Back); }
                         });
                     }
+                    Dialog::DeleteAll => {
+                        let firmware = self.snapshot_firmware();
+                        let count = self.snapshots.snapshots.iter().filter(|s| firmware.as_ref() == Some(&s.firmware)).count();
+                        ui.label(format!("Delete all {count} snapshots for the current firmware? This cannot be undone."));
+                        if let Some(firmware) = firmware { ui.label(format!("ELF: {}", super::display::display_path(&firmware))); }
+                        if self.snapshot_label().is_some() { ui.label("This also stops the current baseline comparison."); }
+                        ui.horizontal(|ui| {
+                            if ui.button("Delete all snapshots").clicked() { action = Some(Action::DeleteAll); }
+                            if ui.button("Cancel").clicked() { action = Some(Action::Back); }
+                        });
+                    }
                     Dialog::Manager => {
                         if let Some(message) = &self.snapshot_message { ui.label(message); }
                         ui.label("Save the currently loaded firmware as a baseline.");
@@ -1031,6 +1071,7 @@ impl Explorer {
                         let firmware = self.snapshot_firmware();
                         let mut snapshots: Vec<_> = self.snapshots.snapshots.iter().filter(|s|firmware.as_ref() == Some(&s.firmware)).collect();
                         snapshots.sort_by(|a,b| b.taken_at.cmp(&a.taken_at).then_with(|| a.name.cmp(&b.name)));
+                        let has_snapshots = !snapshots.is_empty();
                         ui.strong(format!("Saved snapshots ({})", snapshots.len()));
                         if snapshots.is_empty() { ui.label("No snapshots for this firmware yet."); }
                         else {
@@ -1045,6 +1086,9 @@ impl Explorer {
                                 }
                             });
                         }
+                        if ui.add_enabled(has_snapshots, egui::Button::new("Delete all snapshots"))
+                            .on_hover_text("Delete every snapshot for the current firmware")
+                            .clicked() { action = Some(Action::AskDeleteAll); }
                         ui.separator();
                         ui.horizontal(|ui| {
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| {
@@ -1082,6 +1126,20 @@ impl Explorer {
                     self.snapshot_message = Some(format!("Deleted snapshot “{name}”."));
                 }
                 result
+            }
+            Some(Action::AskDeleteAll) => {
+                self.snapshot_dialog = Some(Dialog::DeleteAll);
+                self.snapshot_dialog_error = None;
+                self.snapshot_message = None;
+                Ok(())
+            }
+            Some(Action::DeleteAll) => {
+                let result = self.delete_all_snapshots();
+                self.snapshot_dialog = Some(Dialog::Manager);
+                result.map(|count| {
+                    self.snapshot_message =
+                        Some(format!("Deleted {count} snapshots for this firmware."));
+                })
             }
             Some(Action::Compare(name)) => {
                 let result = self.select_snapshot(Some(name));
@@ -2095,6 +2153,96 @@ mod tests {
         assert!(restarted.snapshot_label().is_none());
         assert!(restarted.comparison.is_none());
     }
+    #[test]
+    fn delete_all_snapshots_confirms_and_only_deletes_the_current_firmware() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        let other_root = directory.path().join("other-build");
+        fixture(&root);
+        fixture(&other_root);
+        std::fs::copy(root.join("app.elf"), root.join("other.elf")).unwrap();
+        let mut app = open(&root);
+        app.open(root.join("other.elf"));
+        finish(&mut app);
+        app.take_snapshot("other firmware").unwrap();
+        let other_path = snapshot_path(
+            app.preferences_file.as_ref().unwrap(),
+            &root,
+            &app.snapshots.snapshots[0],
+        )
+        .unwrap();
+        app.open(root.join("app.elf"));
+        finish(&mut app);
+        app.take_snapshot("first").unwrap();
+        app.take_snapshot("second").unwrap();
+        app.select_snapshot(Some("first".into())).unwrap();
+        let current_paths: Vec<_> = app
+            .snapshots
+            .snapshots
+            .iter()
+            .filter(|s| s.firmware == "app.elf")
+            .map(|s| snapshot_path(app.preferences_file.as_ref().unwrap(), &root, s).unwrap())
+            .collect();
+        let mut other_app = open(&other_root);
+        other_app.take_snapshot("other build").unwrap();
+        let other_build_path = snapshot_path(
+            other_app.preferences_file.as_ref().unwrap(),
+            &other_root,
+            &other_app.snapshots.snapshots[0],
+        )
+        .unwrap();
+        app.open_snapshot_manager();
+        let ctx = egui::Context::default();
+        click_manager(&ctx, &mut app, "Delete all snapshots");
+        assert!(matches!(app.snapshot_dialog, Some(Dialog::DeleteAll)));
+        assert!(current_paths.iter().all(|path| path.is_file()));
+        click_manager(&ctx, &mut app, "Cancel");
+        assert_eq!(app.snapshot_label(), Some("first"));
+        assert!(current_paths.iter().all(|path| path.is_file()));
+        click_manager(&ctx, &mut app, "Delete all snapshots");
+        click_manager(&ctx, &mut app, "Delete all snapshots");
+        assert!(matches!(app.snapshot_dialog, Some(Dialog::Manager)));
+        assert!(current_paths.iter().all(|path| !path.exists()));
+        assert!(!current_paths[0].parent().unwrap().exists());
+        assert!(other_path.is_file());
+        assert!(other_build_path.is_file());
+        assert!(app.snapshot_label().is_none());
+        assert!(app.comparison.is_none());
+        click_manager(&ctx, &mut app, "Delete all snapshots");
+        assert!(
+            matches!(app.snapshot_dialog, Some(Dialog::Manager)),
+            "Delete-all must be disabled for an empty list"
+        );
+        let restarted = open(&root);
+        assert_eq!(restarted.snapshots.snapshots.len(), 1);
+        assert_eq!(restarted.snapshots.snapshots[0].firmware, "other.elf");
+    }
+
+    #[test]
+    fn delete_all_snapshots_keeps_failed_deletions_and_reports_partial_success() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        app.take_snapshot("blocked").unwrap();
+        app.take_snapshot("deletable").unwrap();
+        app.select_snapshot(Some("blocked".into())).unwrap();
+        let path = snapshot_path(
+            app.preferences_file.as_ref().unwrap(),
+            &root,
+            &app.snapshots.snapshots[0],
+        )
+        .unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let error = app.delete_all_snapshots().unwrap_err();
+        assert!(error.contains("Deleted 1 snapshots"));
+        assert!(error.contains("blocked"));
+        assert_eq!(app.snapshots.snapshots.len(), 1);
+        assert_eq!(app.snapshot_label(), Some("blocked"));
+        assert!(path.is_dir());
+    }
+
     #[test]
     fn failed_background_saves_show_errors_inside_the_snapshot_manager() {
         let directory = tempfile::tempdir().unwrap();
