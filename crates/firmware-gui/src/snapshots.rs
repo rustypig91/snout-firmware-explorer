@@ -3,6 +3,7 @@ use firmware_analysis_core::{format_bytes, FileTree, Symbol};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashSet},
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
 };
 
@@ -136,10 +137,11 @@ fn snapshot_row(ui: &mut egui::Ui, snapshot: &Snapshot, active: bool) -> (bool, 
     (compare, delete)
 }
 #[derive(serde::Serialize, serde::Deserialize)]
-struct SnapshotFile {
+// Borrow the report when saving; deserialize into owned data when loading.
+struct SnapshotFile<B = PathBuf, S = Snapshot> {
     version: u32,
-    build_folder: PathBuf,
-    snapshot: Snapshot,
+    build_folder: B,
+    snapshot: S,
 }
 fn component(identity: &str) -> String {
     // Three components share the Windows path budget with the configuration
@@ -165,12 +167,6 @@ fn write_snapshot(
     overwrite: bool,
 ) -> Result<(), String> {
     let path = snapshot_path(preferences, root, snapshot)?;
-    let value = serde_json::to_value(SnapshotFile {
-        version: 1,
-        build_folder: root.into(),
-        snapshot: snapshot.clone(),
-    })
-    .map_err(|e| e.to_string())?;
     let parent = path.parent().unwrap();
     std::fs::create_dir_all(parent).map_err(|e| {
         format!(
@@ -190,7 +186,20 @@ fn write_snapshot(
     let destination = parent.join(path.file_name().unwrap());
     let mut staged = tempfile::NamedTempFile::new_in(&parent)
         .map_err(|e| format!("Could not stage snapshot in {}: {e}", parent.display()))?;
-    serde_json::to_writer_pretty(&mut staged, &value).map_err(|e| e.to_string())?;
+    {
+        let mut writer = BufWriter::with_capacity(64 * 1024, staged.as_file_mut());
+        serde_json::to_writer(
+            &mut writer,
+            &SnapshotFile {
+                version: 1,
+                build_folder: root,
+                snapshot,
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        // Flush before syncing and persisting, and propagate buffered write errors.
+        writer.flush().map_err(|e| e.to_string())?;
+    }
     staged.as_file().sync_all().map_err(|e| e.to_string())?;
     let saved = if overwrite {
         staged.persist(&destination)
@@ -1250,8 +1259,9 @@ mod tests {
         .collect();
         assert_eq!(snapshot_files.len(), 2);
         for path in &snapshot_files {
-            let stored: SnapshotFile =
-                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            let data = std::fs::read(path).unwrap();
+            assert!(!data.contains(&b'\n'), "Snapshot JSON should be compact");
+            let stored: SnapshotFile = serde_json::from_slice(&data).unwrap();
             assert_eq!(stored.version, 1);
             assert_eq!(stored.build_folder, root);
             assert_eq!(stored.snapshot.analysis.totals, original);
