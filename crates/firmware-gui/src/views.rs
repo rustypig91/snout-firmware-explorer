@@ -37,9 +37,11 @@ struct RowKey {
     build_root: Option<std::path::PathBuf>,
 }
 
+type CachedRows = RefCell<Option<(RowKey, Rc<Vec<Row>>)>>;
+
 #[derive(Default)]
 pub(super) struct TableCache {
-    rows: [RefCell<Option<(RowKey, Rc<Vec<Row>>)>>; View::ALL.len()],
+    rows: [CachedRows; View::ALL.len()],
     prepared: [Option<Rc<PreparedTable>>; View::ALL.len()],
 }
 

@@ -13,7 +13,7 @@ fn large_report_latency() {
     .unwrap();
     if let Ok(path) = std::env::var("SNOUT_PERF_ELF") {
         analysis = firmware_analysis_core::analyze_path(
-            &std::path::PathBuf::from(path),
+            std::path::PathBuf::from(path),
             &Default::default(),
         )
         .unwrap();
