@@ -205,7 +205,8 @@ impl Explorer {
         {
             self.pick_build();
         }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        // Leave Escape available for egui to dismiss the menu hierarchy too.
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.details = None;
             self.show_notes = false;
             self.show_about = false;
