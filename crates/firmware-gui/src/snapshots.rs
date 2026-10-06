@@ -904,7 +904,21 @@ impl Explorer {
         }
         let mut action = None;
         let width = (ctx.screen_rect().width() - 64.0).clamp(240.0, 520.0);
-        let response = egui::Modal::new(egui::Id::new("snapshot_manager"))
+        let id = egui::Id::new("snapshot_manager");
+        let mut area = egui::Modal::default_area(id);
+        if let Some(rect) = ctx.memory(|memory| memory.area_rect(id)) {
+            // Tiny layout differences can put the centered origin on opposite
+            // sides of a half-pixel boundary at fractional display scales.
+            // Discard layout noise below 1/64 pixel before Area rounds its position.
+            let scale = ctx.pixels_per_point();
+            let size = (rect.size() * scale * 64.0).round() / (scale * 64.0);
+            area = area.anchor(
+                egui::Align2::LEFT_TOP,
+                (ctx.screen_rect().size() - size) * 0.5,
+            );
+        }
+        let response = egui::Modal::new(id)
+            .area(area)
             .backdrop_color(egui::Color32::from_black_alpha(160))
             .frame(egui::Frame::window(&ctx.style()).inner_margin(egui::Margin::same(16.0)))
             .show(ctx, |ui| {
@@ -1624,6 +1638,57 @@ mod tests {
         assert!(snapshots.join("orphan-link").is_symlink());
         assert!(!orphan.exists());
     }
+    #[test]
+    fn snapshot_manager_stays_stationary_at_fractional_display_scales() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        app.take_snapshot("Before adding Bluetooth and enabling the diagnostics subsystem")
+            .unwrap();
+        let saved = app.snapshots.snapshots[0].clone();
+        for count in [0, 1, 3] {
+            app.snapshots.snapshots = vec![saved.clone(); count];
+            for (index, snapshot) in app.snapshots.snapshots.iter_mut().enumerate().skip(1) {
+                snapshot.name = format!("{} {index}", saved.name);
+            }
+            if count > 0 {
+                app.select_snapshot(Some(saved.name.clone())).unwrap();
+            }
+            for scale in [1.0, 1.1, 1.25, 1.5, 1.75, 2.0] {
+                app.open_snapshot_manager();
+                let ctx = egui::Context::default();
+                super::super::shell::configure_style(&ctx);
+                ctx.set_pixels_per_point(scale);
+                for physical_height in [500, 570, 577, 601, 773, 801, 843] {
+                    let screen = egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(801.0 / scale, physical_height as f32 / scale),
+                    );
+                    let mut settled = None;
+                    for frame in 0..20 {
+                        let _ = ctx.run(
+                            egui::RawInput {
+                                screen_rect: Some(screen),
+                                ..Default::default()
+                            },
+                            |ctx| app.show_snapshot_dialog(ctx),
+                        );
+                        let rect = ctx
+                            .memory(|memory| memory.area_rect(egui::Id::new("snapshot_manager")))
+                            .unwrap();
+                        if frame >= 10 {
+                            if let Some(previous) = settled {
+                                assert_eq!(rect, previous, "Snapshot manager moved at scale {scale}, count {count}, height {physical_height}, frame {frame}");
+                            }
+                            settled = Some(rect);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn snapshot_manager_is_compact_centered_and_places_the_name_label_left_of_the_field() {
         for size in [egui::vec2(800.0, 600.0), egui::vec2(1280.0, 900.0)] {
