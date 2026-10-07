@@ -522,6 +522,9 @@ pub fn analyze_bytes(
         totals,
         tls,
         unattributed,
+        memory_image: Some(std::sync::Arc::new(crate::memory::MemoryImage::from_elf(
+            &elf, bytes, &sections,
+        ))),
         sections,
         symbols,
         files,

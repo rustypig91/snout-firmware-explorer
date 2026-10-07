@@ -510,7 +510,7 @@ impl Explorer {
                             .clicked() {
                             if let Err(error) = self.select_snapshot(None) { self.snapshot_error = Some(error); }
                         }
-                        ui.label("Showing only differences · current minus baseline");
+                        ui.label(if self.view == View::Memory { "Current firmware only · Memory View does not support baseline comparison" } else { "Showing only differences · current minus baseline" });
                         if matches!(self.view, View::Symbols | View::Sections | View::MemoryMap) {
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 let selected = &mut self.show_address_changes[self.view as usize];
@@ -534,7 +534,7 @@ impl Explorer {
                 ui.collapsing("Which files are supported?", |ui| { ui.label("The folder and its subfolders are scanned for linked ELF images (including .elf, .axf and .out), .map and .su. Select firmware to analyze it; supporting files can be previewed. A unique same-name GNU linker map supplies memory capacities automatically. HEX and BIN lack the required metadata."); });
                 return;
             };
-            if self.view != View::Overview {
+            if !matches!(self.view, View::Overview | View::Memory) {
                 ui.horizontal_wrapped(|ui| {
                     ui.add(egui::TextEdit::singleline(&mut self.search).hint_text("Filter...").desired_width(200.0));
                     if ui.small_button("Clear").clicked() { self.search.clear(); self.selected_file = None; self.kind_filter = "All".into(); }
@@ -550,7 +550,7 @@ impl Explorer {
             }
             ui.push_id(self.view.label(), |ui| match self.view {
                 View::Overview => self.overview(ui, &a), View::Files => self.files(ui, &a), View::Symbols => self.symbols(ui, &a),
-                View::Sections => self.sections(ui, &a), View::MemoryMap => self.memory_map(ui, &a), View::Dependencies => self.dependency_view(ui, &a), View::Stack => self.stack_view(ui),
+                View::Sections => self.sections(ui, &a), View::MemoryMap => self.memory_map(ui, &a), View::Dependencies => self.dependency_view(ui, &a), View::Stack => self.stack_view(ui), View::Memory => self.memory_view(ui, &a),
             });
         });
     }

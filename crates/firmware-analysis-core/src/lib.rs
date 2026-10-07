@@ -6,6 +6,7 @@ pub mod dependencies;
 mod dwarf;
 mod elf;
 pub mod map;
+pub mod memory;
 mod model;
 pub mod regions;
 pub mod stack;
