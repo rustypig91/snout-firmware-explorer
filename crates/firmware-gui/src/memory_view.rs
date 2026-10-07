@@ -283,10 +283,14 @@ impl MemoryView {
     }
     fn navigate(&mut self) {
         let input = self.jump.trim();
-        let address =
-            u64::from_str_radix(input.trim_start_matches("0x").trim_start_matches("0X"), 16).ok();
+        let explicit_address = input
+            .strip_prefix("0x")
+            .or_else(|| input.strip_prefix("0X"));
+        let address = u64::from_str_radix(explicit_address.unwrap_or(input), 16).ok();
         let current_kind = self.ranges[self.range].kind;
-        let target = address.map(|a| (a, current_kind)).or_else(|| {
+        // Names such as `adc` are valid hexadecimal too. Prefer an exact name
+        // unless the user explicitly requests an address with a 0x prefix.
+        let symbol_target = if explicit_address.is_none() {
             let matches: Vec<_> = self
                 .annotations
                 .iter()
@@ -297,7 +301,10 @@ impl MemoryView {
                 .find(|a| a.kind == current_kind)
                 .or(matches.first())
                 .map(|a| (a.address, a.kind))
-        });
+        } else {
+            None
+        };
+        let target = symbol_target.or_else(|| address.map(|a| (a, current_kind)));
         let Some((address, kind)) = target else {
             self.error =
                 Some("Enter a hexadecimal address or an exact symbol/section name.".into());
@@ -1015,6 +1022,55 @@ mod tests {
         assert!(app.visible_rows < 50);
         assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "FFFFFFFFFFFFFFF0")));
     }
+    #[test]
+    fn hexadecimal_symbol_names_can_be_jumped_to_without_losing_address_navigation() {
+        let mut analysis = firmware_analysis_core::analyze_bytes(
+            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            "fixture",
+            &Default::default(),
+        )
+        .unwrap();
+        let mut symbol = analysis
+            .symbols
+            .iter()
+            .find(|s| s.size > 0)
+            .unwrap()
+            .clone();
+        symbol.name = "adc".into();
+        symbol.demangled_name = symbol.name.clone();
+        let mut prefixed_symbol = symbol.clone();
+        prefixed_symbol.name = "0xADC".into();
+        prefixed_symbol.demangled_name = prefixed_symbol.name.clone();
+        analysis.symbols = vec![symbol, prefixed_symbol];
+        let mut view = MemoryView::default();
+        view.prepare(&Arc::new(analysis));
+        let address = view
+            .annotations
+            .iter()
+            .find(|a| a.name == "adc")
+            .unwrap()
+            .address;
+        view.jump = "adc".into();
+        view.navigate();
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert_eq!(view.target, Some(address));
+
+        // An explicit prefix always means an address, even if a symbol matches.
+        view.jump = "0xADC".into();
+        view.navigate();
+        assert!(view.error.is_some());
+        for input in [
+            format!("{address:X}"),
+            format!("0x{address:X}"),
+            format!("0X{address:X}"),
+        ] {
+            view.jump = input;
+            view.navigate();
+            assert!(view.error.is_none());
+            assert_eq!(view.target, Some(address));
+        }
+    }
+
     #[test]
     fn defaults_and_navigation_follow_firmware_and_load_addresses() {
         let analysis = Arc::new(
