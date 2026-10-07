@@ -550,8 +550,7 @@ impl Explorer {
                             egui::CollapsingHeader::new(format!("{} ({})", kind.label(), cache.artifacts[group].len()))
                                 .default_open(true).show(ui, |ui| {
                                     let height = ui.spacing().interact_size.y.max(ui.text_style_height(&egui::TextStyle::Body));
-                                    egui::ScrollArea::vertical().id_salt(("supporting_previews", group))
-                                        .max_height(180.0).show_rows(ui, height, cache.artifacts[group].len(), |ui, range| {
+                                    super::artifact_browser::show_rows(ui, height, cache.artifacts[group].len(), |ui, range| {
                                             for row in range {
                                                 let index = cache.artifacts[group][row];
                                                 let artifact = &build.artifacts[index];
@@ -635,8 +634,7 @@ impl Explorer {
                                             ui.small("No map files found.");
                                         }
                                         let height = ui.spacing().interact_size.y;
-                                        egui::ScrollArea::vertical().id_salt("map_rows")
-                                            .max_height(180.0).show_rows(ui, height, cache.artifacts[1].len(), |ui, range| {
+                                        super::artifact_browser::show_rows(ui, height, cache.artifacts[1].len(), |ui, range| {
                                                 for row in range {
                                                     let map_index = cache.artifacts[1][row];
                                                     let map = &build.artifacts[map_index];
