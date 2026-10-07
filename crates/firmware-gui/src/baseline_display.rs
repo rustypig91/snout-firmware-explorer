@@ -214,7 +214,14 @@ fn changed_entries_with_addresses(
     let paths: Vec<_> = changed
         .iter()
         .filter(|(domain, _)| domain == "tree" || domain == "file")
-        .map(|(_, path)| path.trim_start_matches('/').to_owned())
+        // Match aggregate::attribute's tree components: relative DWARF
+        // paths may contain `.` components or repeated separators.
+        .map(|(_, path)| {
+            path.split('/')
+                .filter(|part| !part.is_empty() && *part != ".")
+                .collect::<Vec<_>>()
+                .join("/")
+        })
         .collect();
     for mut path in paths {
         loop {
@@ -668,6 +675,47 @@ mod tests {
         assert!(
             !changed_entries_with_addresses(&current, &old, None, None, false).contains(&region)
         );
+    }
+
+    #[test]
+    fn symbol_only_changes_keep_normalized_tree_paths_visible() {
+        for owner in ["./src//main.c", "/project/./src//main.c", "src\\.\\main.c"] {
+            let mut old = fixture();
+            let symbol = &mut old.symbols[0];
+            symbol.source_file = Some(owner.into());
+            let normalized = owner.replace('\\', "/");
+            let components: Vec<_> = normalized
+                .split('/')
+                .filter(|part| !part.is_empty() && *part != ".")
+                .collect();
+            let mut leaf = FileTree {
+                name: components.last().unwrap().to_string(),
+                ..Default::default()
+            };
+            for part in components[..components.len() - 1].iter().rev() {
+                leaf = FileTree {
+                    name: (*part).into(),
+                    children: vec![leaf],
+                    ..Default::default()
+                };
+            }
+            old.tree = FileTree {
+                name: "Project".into(),
+                children: vec![leaf],
+                ..Default::default()
+            };
+            let mut current = old.clone();
+            current.symbols[0].weak = !current.symbols[0].weak;
+            let changed = changed_entries(&current, &old, None, None);
+            assert!(changed.contains(&("file".into(), normalized.clone())));
+            for end in 1..=components.len() {
+                let path = components[..end].join("/");
+                assert!(
+                    changed.contains(&("tree".into(), path.clone())),
+                    "{owner}: {path}"
+                );
+            }
+        }
     }
 
     #[test]
