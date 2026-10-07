@@ -295,6 +295,7 @@ fn compute_large(input: &LayoutInput) -> GraphLayout {
     } else {
         bounds.bottom()
     };
+    let edge_pairs: BTreeSet<_> = input.edges.iter().map(|(from, to)| (from, to)).collect();
     let edges = input
         .edges
         .iter()
@@ -328,7 +329,23 @@ fn compute_large(input: &LayoutInput) -> GraphLayout {
             } else {
                 gutters[to.as_str()].0
             };
-            let route = if source_band.abs_diff(target_band) <= 1 {
+            let route = if source_band.abs_diff(target_band) == 1
+                && (start.y - end.y).abs() < 1.0
+                && edge_pairs.contains(&(to, from))
+            {
+                // Aligned reciprocal connections otherwise collapse to the
+                // same straight line, making one direction impossible to pick.
+                // Separate their horizontal tracks inside the shared gutter.
+                let track = start.y + if from < to { -6.0 } else { 6.0 };
+                vec![
+                    start,
+                    egui::pos2(source_gutter, start.y),
+                    egui::pos2(source_gutter, track),
+                    egui::pos2(target_gutter, track),
+                    egui::pos2(target_gutter, end.y),
+                    end,
+                ]
+            } else if source_band.abs_diff(target_band) <= 1 {
                 // Same/adjacent bands can connect entirely through their shared
                 // gutter instead of taking every edge around the whole graph.
                 let bridge =
@@ -1336,5 +1353,38 @@ fn wrapped_directory_headings_do_not_overlap() {
                 "wrapped directory headings overlap"
             );
         }
+    }
+}
+
+#[test]
+fn adjacent_directory_bands_keep_reciprocal_edges_separately_selectable() {
+    let input = LayoutInput {
+        nodes: (0..101)
+            .map(|i| NodeSpec {
+                id: format!("unit{i:03}"),
+                directory: if i == 0 { "a" } else { "b" }.into(),
+                size: egui::vec2(180.0, 48.0),
+            })
+            .collect(),
+        edges: vec![
+            ("unit000".into(), "unit001".into()),
+            ("unit001".into(), "unit000".into()),
+        ],
+        grouped: true,
+        ram: false,
+        vertical: false,
+    };
+    let geometry = compute(&input);
+    for (edge, other) in [
+        (&geometry.edges[0], &geometry.edges[1]),
+        (&geometry.edges[1], &geometry.edges[0]),
+    ] {
+        assert!(route_is_clear(&edge.points, &geometry.cards));
+        assert!(
+            edge.points
+                .iter()
+                .any(|point| super::curve_distance(&other.points, *point) > 1.0),
+            "reciprocal arrows share their entire selectable path"
+        );
     }
 }
