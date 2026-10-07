@@ -165,14 +165,31 @@ fn changed_entries_with_addresses(
         }
         map
     }
-    let current = entries(current, stack, addresses);
-    let old = entries(old, old_stack, addresses);
-    let mut changed: HashSet<_> = current
+    let current_entries = entries(current, stack, addresses);
+    let old_entries = entries(old, old_stack, addresses);
+    let mut changed: HashSet<_> = current_entries
         .keys()
-        .chain(old.keys())
-        .filter(|id| current.get(*id) != old.get(*id))
+        .chain(old_entries.keys())
+        .filter(|id| current_entries.get(*id) != old_entries.get(*id))
         .cloned()
         .collect();
+    // File totals and symbol counts can stay unchanged after a replacement.
+    // Keep both owners available for navigating to their changed symbols.
+    let owners: Vec<_> = current
+        .symbols
+        .iter()
+        .chain(&old.symbols)
+        .filter(|symbol| changed.contains(&("symbol".into(), symbol_key(symbol))))
+        .map(|symbol| {
+            symbol
+                .source_file
+                .as_ref()
+                .or(symbol.compilation_unit.as_ref())
+                .map(|path| path.replace('\\', "/"))
+                .unwrap_or_else(|| "[unattributed]".into())
+        })
+        .collect();
+    changed.extend(owners.into_iter().map(|owner| ("file".into(), owner)));
     // Keep directory ancestors visible even when sibling changes cancel out.
     let paths: Vec<_> = changed
         .iter()
@@ -414,12 +431,16 @@ impl Explorer {
         self.snapshot_label().is_some()
     }
     pub(super) fn diff_visible(&self, domain: &str, id: &str) -> bool {
+        self.diff_visible_in_view(domain, id, self.view)
+    }
+
+    pub(super) fn diff_visible_in_view(&self, domain: &str, id: &str, view: super::View) -> bool {
         !self.diffs_active()
             || self.baseline_display.as_ref().is_some_and(|d| {
                 let changes = if matches!(
-                    self.view,
+                    view,
                     super::View::Symbols | super::View::Sections | super::View::MemoryMap
-                ) && !self.show_address_changes[self.view as usize]
+                ) && !self.show_address_changes[view as usize]
                 {
                     &d.changed_without_addresses
                 } else {
@@ -569,5 +590,40 @@ mod tests {
         assert!(changed.contains(&("dependency".into(), from)));
         assert!(changed.contains(&("dependency".into(), to)));
         assert!(changed.iter().all(|(domain, _)| domain == "dependency"));
+    }
+
+    #[test]
+    fn symbol_only_changes_keep_file_and_tree_drilldown_visible() {
+        let old = fixture();
+        let mut current = old.clone();
+        let symbol = current
+            .symbols
+            .iter_mut()
+            .find(|s| {
+                s.source_file
+                    .as_ref()
+                    .or(s.compilation_unit.as_ref())
+                    .is_some()
+            })
+            .unwrap();
+        let owner = symbol
+            .source_file
+            .as_ref()
+            .or(symbol.compilation_unit.as_ref())
+            .unwrap()
+            .replace('\\', "/");
+        symbol.name = "same_size_replacement".into();
+        symbol.demangled_name = symbol.name.clone();
+        let changed = changed_entries(&current, &old, None, None);
+        assert!(changed.contains(&("file".into(), owner.clone())));
+        let mut path = owner.trim_start_matches('/');
+        loop {
+            assert!(changed.contains(&("tree".into(), path.into())));
+            match path.rsplit_once('/') {
+                Some((parent, _)) => path = parent,
+                None => break,
+            }
+        }
+        assert!(changed.contains(&("tree".into(), String::new())));
     }
 }

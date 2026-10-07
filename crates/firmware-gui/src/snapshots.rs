@@ -3182,6 +3182,34 @@ mod tests {
     }
 
     #[test]
+    fn overview_contributors_do_not_depend_on_the_previous_tabs_address_filter() {
+        use super::super::View;
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        app.take_snapshot("baseline").unwrap();
+        app.select_snapshot(Some("baseline".into())).unwrap();
+        let mut current = (**app.analysis.as_ref().unwrap()).clone();
+        let (index, symbol) = current
+            .symbols
+            .iter_mut()
+            .enumerate()
+            .find(|(_, s)| s.usage.flash > 0)
+            .unwrap();
+        symbol.address += 16;
+        symbol.normalized_address += 16;
+        app.analysis = Some(Arc::new(current));
+        app.sync_snapshot_comparison();
+        let display = app.baseline_display_analysis().unwrap();
+        app.change_view(View::MemoryMap);
+        app.ensure_region_cache(&display);
+        app.change_view(View::Overview);
+        app.ensure_region_cache(&display);
+        assert_eq!(app.top_symbols[0], [index]);
+    }
+
+    #[test]
     fn overview_keeps_drilldown_to_symbol_changes_with_unchanged_section_totals() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");

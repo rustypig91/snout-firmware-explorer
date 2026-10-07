@@ -43,7 +43,9 @@ impl Explorer {
                 .collect();
             for (slot, metric) in [Metric::Flash, Metric::Ram].into_iter().enumerate() {
                 let mut files: Vec<_> = (0..a.files.len())
-                    .filter(|&i| self.diff_visible("file", &a.files[i].path))
+                    .filter(|&i| {
+                        self.diff_visible_in_view("file", &a.files[i].path, View::Overview)
+                    })
                     .filter(|&i| {
                         a.files[i].path != "[unattributed]" && metric.value(a.files[i].usage) > 0
                     })
@@ -57,7 +59,13 @@ impl Explorer {
                 files.truncate(5);
                 self.top_files[slot] = files;
                 let mut symbols: Vec<_> = (0..a.symbols.len())
-                    .filter(|&i| self.diff_visible("symbol", &symbol_key(&a.symbols[i])))
+                    .filter(|&i| {
+                        self.diff_visible_in_view(
+                            "symbol",
+                            &symbol_key(&a.symbols[i]),
+                            View::Overview,
+                        )
+                    })
                     .filter(|&i| metric.value(a.symbols[i].usage) > 0)
                     .collect();
                 symbols.sort_by(|&i, &j| {
