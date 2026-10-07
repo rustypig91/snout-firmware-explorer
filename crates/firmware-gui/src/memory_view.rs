@@ -728,6 +728,13 @@ impl Explorer {
                                                 else {
                                                     continue;
                                                 };
+                                                // Full lines include padding outside the selected
+                                                // range. It is not an inspected unknown byte.
+                                                if byte_address < range.start
+                                                    || byte_address >= range.end
+                                                {
+                                                    continue;
+                                                }
                                                 let response = ui.interact(
                                                     rect,
                                                     ui.id().with(("hex_byte", byte_address)),
@@ -898,12 +905,18 @@ mod tests {
             .unwrap(),
         );
         for unit in [1, 2, 4, 8] {
-            for little in [false, true] {
+            for (little, narrowed) in [(false, false), (true, false), (false, true), (true, true)] {
                 let mut app = Explorer::default();
                 app.memory_view.prepare(&analysis);
                 app.memory_view.unit = unit;
                 app.memory_view.little = little;
                 let base = app.memory_view.ranges[0].start & !15;
+                if narrowed {
+                    // Pad both ends of the first group while retaining real ELF
+                    // contents underneath the excluded addresses.
+                    app.memory_view.ranges[0].start = base + 1;
+                    app.memory_view.ranges[0].end = base + unit.saturating_sub(1).max(2) as u64;
+                }
                 let ctx = egui::Context::default();
                 super::super::shell::configure_style(&ctx);
                 let mut render = |time, pointer: Option<egui::Pos2>| {
@@ -974,6 +987,25 @@ mod tests {
                         .iter()
                         .flat_map(|shape| outlines(&shape.shape))
                         .collect();
+                    let offset = if little {
+                        unit - 1 - display_index
+                    } else {
+                        display_index
+                    };
+                    if narrowed && (offset == 0 || offset >= unit.saturating_sub(1).max(2)) {
+                        assert!(
+                            rects.is_empty(),
+                            "Padding outside the range must not highlight"
+                        );
+                        render(time + 1.0, Some(pointer));
+                        let output = render(time + 2.0, Some(pointer));
+                        assert!(
+                            !output.shapes.iter().any(|shape| matches!(&shape.shape,
+                            egui::Shape::Text(text) if text.galley.text().contains("Address 0x"))),
+                            "Padding outside the range must not have a byte tooltip"
+                        );
+                        continue;
+                    }
                     assert_eq!(
                         rects.len(),
                         2,
@@ -984,11 +1016,6 @@ mod tests {
                     assert!((hex_rect.center().x - pointer.x).abs() < 1.0, "unit {unit}, little {little}, pair {display_index}: rect {hex_rect:?}, pointer {pointer:?}");
                     render(time + 1.0, Some(pointer));
                     let output = render(time + 2.0, Some(pointer));
-                    let offset = if little {
-                        unit - 1 - display_index
-                    } else {
-                        display_index
-                    };
                     let expected = format!("Address 0x{:X} · Flash", base + offset as u64);
                     assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains(&expected))),
                         "Missing {expected} for unit {unit}, little {little}, pair {display_index}");
