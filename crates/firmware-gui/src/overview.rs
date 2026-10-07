@@ -103,22 +103,6 @@ impl Explorer {
         }
         notes
     }
-    pub(super) fn pick_layout(&mut self) {
-        let mut dialog = rfd::FileDialog::new().add_filter("Linker map", &["map"]);
-        if let Some(build) = &self.build {
-            dialog = dialog.set_directory(&build.root);
-        }
-        if let Some(path) = dialog.pick_file() {
-            if path
-                .extension()
-                .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("map"))
-            {
-                self.apply_map(path);
-            } else {
-                self.configure(Some(path));
-            }
-        }
-    }
     pub(super) fn overview(&mut self, ui: &mut egui::Ui, a: &Analysis) {
         self.ensure_region_cache(a);
         let mut scroll = egui::ScrollArea::vertical().id_salt("overview_dashboard");
@@ -131,8 +115,7 @@ impl Explorer {
                 self.ram_composition(ui, a);
                 let display = self.baseline_display_analysis();
                 if let Some(tls) = &display.as_deref().unwrap_or(a).tls {
-                    ui.group(|ui| {
-                        ui.strong("Thread-local storage");
+                    ui.collapsing("Thread-local storage detected — click to view details", |ui| {
                         ui.label(format!("Template per thread: {} — {} initialized, {} zero-initialized; alignment {}", self.snapshot_bytes("tls", "", "template_size", tls.template_size), self.snapshot_bytes("tls", "", "initialized_size", tls.initialized_size), self.snapshot_bytes("tls", "", "zero_initialized_size", tls.zero_initialized_size), self.snapshot_bytes("tls", "", "alignment", tls.alignment)));
                         ui.label("Total TLS RAM is unknown. Static RAM excludes TLS templates; allocation may be inside existing stack reservations.");
                         ui.collapsing(format!("{} TLS variables", self.snapshot_count("counts", "", "tls", a.tls.as_ref().map_or(0, |t| t.symbols.len()) as u64)), |ui| {
@@ -144,13 +127,6 @@ impl Explorer {
                     });
                 }
                 self.growth_summary(ui);
-                let notes = self.visible_notes();
-                if let Some(first) = notes.first() {
-                    let count = notes.len();
-                    if ui.link(format!("{count} analysis notes")).on_hover_text(*first).clicked() {
-                        self.show_notes = true;
-                    }
-                }
                 ui.separator();
                 ui.horizontal_wrapped(|ui| {
                     ui.strong("Memory breakdown").on_hover_text("Initialized data and RAM code can occupy both Flash and RAM. All sections counts each section once.");
@@ -177,25 +153,13 @@ impl Explorer {
     }
 
     fn firmware_heading(&mut self, ui: &mut egui::Ui, a: &Analysis) {
-        let path = std::path::Path::new(&a.path);
-        ui.heading(path.file_name().unwrap_or_default().to_string_lossy());
         if let Some(name) = self.snapshot_label() {
             ui.label(format!(
                 "Comparing to snapshot: {name} · current minus baseline"
             ));
         }
-        let relative = self
-            .build
-            .as_ref()
-            .and_then(|b| path.strip_prefix(&b.root).ok())
-            .unwrap_or(path);
-        ui.label(format!(
-            "{} | {} / {}-bit",
-            display_path(&relative.to_string_lossy()),
-            a.metadata.architecture,
-            a.metadata.bitness
-        ));
         ui.collapsing("Firmware details", |ui| {
+            ui.label(format!("{} / {}-bit", a.metadata.architecture, a.metadata.bitness));
             ui.label(format!("{} endian | Entry {} | ELF {}",
                 a.metadata.endianness, self.snapshot_address("metadata", "", "entry_point", a.metadata.entry_point), self.snapshot_bytes("metadata", "", "file_size", a.metadata.file_size)));
             ui.label(display_path(&a.path));
@@ -270,24 +234,6 @@ impl Explorer {
                 ));
             }
         }
-        ui.horizontal_wrapped(|ui| {
-            let source = if self.layout_source.is_empty() {
-                "ELF inference"
-            } else {
-                &self.layout_source
-            };
-            ui.label(format!("Layout: {}", short_path(source, [])))
-                .on_hover_text(display_path(source));
-            if ui
-                .add_enabled(
-                    self.receiver.is_none(),
-                    egui::Button::new("Select linker map..."),
-                )
-                .clicked()
-            {
-                self.pick_layout();
-            }
-        });
     }
 
     fn ram_composition(&mut self, ui: &mut egui::Ui, a: &Analysis) {

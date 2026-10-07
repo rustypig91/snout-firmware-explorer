@@ -259,15 +259,25 @@ impl Explorer {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
         }
         egui::TopBottomPanel::top("workbench_tabs").show(ctx, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 for view in View::ALL {
                     let active = self.view == view;
                     let response = ui
-                        .add(
-                            egui::Button::new(view.label())
-                                .frame(false)
-                                .min_size(egui::vec2(62.0, 28.0)),
-                        )
+                        .scope(|ui| {
+                            let widgets = &mut ui.style_mut().visuals.widgets;
+                            widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
+                            widgets.inactive.bg_stroke = egui::Stroke::NONE;
+                            widgets.hovered.weak_bg_fill = egui::Color32::from_rgb(39, 62, 79);
+                            widgets.hovered.bg_stroke = egui::Stroke::NONE;
+                            widgets.active.weak_bg_fill = egui::Color32::from_rgb(48, 77, 98);
+                            widgets.active.bg_stroke = egui::Stroke::NONE;
+                            ui.add(
+                                egui::Button::new(view.label())
+                                    .min_size(egui::vec2(62.0, 28.0)),
+                            )
+                        })
+                        .inner
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .on_hover_text(view.tooltip());
                     if active {
                         let rect = response.rect;
@@ -440,6 +450,7 @@ impl Explorer {
                                 self.show_notes,
                                 format!("{} notes", self.visible_notes().len()),
                             )
+                            .on_hover_text("Analysis notes explain warnings, missing information and limitations that may affect the results. Click to view details.")
                             .clicked()
                     {
                         self.show_notes = !self.show_notes;
@@ -510,7 +521,7 @@ impl Explorer {
                             .clicked() {
                             if let Err(error) = self.select_snapshot(None) { self.snapshot_error = Some(error); }
                         }
-                        ui.label(if self.view == View::Memory { "Current firmware only · Memory View does not support baseline comparison" } else { "Showing only differences · current minus baseline" });
+                        ui.label(if self.view == View::Memory { "Current firmware only · Hex viewer does not support baseline comparison" } else { "Showing only differences · current minus baseline" });
                         if matches!(self.view, View::Symbols | View::Sections | View::MemoryMap) {
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 let selected = &mut self.show_address_changes[self.view as usize];

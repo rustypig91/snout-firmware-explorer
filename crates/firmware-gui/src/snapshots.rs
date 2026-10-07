@@ -3183,7 +3183,7 @@ mod tests {
                     .collect();
                 assert!(texts
                     .iter()
-                    .any(|text| text.contains("Memory View does not support baseline comparison")));
+                    .any(|text| text.contains("Hex viewer does not support baseline comparison")));
                 assert!(!texts
                     .iter()
                     .any(|text| text.contains("Showing only differences")));

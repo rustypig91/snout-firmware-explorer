@@ -3131,7 +3131,7 @@ fn llvm_map_preview_and_manual_import_preserve_analysis_and_capacity() {
 }
 
 #[test]
-fn overview_displays_tls_template_and_unknown_runtime_ram() {
+fn overview_collapses_tls_details_until_expanded() {
     let mut app = Explorer::default();
     let mut a = firmware_analysis_core::analyze_bytes(
         include_bytes!("../../../fixtures/build/cortex-m.elf"),
@@ -3174,9 +3174,52 @@ fn overview_displays_tls_template_and_unknown_runtime_ram() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("Thread-local storage"));
-    assert!(text.contains("Template per thread: 12 B"));
-    assert!(text.contains("Total TLS RAM is unknown"));
+    assert!(text.contains("Thread-local storage detected — click to view details"));
+    assert!(!text.contains("Template per thread:"));
+    assert!(!text.contains("Total TLS RAM is unknown"));
+    let header_pos = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text)
+                if text.galley.text().contains("Thread-local storage detected") =>
+            {
+                Some(text.pos + text.galley.size() * 0.5)
+            }
+            _ => None,
+        })
+        .unwrap();
+    let mut expanded = String::new();
+    for pressed in [true, false, false] {
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 900.0),
+                )),
+                events: vec![
+                    egui::Event::PointerMoved(header_pos),
+                    egui::Event::PointerButton {
+                        pos: header_pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                ..Default::default()
+            },
+            |ctx| app.show(ctx),
+        );
+        for shape in &output.shapes {
+            if let egui::Shape::Text(text) = &shape.shape {
+                expanded.push_str(text.galley.text());
+                expanded.push('\n');
+            }
+        }
+    }
+    assert!(expanded.contains("Template per thread: 12 B"));
+    assert!(expanded.contains("Total TLS RAM is unknown"));
+    assert!(expanded.contains("1 TLS variables"));
 }
 
 #[test]

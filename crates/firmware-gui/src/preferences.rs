@@ -178,6 +178,11 @@ impl Explorer {
             View::ALL
                 .into_iter()
                 .find(|v| Some(v.label()) == value["view"].as_str())
+                .or_else(|| match value["view"].as_str() {
+                    Some("Memory map") => Some(View::MemoryMap),
+                    Some("Memory View") => Some(View::Memory),
+                    _ => None,
+                })
                 .unwrap_or(View::Overview),
         );
         let Some(folder) = value["folder"]
