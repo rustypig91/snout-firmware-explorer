@@ -173,6 +173,22 @@ fn changed_entries_with_addresses(
         .filter(|id| current_entries.get(*id) != old_entries.get(*id))
         .cloned()
         .collect();
+    // Region occupancy can be unchanged while one of its symbols changes.
+    // Preserve the region selector as a path to those symbol differences.
+    let changed_regions: Vec<_> = current_entries
+        .iter()
+        .chain(&old_entries)
+        .filter(|((domain, _), values)| {
+            domain == "region"
+                && values.iter().any(|value| {
+                    value[3].as_array().unwrap().iter().any(|symbol| {
+                        changed.contains(&("symbol".into(), symbol[0].as_str().unwrap().into()))
+                    })
+                })
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    changed.extend(changed_regions);
     // File totals and symbol counts can stay unchanged after a replacement.
     // Keep both owners available for navigating to their changed symbols.
     let owners: Vec<_> = current
@@ -590,6 +606,34 @@ mod tests {
         assert!(changed.contains(&("dependency".into(), from)));
         assert!(changed.contains(&("dependency".into(), to)));
         assert!(changed.iter().all(|(domain, _)| domain == "dependency"));
+    }
+
+    #[test]
+    fn symbol_metadata_changes_keep_region_drilldown_visible() {
+        let mut old = fixture();
+        let index = old.symbols.iter().position(|s| s.size > 0).unwrap();
+        let symbol = &old.symbols[index];
+        old.options.regions = vec![firmware_analysis_core::MemoryRegion {
+            name: "symbol region".into(),
+            start: symbol.normalized_address,
+            size: symbol.size,
+            kind: firmware_analysis_core::MemoryKind::Flash,
+        }];
+        let mut current = old.clone();
+        current.symbols[index].weak = !current.symbols[index].weak;
+        let region = ("region".into(), "symbol region".into());
+        for addresses in [false, true] {
+            let changed = changed_entries_with_addresses(&current, &old, None, None, addresses);
+            assert!(changed.contains(&region));
+            assert!(changed.contains(&("symbol".into(), symbol_key(&current.symbols[index]))));
+        }
+        current.symbols[index].weak = old.symbols[index].weak;
+        current.symbols[index].address += 1;
+        // Keep physical placement unchanged to isolate address-only metadata.
+        assert!(changed_entries(&current, &old, None, None).contains(&region));
+        assert!(
+            !changed_entries_with_addresses(&current, &old, None, None, false).contains(&region)
+        );
     }
 
     #[test]
