@@ -20,12 +20,21 @@ fn write_preferences(
         )
     })?;
     std::fs::create_dir_all(parent)?;
+    // tempfile uses Win32 paths directly. Canonicalization supplies the
+    // extended-length prefix required when the configuration path is long.
+    let parent = std::fs::canonicalize(parent)?;
+    let destination = parent.join(path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Missing preferences filename",
+        )
+    })?);
     // Stage alongside the destination so replacement stays on one filesystem.
     // Keep the last saved workspace intact until the new file is complete.
-    let mut staged = tempfile::NamedTempFile::new_in(parent)?;
+    let mut staged = tempfile::NamedTempFile::new_in(&parent)?;
     serde_json::to_writer_pretty(&mut staged, value)?;
     staged.as_file().sync_all()?;
-    staged.persist(path).map_err(|error| error.error)?;
+    staged.persist(destination).map_err(|error| error.error)?;
     Ok(())
 }
 
@@ -190,6 +199,30 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use std::io::Read;
+
+    #[test]
+    fn preferences_save_and_replace_beyond_windows_max_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory
+            .path()
+            .join("long-config-directory-".repeat(6))
+            .join("nested-config-directory-".repeat(6))
+            .join("workspace.json");
+        assert!(path.as_os_str().len() > 260);
+        for view in ["Overview", "Symbols"] {
+            let value = serde_json::json!({"version": 1, "view": view});
+            write_preferences(&path, &value).unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap())
+                    .unwrap(),
+                value
+            );
+            assert_eq!(
+                std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+                1
+            );
+        }
+    }
 
     #[test]
     fn saves_replace_complete_preferences_without_truncating_the_previous_file() {
