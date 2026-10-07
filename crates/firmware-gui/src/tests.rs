@@ -2256,6 +2256,102 @@ fn selected_report_folder_remains_recursive_and_discovers_new_reports_on_refresh
 }
 
 #[test]
+fn sidebar_scrolls_past_long_supporting_lists_to_the_next_firmware() {
+    use firmware_analysis_core::build::{Artifact, ArtifactKind, BuildFolder};
+    let root = std::env::temp_dir().join("snout-continuous-sidebar/build");
+    let elf = root.join("app.elf");
+    let analysis = firmware_analysis_core::analyze_bytes(
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        &elf.to_string_lossy(),
+        &Default::default(),
+    )
+    .unwrap();
+    let mut artifacts = vec![Artifact {
+        path: elf,
+        kind: ArtifactKind::Firmware,
+    }];
+    for (extension, kind) in [("map", ArtifactKind::Map), ("su", ArtifactKind::StackUsage)] {
+        artifacts.extend((0..2000).map(|i| Artifact {
+            path: root.join(format!("file_{i:04}.{extension}")),
+            kind,
+        }));
+    }
+    artifacts.push(Artifact {
+        path: root.join("second.elf"),
+        kind: ArtifactKind::Firmware,
+    });
+    let mut app = Explorer {
+        build: Some(Arc::new(BuildFolder {
+            root,
+            artifacts,
+            warnings: vec![],
+        })),
+        analysis: Some(Arc::new(analysis)),
+        ..Default::default()
+    };
+    let ctx = egui::Context::default();
+    ctx.style_mut(|style| style.animation_time = 0.0);
+    let mut frame = |scroll| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 500.0),
+                )),
+                events: if scroll {
+                    vec![
+                        egui::Event::PointerMoved(egui::pos2(100.0, 250.0)),
+                        egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(0.0, -1_000_000.0),
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ]
+                } else {
+                    vec![]
+                },
+                ..Default::default()
+            },
+            |ctx| app.build_browser(ctx),
+        )
+    };
+    let labels = |output: &egui::FullOutput| {
+        output
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Text(t) => Some(t.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    frame(false);
+    let first = labels(&frame(false));
+    assert!(first.iter().any(|s| s == "file_0000.map"));
+    assert!(
+        !first.iter().any(|s| s.starts_with("Stack usage files")),
+        "the map list must occupy its full height rather than a nested viewport"
+    );
+    assert!(
+        first.len() < 100,
+        "offscreen supporting rows should be skipped"
+    );
+    let mut last = Vec::new();
+    for _ in 0..20 {
+        last = labels(&frame(true));
+    }
+    assert!(
+        last.iter().any(|s| s == "file_1999.su"),
+        "last report must be reachable: {last:?}"
+    );
+    assert!(
+        last.iter().any(|s| s == "second.elf"),
+        "scrolling over supporting files must reach the next firmware: {last:?}"
+    );
+    assert!(last.len() < 100);
+}
+
+#[test]
 fn sidebar_large_firmware_list_only_builds_visible_rows() {
     use firmware_analysis_core::build::{Artifact, ArtifactKind, BuildFolder};
     let root = std::env::temp_dir().join("snout-firmware-list/build");

@@ -7,6 +7,35 @@ use std::{
     sync::Arc,
 };
 
+/// Reserve the full list height while drawing only rows in the parent's viewport.
+/// The enclosing sidebar owns scrolling, including across section boundaries.
+pub(super) fn show_rows(
+    ui: &mut egui::Ui,
+    row_height: f32,
+    total_rows: usize,
+    add_contents: impl FnOnce(&mut egui::Ui, std::ops::Range<usize>),
+) {
+    let spacing = ui.spacing().item_spacing.y;
+    let stride = row_height + spacing;
+    let top = ui.next_widget_position();
+    let height = (stride * total_rows as f32 - spacing).max(0.0);
+    let full_rect = egui::Rect::from_min_size(top, egui::vec2(ui.available_width(), height));
+    let clip = ui.clip_rect();
+    let first = (((clip.min.y - top.y) / stride).floor().max(0.0) as usize).min(total_rows);
+    let end = ((((clip.max.y - top.y) / stride).ceil().max(0.0) as usize).saturating_add(1))
+        .min(total_rows);
+    let end = end.max(first);
+    let rect = egui::Rect::from_x_y_ranges(
+        full_rect.x_range(),
+        top.y + first as f32 * stride..=top.y + end as f32 * stride,
+    );
+    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
+        ui.skip_ahead_auto_ids(first);
+        add_contents(ui, first..end);
+    });
+    ui.advance_cursor_after_rect(full_rect);
+}
+
 pub(super) struct BrowserCache {
     pub build: Arc<BuildFolder>,
     pub analysis: Option<Arc<Analysis>>,
@@ -203,79 +232,75 @@ impl BrowserCache {
             .max(ui.text_style_height(&egui::TextStyle::Body));
         let mut selection = None;
         let mut toggle = None;
-        egui::ScrollArea::vertical()
-            .id_salt("stack_report_rows")
-            .max_height(ui.available_height().max(120.0))
-            .show_rows(ui, height, self.visible.len(), |ui, range| {
-                for row in range {
-                    let node = &self.nodes[self.visible[row]];
-                    ui.push_id(&node.path, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                            ui.add_space((node.depth as f32 * 8.0).min(80.0));
-                            if node.directory {
-                                let open = !self.closed.contains(&node.path)
-                                    || self.search.as_ref().is_some_and(|s| !s.is_empty());
-                                let response = ui.add(
-                                    egui::Button::new("")
-                                        .small()
-                                        .min_size(egui::vec2(18.0, 18.0)),
-                                );
-                                let center = response.rect.center();
-                                let points = if open {
-                                    vec![
-                                        center + egui::vec2(-4.0, -2.0),
-                                        center + egui::vec2(4.0, -2.0),
-                                        center + egui::vec2(0.0, 3.0),
-                                    ]
-                                } else {
-                                    vec![
-                                        center + egui::vec2(-2.0, -4.0),
-                                        center + egui::vec2(3.0, 0.0),
-                                        center + egui::vec2(-2.0, 4.0),
-                                    ]
-                                };
-                                ui.painter().add(egui::Shape::convex_polygon(
-                                    points,
-                                    ui.style().interact(&response).fg_stroke.color,
-                                    egui::Stroke::NONE,
-                                ));
-                                if response
-                                    .on_hover_text(if open {
-                                        "Collapse folder"
-                                    } else {
-                                        "Expand folder"
-                                    })
-                                    .clicked()
-                                {
-                                    toggle = Some(node.path.clone());
-                                }
+        show_rows(ui, height, self.visible.len(), |ui, range| {
+            for row in range {
+                let node = &self.nodes[self.visible[row]];
+                ui.push_id(&node.path, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                        ui.add_space((node.depth as f32 * 8.0).min(80.0));
+                        if node.directory {
+                            let open = !self.closed.contains(&node.path)
+                                || self.search.as_ref().is_some_and(|s| !s.is_empty());
+                            let response = ui.add(
+                                egui::Button::new("")
+                                    .small()
+                                    .min_size(egui::vec2(18.0, 18.0)),
+                            );
+                            let center = response.rect.center();
+                            let points = if open {
+                                vec![
+                                    center + egui::vec2(-4.0, -2.0),
+                                    center + egui::vec2(4.0, -2.0),
+                                    center + egui::vec2(0.0, 3.0),
+                                ]
                             } else {
-                                ui.add_space(18.0);
-                            }
-                            let mut checked = node.total > 0 && node.total == node.checked;
-                            let label = if node.directory {
-                                format!("{} ({}/{})", node.label, node.checked, node.total)
-                            } else {
-                                node.label.clone()
+                                vec![
+                                    center + egui::vec2(-2.0, -4.0),
+                                    center + egui::vec2(3.0, 0.0),
+                                    center + egui::vec2(-2.0, 4.0),
+                                ]
                             };
-                            if ui
-                                .add(
-                                    egui::Checkbox::new(&mut checked, label).indeterminate(
-                                        node.checked > 0 && node.checked < node.total,
-                                    ),
-                                )
-                                .on_hover_text(super::display::display_path(
-                                    &node.path.to_string_lossy(),
-                                ))
-                                .changed()
+                            ui.painter().add(egui::Shape::convex_polygon(
+                                points,
+                                ui.style().interact(&response).fg_stroke.color,
+                                egui::Stroke::NONE,
+                            ));
+                            if response
+                                .on_hover_text(if open {
+                                    "Collapse folder"
+                                } else {
+                                    "Expand folder"
+                                })
+                                .clicked()
                             {
-                                selection = Some((node.path.clone(), checked));
+                                toggle = Some(node.path.clone());
                             }
-                        });
+                        } else {
+                            ui.add_space(18.0);
+                        }
+                        let mut checked = node.total > 0 && node.total == node.checked;
+                        let label = if node.directory {
+                            format!("{} ({}/{})", node.label, node.checked, node.total)
+                        } else {
+                            node.label.clone()
+                        };
+                        if ui
+                            .add(
+                                egui::Checkbox::new(&mut checked, label)
+                                    .indeterminate(node.checked > 0 && node.checked < node.total),
+                            )
+                            .on_hover_text(super::display::display_path(
+                                &node.path.to_string_lossy(),
+                            ))
+                            .changed()
+                        {
+                            selection = Some((node.path.clone(), checked));
+                        }
                     });
-                }
-            });
+                });
+            }
+        });
         if let Some(path) = toggle {
             if !self.closed.remove(&path) {
                 self.closed.insert(path);
@@ -371,7 +396,9 @@ mod tests {
                 },
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        cache.report_ui(ui);
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            cache.report_ui(ui);
+                        });
                     });
                 },
             )
