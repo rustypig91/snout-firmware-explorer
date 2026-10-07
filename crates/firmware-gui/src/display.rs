@@ -52,6 +52,7 @@ pub(super) fn short_path<'a>(path: &str, peers: impl IntoIterator<Item = &'a str
 pub(super) struct SourcePaths {
     labels: std::collections::HashMap<String, String>,
     full: std::collections::HashMap<String, String>,
+    tree: std::collections::HashMap<String, String>,
 }
 
 impl SourcePaths {
@@ -81,23 +82,29 @@ impl SourcePaths {
             .iter()
             .filter_map(|s| s.source_file.as_deref())
             .collect();
-        // STT_FILE labels are not proven filesystem locations. Resolve only
-        // source paths and DWARF units, whose compilation directory is known.
-        for path in a
-            .files
+        // File rows also contain STT_FILE labels, even labels with separators.
+        // Resolve only locations backed by source or DWARF unit evidence.
+        let known_paths: std::collections::HashSet<_> = a
+            .symbols
             .iter()
-            .map(|f| f.path.as_str())
-            .chain(a.symbols.iter().flat_map(|s| {
+            .flat_map(|s| {
                 [
                     s.source_file.as_deref(),
                     s.dwarf_compilation_unit.as_deref(),
                 ]
-                .into_iter()
-                .flatten()
-            }))
-        {
-            if path.contains('/') || path.contains('\\') || sources.contains(path) {
-                full.insert(path.into(), absolute_path(path, root));
+            })
+            .flatten()
+            .collect();
+        for path in &known_paths {
+            full.insert((*path).into(), absolute_path(path, root));
+        }
+        let normalized_known: std::collections::HashSet<_> = known_paths
+            .iter()
+            .map(|path| path.replace('\\', "/"))
+            .collect();
+        for file in &a.files {
+            if normalized_known.contains(&file.path.replace('\\', "/")) {
+                full.insert(file.path.clone(), absolute_path(&file.path, root));
             }
         }
         if let Some(stack) = stack {
@@ -140,7 +147,20 @@ impl SourcePaths {
         for (path, canonical) in &full {
             labels.insert(canonical.clone(), labels[path].clone());
         }
-        Self { labels, full }
+        // The analysis tree drops leading separators and `.` components.
+        // Preserve the original lookup for UNC paths and relative source paths.
+        let mut tree = std::collections::HashMap::new();
+        for file in &a.files {
+            let key = file
+                .path
+                .replace('\\', "/")
+                .split('/')
+                .filter(|part| !part.is_empty() && *part != ".")
+                .collect::<Vec<_>>()
+                .join("/");
+            tree.entry(key).or_insert_with(|| full[&file.path].clone());
+        }
+        Self { labels, full, tree }
     }
 
     pub(super) fn short(&self, path: &str) -> String {
@@ -151,8 +171,9 @@ impl SourcePaths {
     }
 
     pub(super) fn tree_full(&self, path: &str) -> String {
-        self.full
+        self.tree
             .get(path)
+            .or_else(|| self.full.get(path))
             .or_else(|| self.full.get(&format!("/{path}")))
             .cloned()
             .unwrap_or_else(|| path.into())
@@ -235,18 +256,16 @@ pub(super) fn absolute_path(path: &str, root: Option<&std::path::Path>) -> Strin
     format!("{prefix}{}", parts.join("/"))
 }
 
+struct CachedSourcePaths {
+    revision: u64,
+    source: usize,
+    stack: usize,
+    root: Option<std::path::PathBuf>,
+    paths: std::rc::Rc<SourcePaths>,
+}
+
 #[derive(Default)]
-pub(super) struct SourcePathCache(
-    std::cell::RefCell<
-        Option<(
-            u64,
-            usize,
-            usize,
-            Option<std::path::PathBuf>,
-            std::rc::Rc<SourcePaths>,
-        )>,
-    >,
-);
+pub(super) struct SourcePathCache(std::cell::RefCell<Option<CachedSourcePaths>>);
 
 impl super::Explorer {
     pub(super) fn source_paths(
@@ -254,20 +273,33 @@ impl super::Explorer {
         a: &firmware_analysis_core::Analysis,
     ) -> std::rc::Rc<SourcePaths> {
         let source = a as *const _ as usize;
-        let stack = self.stack.as_ref().map_or(0, |s| s as *const _ as usize);
+        let display = self
+            .baseline_display
+            .as_ref()
+            .filter(|d| std::ptr::eq(a, d.analysis.as_ref()));
+        let stack_report = display
+            .and_then(|d| d.stack.as_deref())
+            .or(self.stack.as_ref());
+        let stack = stack_report.map_or(0, |s| s as *const _ as usize);
         let root = self.build.as_ref().map(|b| b.root.clone());
         let mut cache = self.source_path_cache.0.borrow_mut();
-        if let Some((revision, old_source, old_stack, old_root, paths)) = &*cache {
-            if *revision == self.report_revision
-                && *old_source == source
-                && *old_stack == stack
-                && *old_root == root
+        if let Some(old) = &*cache {
+            if old.revision == self.report_revision
+                && old.source == source
+                && old.stack == stack
+                && old.root == root
             {
-                return paths.clone();
+                return old.paths.clone();
             }
         }
-        let paths = std::rc::Rc::new(SourcePaths::new(a, self.stack.as_ref(), root.as_deref()));
-        *cache = Some((self.report_revision, source, stack, root, paths.clone()));
+        let paths = std::rc::Rc::new(SourcePaths::new(a, stack_report, root.as_deref()));
+        *cache = Some(CachedSourcePaths {
+            revision: self.report_revision,
+            source,
+            stack,
+            root,
+            paths: paths.clone(),
+        });
         paths
     }
 }
@@ -428,6 +460,103 @@ mod tests {
             "Source: app/src/main.c:12\nCompilation unit: lib/src/main.c"
         );
         assert_eq!(paths.short("/project/app/src/main.c"), "app/src/main.c");
+    }
+
+    #[test]
+    fn elf_labels_with_directories_are_not_resolved_as_source_locations() {
+        let mut a = firmware_analysis_core::analyze_bytes(
+            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            "fixture.elf",
+            &Default::default(),
+        )
+        .unwrap();
+        let mut symbol = a.symbols[0].clone();
+        symbol.source_file = None;
+        symbol.dwarf_compilation_unit = None;
+        symbol.compilation_unit = Some("generated/startup.c".into());
+        a.symbols = vec![symbol];
+        a.files = vec![firmware_analysis_core::FileUsage {
+            path: "generated/startup.c".into(),
+            attribution: "ELF compilation-unit label (not an object path)".into(),
+            usage: Default::default(),
+            symbol_count: 1,
+        }];
+        a.dependencies.nodes.clear();
+        let root = Some(std::path::Path::new("/project/build"));
+        let paths = super::SourcePaths::new(&a, None, root);
+        assert_eq!(paths.full("generated/startup.c"), "generated/startup.c");
+
+        // DWARF evidence permits resolving even a bare filename and the
+        // slash-normalized file row derived from a Windows source path.
+        a.symbols[0].dwarf_compilation_unit = Some("unit.c".into());
+        a.symbols[0].source_file = Some(r"src\main.c".into());
+        a.files[0].path = "src/main.c".into();
+        let paths = super::SourcePaths::new(&a, None, root);
+        assert_eq!(paths.full("unit.c"), "/project/build/unit.c");
+        assert_eq!(paths.full(r"src\main.c"), "/project/build/src/main.c");
+        assert_eq!(paths.full("src/main.c"), "/project/build/src/main.c");
+
+        a.symbols[0].source_file = Some("./src/main.c".into());
+        a.files[0].path = "./src/main.c".into();
+        a.files.push(firmware_analysis_core::FileUsage {
+            path: "//server/share/src/remote.c".into(),
+            attribution: "DWARF".into(),
+            usage: Default::default(),
+            symbol_count: 1,
+        });
+        let paths = super::SourcePaths::new(&a, None, root);
+        assert_eq!(paths.tree_full("src/main.c"), "/project/build/src/main.c");
+        assert_eq!(
+            paths.tree_full("server/share/src/remote.c"),
+            "//server/share/src/remote.c"
+        );
+    }
+
+    #[test]
+    fn baseline_only_stack_sources_share_the_display_report_labels() {
+        let mut old = firmware_analysis_core::analyze_bytes(
+            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            "fixture.elf",
+            &Default::default(),
+        )
+        .unwrap();
+        let mut symbol = old.symbols[0].clone();
+        symbol.source_file = Some("/project/legacy/src/main.c".into());
+        symbol.dwarf_compilation_unit = symbol.source_file.clone();
+        symbol.compilation_unit = None;
+        old.symbols = vec![symbol];
+        old.files.clear();
+        old.dependencies.nodes.clear();
+        let mut current = old.clone();
+        current.symbols.clear();
+        let (entries, _) = firmware_analysis_core::stack::parse_stack_usage(
+            "legacy/src/main.c:12:1:probe\t8\tstatic\n",
+            "old.su",
+        );
+        let old_stack = firmware_analysis_core::stack::StackReport {
+            schema_version: 1,
+            entries,
+            warnings: vec![],
+            call_graph: Default::default(),
+        };
+        let app = super::super::Explorer {
+            baseline_display: Some(super::super::baseline_display::BaselineDisplay::new(
+                &current,
+                &old,
+                None,
+                Some(&old_stack),
+            )),
+            ..Default::default()
+        };
+        let display = app.baseline_display_analysis().unwrap();
+        let paths = app.source_paths(&display);
+        assert_eq!(
+            paths.full("legacy/src/main.c"),
+            "/project/legacy/src/main.c"
+        );
+        assert_eq!(paths.short("legacy/src/main.c"), "src/main.c");
+        assert_eq!(paths.short("/project/legacy/src/main.c"), "src/main.c");
+        assert!(std::rc::Rc::ptr_eq(&paths, &app.source_paths(&display)));
     }
 
     #[test]

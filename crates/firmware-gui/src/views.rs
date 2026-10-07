@@ -483,7 +483,18 @@ impl Explorer {
         let mut selected = None;
         egui::ScrollArea::both().show(ui, |ui| {
             let paths = self.source_paths(a);
-            tree(ui, &a.tree, "", "project", "", &mut selected, self, &paths);
+            tree(
+                ui,
+                &a.tree,
+                "",
+                "project",
+                "",
+                &mut selected,
+                &TreeDisplay {
+                    app: self,
+                    paths: &paths,
+                },
+            );
         });
         if let Some(path) = selected {
             if let Some(file) = a
@@ -1251,6 +1262,11 @@ fn sort_header(ui: &mut egui::Ui, title: &str, descending: Option<bool>) -> egui
     }
     response
 }
+struct TreeDisplay<'a> {
+    app: &'a Explorer,
+    paths: &'a super::display::SourcePaths,
+}
+
 fn tree(
     ui: &mut egui::Ui,
     node: &FileTree,
@@ -1258,9 +1274,9 @@ fn tree(
     id: &str,
     parent: &str,
     selected: &mut Option<String>,
-    app: &Explorer,
-    paths: &super::display::SourcePaths,
+    display: &TreeDisplay<'_>,
 ) {
+    let TreeDisplay { app, paths } = display;
     fn matches(node: &FileTree, filter: &str) -> bool {
         node.name.to_lowercase().contains(filter)
             || node.children.iter().any(|c| matches(c, filter))
@@ -1313,8 +1329,7 @@ fn tree(
                         &format!("{id}/{index}"),
                         &path,
                         selected,
-                        app,
-                        paths,
+                        display,
                     );
                 }
             })
