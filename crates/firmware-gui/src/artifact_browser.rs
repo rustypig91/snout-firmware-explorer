@@ -216,8 +216,36 @@ impl BrowserCache {
                             if node.directory {
                                 let open = !self.closed.contains(&node.path)
                                     || self.search.as_ref().is_some_and(|s| !s.is_empty());
-                                if ui
-                                    .small_button(if open { "\u{25bc}" } else { "\u{25b6}" })
+                                let response = ui.add(
+                                    egui::Button::new("")
+                                        .small()
+                                        .min_size(egui::vec2(18.0, 18.0)),
+                                );
+                                let center = response.rect.center();
+                                let points = if open {
+                                    vec![
+                                        center + egui::vec2(-4.0, -2.0),
+                                        center + egui::vec2(4.0, -2.0),
+                                        center + egui::vec2(0.0, 3.0),
+                                    ]
+                                } else {
+                                    vec![
+                                        center + egui::vec2(-2.0, -4.0),
+                                        center + egui::vec2(3.0, 0.0),
+                                        center + egui::vec2(-2.0, 4.0),
+                                    ]
+                                };
+                                ui.painter().add(egui::Shape::convex_polygon(
+                                    points,
+                                    ui.style().interact(&response).fg_stroke.color,
+                                    egui::Stroke::NONE,
+                                ));
+                                if response
+                                    .on_hover_text(if open {
+                                        "Collapse folder"
+                                    } else {
+                                        "Expand folder"
+                                    })
                                     .clicked()
                                 {
                                     toggle = Some(node.path.clone());

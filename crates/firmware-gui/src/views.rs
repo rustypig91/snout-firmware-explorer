@@ -35,6 +35,7 @@ struct RowKey {
     region: Option<usize>,
     kind: String,
     unresolved: bool,
+    show_address_changes: bool,
     build_root: Option<std::path::PathBuf>,
 }
 
@@ -188,6 +189,7 @@ impl Explorer {
             region: self.selected_region,
             kind: self.kind_filter.clone(),
             unresolved: self.stack_show_unresolved,
+            show_address_changes: self.show_address_changes[self.view as usize],
             build_root: self.build.as_ref().map(|b| b.root.clone()),
         };
         let mut cache = self.table_cache.rows[self.view as usize].borrow_mut();

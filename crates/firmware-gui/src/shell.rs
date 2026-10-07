@@ -511,6 +511,16 @@ impl Explorer {
                             if let Err(error) = self.select_snapshot(None) { self.snapshot_error = Some(error); }
                         }
                         ui.label("Showing only differences · current minus baseline");
+                        if matches!(self.view, View::Symbols | View::Sections | View::MemoryMap) {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let selected = &mut self.show_address_changes[self.view as usize];
+                                if ui.add(egui::Button::new("Show address changes").selected(*selected))
+                                    .on_hover_text("Include entries whose only change is their address")
+                                    .clicked() {
+                                    *selected = !*selected;
+                                }
+                            });
+                        }
                     });
                 });
                 ui.add_space(6.0);

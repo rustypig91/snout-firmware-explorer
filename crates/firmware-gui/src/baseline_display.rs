@@ -14,6 +14,7 @@ pub(super) struct BaselineDisplay {
     pub stack: Option<Arc<StackReport>>,
     removed: HashSet<(String, String)>,
     changed: HashSet<(String, String)>,
+    changed_without_addresses: HashSet<(String, String)>,
     removed_symbol_indexes: HashMap<usize, usize>,
 }
 
@@ -25,9 +26,20 @@ fn changed_entries(
     stack: Option<&StackReport>,
     old_stack: Option<&StackReport>,
 ) -> HashSet<(String, String)> {
+    changed_entries_with_addresses(current, old, stack, old_stack, true)
+}
+
+fn changed_entries_with_addresses(
+    current: &Analysis,
+    old: &Analysis,
+    stack: Option<&StackReport>,
+    old_stack: Option<&StackReport>,
+    addresses: bool,
+) -> HashSet<(String, String)> {
     fn entries(
         a: &Analysis,
         stack: Option<&StackReport>,
+        addresses: bool,
     ) -> HashMap<(String, String), Vec<serde_json::Value>> {
         fn add<T: serde::Serialize>(
             map: &mut HashMap<(String, String), Vec<serde_json::Value>>,
@@ -124,13 +136,37 @@ fn changed_entries(
         }
         tree(&mut map, &a.tree, String::new());
         // Duplicate identities have no unique match; preserve them for review.
+        if !addresses {
+            for ((domain, _), values) in &mut map {
+                for value in values {
+                    let fields: &[&str] = match domain.as_str() {
+                        "symbol" => &["address", "normalized_address"],
+                        "section" => &["address", "load_address"],
+                        "range" => &["address"],
+                        _ => &[],
+                    };
+                    if let Some(object) = value.as_object_mut() {
+                        for field in fields {
+                            object.remove(*field);
+                        }
+                    }
+                    if domain == "region" {
+                        let parts = value.as_array_mut().unwrap();
+                        parts[0].as_object_mut().unwrap().remove("start");
+                        for symbol in parts[3].as_array_mut().unwrap() {
+                            symbol.as_array_mut().unwrap()[2] = serde_json::Value::Null;
+                        }
+                    }
+                }
+            }
+        }
         for values in map.values_mut() {
             values.sort_by_cached_key(|v| v.to_string());
         }
         map
     }
-    let current = entries(current, stack);
-    let old = entries(old, old_stack);
+    let current = entries(current, stack, addresses);
+    let old = entries(old, old_stack, addresses);
     let mut changed: HashSet<_> = current
         .keys()
         .chain(old.keys())
@@ -359,6 +395,9 @@ impl BaselineDisplay {
         }
         Self {
             changed: changed_entries(current, old, stack, old_stack),
+            changed_without_addresses: changed_entries_with_addresses(
+                current, old, stack, old_stack, false,
+            ),
             analysis: Arc::new(a),
             stack: display_stack.map(Arc::new),
             removed,
@@ -376,10 +415,18 @@ impl Explorer {
     }
     pub(super) fn diff_visible(&self, domain: &str, id: &str) -> bool {
         !self.diffs_active()
-            || self
-                .baseline_display
-                .as_ref()
-                .is_some_and(|d| d.changed.contains(&(domain.into(), id.into())))
+            || self.baseline_display.as_ref().is_some_and(|d| {
+                let changes = if matches!(
+                    self.view,
+                    super::View::Symbols | super::View::Sections | super::View::MemoryMap
+                ) && !self.show_address_changes[self.view as usize]
+                {
+                    &d.changed_without_addresses
+                } else {
+                    &d.changed
+                };
+                changes.contains(&(domain.into(), id.into()))
+            })
     }
 
     pub(super) fn baseline_display_analysis(&self) -> Option<Arc<Analysis>> {
@@ -463,6 +510,47 @@ mod tests {
         current.symbols.reverse();
         current.files.reverse();
         assert!(changed_entries(&current, &old, None, None).is_empty());
+    }
+
+    #[test]
+    fn address_filter_preserves_other_changes_and_added_removed_entries() {
+        let old = fixture();
+        let mut current = old.clone();
+        current.symbols[0].address += 16;
+        current.symbols[0].normalized_address += 16;
+        current.sections[0].address += 16;
+        current.memory_map[0].address += 16;
+        let symbol = ("symbol".into(), symbol_key(&current.symbols[0]));
+        let section = ("section".into(), current.sections[0].name.clone());
+        let range = (
+            "range".into(),
+            serde_json::to_string(&(&current.memory_map[0].name, &current.memory_map[0].space))
+                .unwrap(),
+        );
+        let all = changed_entries(&current, &old, None, None);
+        let filtered = changed_entries_with_addresses(&current, &old, None, None, false);
+        for id in [&symbol, &section, &range] {
+            assert!(all.contains(id));
+            assert!(!filtered.contains(id));
+        }
+        current.symbols[0].size += 1;
+        current.sections[0].load_address = Some(123);
+        assert!(
+            !changed_entries_with_addresses(&current, &old, None, None, false).contains(&section)
+        );
+        current.sections[0].size += 1;
+        current.memory_map[0].size += 1;
+        let filtered = changed_entries_with_addresses(&current, &old, None, None, false);
+        for id in [&symbol, &section, &range] {
+            assert!(filtered.contains(id));
+        }
+        current.symbols.remove(0);
+        assert!(
+            changed_entries_with_addresses(&current, &old, None, None, false).contains(&symbol)
+        );
+        assert!(
+            changed_entries_with_addresses(&old, &current, None, None, false).contains(&symbol)
+        );
     }
 
     #[test]

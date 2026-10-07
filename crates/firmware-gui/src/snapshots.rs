@@ -3266,10 +3266,22 @@ mod tests {
         app.sync_snapshot_comparison();
         app.change_view(View::Symbols);
         assert!(app.diff_visible("symbol", &symbol_key(&removed)));
+        assert!(!app.diff_visible("symbol", &moved_id));
+        app.show_address_changes[View::Symbols as usize] = true;
         assert!(app.diff_visible("symbol", &moved_id));
         assert!(app.diff_visible("symbol", &added_id));
         let a = app.analysis.clone().unwrap();
         let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| app.symbols(ui, &a));
+        });
+        assert_eq!(app.visible_rows, 3);
+        app.show_address_changes[View::Symbols as usize] = false;
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| app.symbols(ui, &a));
+        });
+        assert_eq!(app.visible_rows, 2);
+        app.show_address_changes[View::Symbols as usize] = true;
         let _ = ctx.run(Default::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| app.symbols(ui, &a));
         });
