@@ -2138,14 +2138,14 @@ fn committed_fixture_renders_six_boxes_and_sixteen_dependency_arrowheads() {
             }
         }
     }
-    let arrow_color = ctx.style().visuals.text_color().gamma_multiply(0.7);
+    let arrow_color = ctx.style().visuals.text_color().gamma_multiply(0.3);
     let arrows = output.shapes.iter().filter(|shape| matches!(&shape.shape,
         egui::Shape::Path(path) if path.closed && path.points.len() == 3 && path.fill == arrow_color
     )).count();
     assert_eq!(boxes.len(), 6);
     assert_eq!(labels, 6);
     assert_eq!(arrows, 16);
-    // Visible memory values span the label-sized minimum through 25× area.
+    // Memory area spans zero bytes at the label-sized floor through 25× area.
     let bytes: Vec<_> = app
         .analysis
         .as_ref()
@@ -2155,10 +2155,8 @@ fn committed_fixture_renders_six_boxes_and_sixteen_dependency_arrowheads() {
         .iter()
         .filter_map(|node| node.usage.map(|usage| usage.flash))
         .collect();
-    let smallest = *bytes.iter().min().unwrap() as f32;
     let largest = *bytes.iter().max().unwrap() as f32;
-    let expected_ratio = (1.0 + 24.0 * (346.0 - smallest) / (largest - smallest))
-        / (1.0 + 24.0 * (144.0 - smallest) / (largest - smallest));
+    let expected_ratio = (1.0 + 24.0 * 346.0 / largest) / (1.0 + 24.0 * 144.0 / largest);
     assert!((main_area.unwrap() / config_area.unwrap() - expected_ratio).abs() < 0.01);
 }
 

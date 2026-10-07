@@ -207,7 +207,7 @@ fn arrow_head(points: &[egui::Pos2], scale: f32, target: egui::Rect) -> Option<[
         direction = inward;
     }
     let normal = egui::vec2(-direction.y, direction.x);
-    let length = (10.0 * scale).clamp(7.0, 16.0);
+    let length = (10.0 * scale).clamp(1.5, 16.0);
     Some([
         tip,
         tip - direction * length + normal * length * 0.5,
@@ -252,7 +252,7 @@ impl Explorer {
                 self.graph_view.readable_size = true;
             }
         });
-        ui.small("Arrows point to dependencies (uses → defines) · Box area: visible min–max Flash / RAM scaled from 1× to 25× · Drag to pan; scroll to zoom");
+        ui.small("Arrows point to dependencies (uses → defines) · Box area: 0 B–largest visible Flash / RAM scaled from 1× to 25× · Drag to pan; scroll to zoom");
         if let Some(path) = &graph.map_path {
             ui.small(format!("Cross references: {path}"));
         }
@@ -358,15 +358,14 @@ impl Explorer {
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 6.0, ui.visuals().extreme_bg_color);
-        let (smallest, largest) = nodes
+        let largest = nodes
             .iter()
             .filter_map(|node| {
                 node.usage
                     .map(|u| if self.graph_view.ram { u.ram } else { u.flash })
             })
-            .fold((u64::MAX, 0), |(smallest, largest), bytes| {
-                (smallest.min(bytes), largest.max(bytes))
-            });
+            .max()
+            .unwrap_or(0);
         let short_labels = nodes.iter().map(|n| paths.short(&n.label));
         let texts: BTreeMap<_, _> = nodes
             .iter()
@@ -415,7 +414,7 @@ impl Explorer {
                     NodeSpec {
                         id: node.id.clone(),
                         directory: node_directory(&node.label),
-                        size: graph_layout::card_size(minimum, bytes, smallest, largest),
+                        size: graph_layout::card_size(minimum, bytes, largest),
                     }
                 })
                 .collect(),
@@ -503,7 +502,9 @@ impl Explorer {
                 let card = egui::Rect::from_min_max(screen(world_card.min), screen(world_card.max));
                 let galley = painter.layout_no_wrap(
                     texts[node.id.as_str()].text().into(),
-                    egui::FontId::proportional((13.0 * scale).max(1.0)),
+                    egui::FontId::proportional(
+                        (13.0 * world_card.width() / minimum.x * scale).max(1.0),
+                    ),
                     ui.visuals().text_color(),
                 );
                 (
@@ -534,11 +535,17 @@ impl Explorer {
             let color = if highlighted {
                 ui.visuals().selection.stroke.color
             } else {
-                ui.visuals().text_color().gamma_multiply(0.7)
+                ui.visuals().text_color().gamma_multiply(
+                    if self.graph_view.selected.is_some() || self.graph_view.edge.is_some() {
+                        0.12
+                    } else {
+                        0.3
+                    },
+                )
             };
             painter.add(egui::Shape::line(
                 points.clone(),
-                egui::Stroke::new(if highlighted { 2.5_f32 } else { 1.5_f32 }, color),
+                egui::Stroke::new(if highlighted { 2.5_f32 } else { 0.8_f32 }, color),
             ));
             painter.add(egui::Shape::convex_polygon(
                 head.to_vec(),
@@ -946,6 +953,24 @@ mod tests {
             })
             .collect();
         assert_eq!(cards.len(), 3);
+        let label_size = |label: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text().starts_with(label) => {
+                        Some(text.galley.size())
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let large_label = label_size("app/main.c");
+        let small_label = label_size("drivers/spi.c");
+        assert!(
+            large_label.y > small_label.y * 4.0,
+            "labels must grow with their boxes"
+        );
         let cached_points = app.graph_view.layout.as_ref().unwrap().geometry.edges[0]
             .points
             .as_ptr();

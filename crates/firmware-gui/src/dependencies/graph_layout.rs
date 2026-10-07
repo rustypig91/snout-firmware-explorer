@@ -50,19 +50,14 @@ pub(super) struct CachedLayout {
     pub geometry: GraphLayout,
 }
 
-/// Normalize area across the visible byte range, from the label-sized floor
-/// to 25 times that area. Equal values retain equal, label-sized cards.
-pub(super) fn card_size(
-    minimum: egui::Vec2,
-    bytes: u64,
-    smallest: u64,
-    largest: u64,
-) -> egui::Vec2 {
-    let range = largest.saturating_sub(smallest);
-    if range == 0 {
-        return minimum;
-    }
-    let relative = bytes.saturating_sub(smallest).min(range) as f64 / range as f64;
+/// Zero bytes uses the label-sized floor; the largest visible contribution
+/// uses 25 times that area. Normalize against zero even when all sizes are equal.
+pub(super) fn card_size(minimum: egui::Vec2, bytes: u64, largest: u64) -> egui::Vec2 {
+    let relative = if largest == 0 {
+        0.0
+    } else {
+        bytes.min(largest) as f64 / largest as f64
+    };
     minimum * (1.0 + 24.0 * relative).sqrt() as f32
 }
 
@@ -157,7 +152,7 @@ pub(super) fn compute(input: &LayoutInput) -> GraphLayout {
     result
 }
 
-/// Bounded traversal and column placement for large connected graphs. Routes
+/// Bounded traversal and wrapped rank placement for large connected graphs. Routes
 /// leave each column through its gutters and run outside the cards, so no
 /// per-edge all-pairs obstacle search is needed.
 fn compute_large(input: &LayoutInput) -> GraphLayout {
@@ -222,42 +217,77 @@ fn compute_large(input: &LayoutInput) -> GraphLayout {
             point
         }
     };
+    // A broad rank (many sources referencing the same few dependencies) must
+    // not become an unbounded row after transposing to top-to-bottom. Wrap each
+    // rank into bands with a cross-axis budget based on total card area.
+    let area: f32 = input
+        .nodes
+        .iter()
+        .map(|node| node.size.x * node.size.y)
+        .sum();
+    let cross_limit = (area * if vertical { 1.5 } else { 0.75 }).sqrt().max(300.0);
     let mut cards = BTreeMap::new();
     let mut headings = Vec::new();
     let mut gutters = BTreeMap::new();
+    let mut band_ids = BTreeMap::new();
+    let mut band = 0usize;
     let mut x = 0.0;
     for (lane, members) in lanes {
-        let width = members
-            .iter()
-            .map(|&i| {
-                if vertical {
-                    input.nodes[i].size.y
-                } else {
-                    input.nodes[i].size.x
-                }
-            })
-            .fold(0.0, f32::max);
-        if input.grouped {
-            headings.push((lane, transform(egui::pos2(x + width / 2.0, -24.0))));
-        }
-        let mut y = 0.0;
+        let mut chunks: Vec<Vec<usize>> = vec![vec![]];
+        let mut length = 0.0;
         for i in members {
-            let node = &input.nodes[i];
-            let size = if vertical {
-                egui::vec2(node.size.y, node.size.x)
-            } else {
-                node.size
-            };
-            let min = egui::pos2(x + (width - size.x) / 2.0, y);
-            let max = min + size;
-            cards.insert(
-                node.id.clone(),
-                egui::Rect::from_min_max(transform(min), transform(max)),
-            );
-            gutters.insert(node.id.as_str(), (x - 24.0, x + width + 24.0));
-            y += size.y + 36.0;
+            let size = input.nodes[i].size;
+            let cross = if vertical { size.x } else { size.y };
+            if length > 0.0 && length + cross > cross_limit {
+                chunks.push(vec![]);
+                length = 0.0;
+            }
+            chunks.last_mut().unwrap().push(i);
+            length += cross + 36.0;
         }
-        x += width + 96.0;
+        for members in chunks {
+            let width = members
+                .iter()
+                .map(|&i| {
+                    if vertical {
+                        input.nodes[i].size.y
+                    } else {
+                        input.nodes[i].size.x
+                    }
+                })
+                .fold(0.0, f32::max);
+            // Repeated directory headings need the same horizontal clearance
+            // as cards, otherwise long names overlap across wrapped bands.
+            let width = if input.grouped {
+                width.max(lane.chars().count() as f32 * 8.0)
+            } else {
+                width
+            };
+            if input.grouped {
+                // Every wrapped band needs its own label to preserve directory
+                // ownership when a group spans several columns.
+                headings.push((lane.clone(), transform(egui::pos2(x + width / 2.0, -24.0))));
+            }
+            let mut y = 0.0;
+            for i in members {
+                let node = &input.nodes[i];
+                let size = if vertical {
+                    egui::vec2(node.size.y, node.size.x)
+                } else {
+                    node.size
+                };
+                let min = egui::pos2(x + (width - size.x) / 2.0, y);
+                cards.insert(
+                    node.id.clone(),
+                    egui::Rect::from_min_max(transform(min), transform(min + size)),
+                );
+                gutters.insert(node.id.as_str(), (x - 24.0, x + width + 24.0));
+                band_ids.insert(node.id.as_str(), band);
+                y += size.y + 36.0;
+            }
+            x += width + 96.0;
+            band += 1;
+        }
     }
     let mut bounds = cards.values().fold(egui::Rect::NOTHING, |b, r| b.union(*r));
     let bottom = if vertical {
@@ -265,6 +295,7 @@ fn compute_large(input: &LayoutInput) -> GraphLayout {
     } else {
         bounds.bottom()
     };
+    let edge_pairs: BTreeSet<_> = input.edges.iter().map(|(from, to)| (from, to)).collect();
     let edges = input
         .edges
         .iter()
@@ -272,26 +303,72 @@ fn compute_large(input: &LayoutInput) -> GraphLayout {
         .map(|(i, (from, to))| {
             let a = cards[from];
             let b = cards[to];
-            let (start, end) = if vertical {
-                (a.center_bottom(), b.center_top())
+            // Work in left-to-right coordinates, transposing back only once.
+            let a = egui::Rect::from_min_max(transform(a.min), transform(a.max));
+            let b = egui::Rect::from_min_max(transform(b.min), transform(b.max));
+            let source_band = band_ids[from.as_str()];
+            let target_band = band_ids[to.as_str()];
+            let forward = source_band <= target_band;
+            let start = if forward {
+                a.right_center()
             } else {
-                (a.right_center(), b.left_center())
+                a.left_center()
             };
-            let start = transform(start);
-            let end = transform(end);
-            let track = 48.0 + (i % 24) as f32 * 4.0;
-            let outside = if from < to { -track } else { bottom + track };
-            let points = vec![
-                start,
-                egui::pos2(gutters[from.as_str()].1, start.y),
-                egui::pos2(gutters[from.as_str()].1, outside),
-                egui::pos2(gutters[to.as_str()].0, outside),
-                egui::pos2(gutters[to.as_str()].0, end.y),
-                end,
-            ]
-            .into_iter()
-            .map(transform)
-            .collect::<Vec<_>>();
+            let end = if source_band == target_band || !forward {
+                b.right_center()
+            } else {
+                b.left_center()
+            };
+            let source_gutter = if forward {
+                gutters[from.as_str()].1
+            } else {
+                gutters[from.as_str()].0
+            };
+            let target_gutter = if source_band == target_band || !forward {
+                gutters[to.as_str()].1
+            } else {
+                gutters[to.as_str()].0
+            };
+            let route = if source_band.abs_diff(target_band) == 1
+                && (start.y - end.y).abs() < 1.0
+                && edge_pairs.contains(&(to, from))
+            {
+                // Aligned reciprocal connections otherwise collapse to the
+                // same straight line, making one direction impossible to pick.
+                // Separate their horizontal tracks inside the shared gutter.
+                let track = start.y + if from < to { -6.0 } else { 6.0 };
+                vec![
+                    start,
+                    egui::pos2(source_gutter, start.y),
+                    egui::pos2(source_gutter, track),
+                    egui::pos2(target_gutter, track),
+                    egui::pos2(target_gutter, end.y),
+                    end,
+                ]
+            } else if source_band.abs_diff(target_band) <= 1 {
+                // Same/adjacent bands can connect entirely through their shared
+                // gutter instead of taking every edge around the whole graph.
+                let bridge =
+                    (source_gutter + target_gutter) / 2.0 + if from < to { -6.0 } else { 6.0 };
+                vec![
+                    start,
+                    egui::pos2(bridge, start.y),
+                    egui::pos2(bridge, end.y),
+                    end,
+                ]
+            } else {
+                let track = 48.0 + (i % 24) as f32 * 4.0;
+                let outside = if forward { -track } else { bottom + track };
+                vec![
+                    start,
+                    egui::pos2(source_gutter, start.y),
+                    egui::pos2(source_gutter, outside),
+                    egui::pos2(target_gutter, outside),
+                    egui::pos2(target_gutter, end.y),
+                    end,
+                ]
+            };
+            let points = route.into_iter().map(transform).collect::<Vec<_>>();
             for point in &points {
                 bounds.extend_with(*point);
             }
@@ -671,7 +748,7 @@ mod tests {
                     .map(|p| p.0)
                     .unwrap_or("[no directory]")
                     .into(),
-                size: card_size(egui::vec2(100.0, 42.0), index as u64 * 100, 0, 300),
+                size: card_size(egui::vec2(100.0, 42.0), index as u64 * 100, 300),
             })
             .collect(),
             edges: [
@@ -968,23 +1045,23 @@ mod tests {
         let minimum = egui::vec2(100.0, 42.0);
         let mut previous = minimum;
         for bytes in [0, 1, 100, 10_000, 1_000_000, u64::MAX] {
-            let size = card_size(minimum, bytes, 0, u64::MAX);
+            let size = card_size(minimum, bytes, u64::MAX);
             assert!(size.x >= previous.x && size.y >= previous.y);
             assert!(size.x <= minimum.x * 5.0 && size.y <= minimum.y * 5.0);
             previous = size;
         }
-        assert_eq!(card_size(minimum, 0, 0, 0), minimum);
-        assert_eq!(card_size(minimum, 52, 52, 52), minimum);
-        // Approximately 27.14 KiB versus 52 B: endpoints must stand apart,
-        // and a halfway byte value must have halfway area, not dimensions.
-        let largest = card_size(minimum, 27_792, 52, 27_792);
-        let smallest = card_size(minimum, 52, 52, 27_792);
-        let midpoint = card_size(minimum, 13_922, 52, 27_792);
+        assert_eq!(card_size(minimum, 0, 0), minimum);
+        assert_eq!(card_size(minimum, 52, 52), minimum * 5.0);
+        // Approximately 27.14 KiB versus 52 B: the small nonzero node must
+        // exceed the floor; half the largest byte count gets halfway area.
+        let largest = card_size(minimum, 27_792, 27_792);
+        let smallest = card_size(minimum, 52, 27_792);
+        let midpoint = card_size(minimum, 13_896, 27_792);
         let area = |size: egui::Vec2| size.x * size.y;
-        assert_eq!(smallest, minimum);
-        assert!((area(largest) / area(smallest) - 25.0).abs() < 0.001);
-        assert!((area(midpoint) / area(smallest) - 13.0).abs() < 0.001);
-        assert_eq!(card_size(minimum, 0, 52, 27_792), minimum);
+        assert!(smallest.x > minimum.x);
+        assert!((area(largest) / area(minimum) - 25.0).abs() < 0.001);
+        assert!((area(midpoint) / area(minimum) - 13.0).abs() < 0.001);
+        assert_eq!(card_size(minimum, 0, 27_792), minimum);
     }
 }
 
@@ -1130,7 +1207,16 @@ fn large_grouped_graph_places_many_separate_cycles_deterministically() {
     assert!(start.elapsed() < std::time::Duration::from_secs(3));
     assert_eq!(geometry.cards.len(), count);
     assert_eq!(geometry.edges.len(), count);
-    assert_eq!(geometry.headings.len(), 20);
+    assert!(geometry.headings.len() > 20, "directories must wrap");
+    assert_eq!(
+        geometry
+            .headings
+            .iter()
+            .map(|(label, _)| label)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        20
+    );
     assert!(geometry
         .cards
         .values()
@@ -1139,5 +1225,166 @@ fn large_grouped_graph_places_many_separate_cycles_deterministically() {
     assert_eq!(geometry.cards, repeated.cards);
     for (edge, repeated) in geometry.edges.iter().zip(&repeated.edges) {
         assert_eq!(edge.points, repeated.points);
+    }
+}
+
+#[test]
+fn broad_dependency_ranks_wrap_instead_of_collapsing_into_a_strip() {
+    // Hundreds of source units with no incoming references share rank zero.
+    // This was the pathological case: a single enormous row at fit-to-view.
+    let mut input = LayoutInput {
+        nodes: (0..301)
+            .map(|i| NodeSpec {
+                id: format!("unit{i:03}"),
+                directory: "src".into(),
+                size: card_size(egui::vec2(180.0, 48.0), 10 + (i % 11) as u64 * 100, 1010),
+            })
+            .collect(),
+        edges: (0..300)
+            .map(|i| (format!("unit{i:03}"), "unit300".into()))
+            .collect(),
+        grouped: false,
+        ram: false,
+        vertical: false,
+    };
+    for vertical in [false, true] {
+        input.vertical = vertical;
+        let geometry = compute(&input);
+        let aspect = geometry.bounds.width() / geometry.bounds.height();
+        assert!(
+            (0.25..4.0).contains(&aspect),
+            "graph became a strip: {aspect}"
+        );
+        assert_eq!(geometry.cards.len(), 301);
+        assert_eq!(geometry.edges.len(), 300);
+        let rank_coordinates: BTreeSet<_> = input.nodes[..300]
+            .iter()
+            .map(|node| {
+                let center = geometry.cards[&node.id].center();
+                (if vertical { center.y } else { center.x }) as i64
+            })
+            .collect();
+        assert!(rank_coordinates.len() > 1, "broad rank must wrap");
+        for (i, card) in geometry.cards.values().enumerate() {
+            assert!(geometry.bounds.contains_rect(*card));
+            for other in geometry.cards.values().skip(i + 1) {
+                assert!(!card.intersects(*other));
+            }
+        }
+        for edge in &geometry.edges {
+            assert!(route_is_clear(&edge.points, &geometry.cards));
+            assert!(geometry.cards[&edge.from].contains(edge.points[0]));
+            assert!(geometry.cards[&edge.to].contains(*edge.points.last().unwrap()));
+        }
+    }
+}
+
+#[test]
+fn wrapped_directory_bands_each_keep_their_heading() {
+    let input = LayoutInput {
+        nodes: (0..301)
+            .map(|i| NodeSpec {
+                id: format!("unit{i:03}"),
+                directory: if i < 300 { "src" } else { "drivers" }.into(),
+                size: egui::vec2(180.0, 48.0),
+            })
+            .collect(),
+        edges: (0..300)
+            .map(|i| (format!("unit{i:03}"), "unit300".into()))
+            .collect(),
+        grouped: true,
+        ram: false,
+        vertical: false,
+    };
+    let geometry = compute(&input);
+    let src_bands: BTreeSet<_> = input.nodes[..300]
+        .iter()
+        .map(|node| geometry.cards[&node.id].center().x as i64)
+        .collect();
+    assert!(src_bands.len() > 1, "directory must wrap across bands");
+    for node in &input.nodes {
+        let center = geometry.cards[&node.id].center();
+        assert!(
+            geometry
+                .headings
+                .iter()
+                .any(|(label, position)| label == &node.directory
+                    && (position.x - center.x).abs() < 0.01),
+            "{} has no directory heading above its band",
+            node.id
+        );
+    }
+    assert_eq!(geometry.headings.len(), src_bands.len() + 1);
+}
+
+#[test]
+fn wrapped_directory_headings_do_not_overlap() {
+    let directory = "project/generated/platform/very_long_directory_name";
+    let input = LayoutInput {
+        nodes: (0..301)
+            .map(|i| NodeSpec {
+                id: format!("unit{i:03}"),
+                directory: directory.into(),
+                size: egui::vec2(120.0, 50.0),
+            })
+            .collect(),
+        edges: vec![],
+        grouped: true,
+        ram: false,
+        vertical: false,
+    };
+    let geometry = compute(&input);
+    assert!(geometry.headings.len() > 1);
+    let headings: Vec<_> = geometry
+        .headings
+        .iter()
+        .map(|(label, center)| {
+            egui::Rect::from_center_size(
+                *center,
+                egui::vec2(label.chars().count() as f32 * 8.0, 24.0),
+            )
+        })
+        .collect();
+    for (i, heading) in headings.iter().enumerate() {
+        assert!(geometry.bounds.contains_rect(*heading));
+        for other in &headings[i + 1..] {
+            assert!(
+                !heading.intersects(*other),
+                "wrapped directory headings overlap"
+            );
+        }
+    }
+}
+
+#[test]
+fn adjacent_directory_bands_keep_reciprocal_edges_separately_selectable() {
+    let input = LayoutInput {
+        nodes: (0..101)
+            .map(|i| NodeSpec {
+                id: format!("unit{i:03}"),
+                directory: if i == 0 { "a" } else { "b" }.into(),
+                size: egui::vec2(180.0, 48.0),
+            })
+            .collect(),
+        edges: vec![
+            ("unit000".into(), "unit001".into()),
+            ("unit001".into(), "unit000".into()),
+        ],
+        grouped: true,
+        ram: false,
+        vertical: false,
+    };
+    let geometry = compute(&input);
+    for (edge, other) in [
+        (&geometry.edges[0], &geometry.edges[1]),
+        (&geometry.edges[1], &geometry.edges[0]),
+    ] {
+        assert!(route_is_clear(&edge.points, &geometry.cards));
+        assert!(
+            edge.points
+                .iter()
+                .any(|point| super::curve_distance(&other.points, *point) > 1.0),
+            "reciprocal arrows share their entire selectable path"
+        );
     }
 }
