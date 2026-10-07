@@ -3,6 +3,7 @@ use firmware_analysis_core::{format_bytes, FileTree, Symbol};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashSet},
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
 };
 
@@ -136,48 +137,28 @@ fn snapshot_row(ui: &mut egui::Ui, snapshot: &Snapshot, active: bool) -> (bool, 
     (compare, delete)
 }
 #[derive(serde::Serialize, serde::Deserialize)]
-struct SnapshotFile {
+// Borrow the report when saving; deserialize into owned data when loading.
+struct SnapshotFile<B = PathBuf, S = Snapshot> {
     version: u32,
-    build_folder: PathBuf,
-    snapshot: Snapshot,
+    build_folder: B,
+    snapshot: S,
 }
-fn component(label: &str, identity: &str) -> String {
-    let label: String = label
-        .chars()
-        .take(48)
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    format!(
-        "{}-{:x}",
-        if label.is_empty() { "snapshot" } else { &label },
-        Sha256::digest(identity.as_bytes())
-    )
+fn component(identity: &str) -> String {
+    // Three components share the Windows path budget with the configuration
+    // directory. Keep 128 bits of identity and store display names in the JSON.
+    format!("{:x}", Sha256::digest(identity.as_bytes()))[..32].into()
 }
 fn build_directory(preferences: &Path, root: &Path) -> Result<PathBuf, String> {
     let parent = preferences
         .parent()
         .ok_or("Missing user configuration directory")?;
     let identity = root.to_string_lossy();
-    let label = root.file_name().unwrap_or_default().to_string_lossy();
-    Ok(parent.join("snapshots").join(component(&label, &identity)))
+    Ok(parent.join("snapshots").join(component(&identity)))
 }
 fn snapshot_path(preferences: &Path, root: &Path, snapshot: &Snapshot) -> Result<PathBuf, String> {
-    let firmware = Path::new(&snapshot.firmware)
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy();
     Ok(build_directory(preferences, root)?
-        .join(component(&firmware, &snapshot.firmware))
-        .join(format!(
-            "{}.json",
-            component(&snapshot.name, &snapshot.name)
-        )))
+        .join(component(&snapshot.firmware))
+        .join(format!("{}.json", component(&snapshot.name))))
 }
 fn write_snapshot(
     preferences: &Path,
@@ -186,30 +167,82 @@ fn write_snapshot(
     overwrite: bool,
 ) -> Result<(), String> {
     let path = snapshot_path(preferences, root, snapshot)?;
-    let value = serde_json::to_value(SnapshotFile {
-        version: 1,
-        build_folder: root.into(),
-        snapshot: snapshot.clone(),
-    })
-    .map_err(|e| e.to_string())?;
     let parent = path.parent().unwrap();
-    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    let mut staged = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
-    serde_json::to_writer_pretty(&mut staged, &value).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(parent).map_err(|e| {
+        format!(
+            "Could not create snapshot directory {}: {e}",
+            parent.display()
+        )
+    })?;
+    // Rust canonicalization supplies a verbatim (extended-length) path on Windows.
+    // tempfile passes paths straight to Win32 for both staging and persistence,
+    // so both must use this directory even when APPDATA itself is very long.
+    let parent = std::fs::canonicalize(parent).map_err(|e| {
+        format!(
+            "Could not resolve snapshot directory {}: {e}",
+            parent.display()
+        )
+    })?;
+    let destination = parent.join(path.file_name().unwrap());
+    let mut staged = tempfile::NamedTempFile::new_in(&parent)
+        .map_err(|e| format!("Could not stage snapshot in {}: {e}", parent.display()))?;
+    {
+        let mut writer = BufWriter::with_capacity(64 * 1024, staged.as_file_mut());
+        serde_json::to_writer(
+            &mut writer,
+            &SnapshotFile {
+                version: 1,
+                build_folder: root,
+                snapshot,
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        // Flush before syncing and persisting, and propagate buffered write errors.
+        writer.flush().map_err(|e| e.to_string())?;
+    }
     staged.as_file().sync_all().map_err(|e| e.to_string())?;
     let saved = if overwrite {
-        staged.persist(&path)
+        staged.persist(&destination)
     } else {
-        staged.persist_noclobber(&path)
+        staged.persist_noclobber(&destination)
     };
     saved.map_err(|e| format!("Could not save snapshot to {}: {}", path.display(), e.error))?;
     Ok(())
+}
+fn remove_empty_directory(path: &Path) -> Result<(), String> {
+    match std::fs::remove_dir(path) {
+        Ok(()) => Ok(()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+            ) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(format!("{}: {error}", path.display())),
+    }
+}
+fn prune_empty_snapshot_directories(path: &Path) -> Result<(), String> {
+    for entry in std::fs::read_dir(path).map_err(|error| format!("{}: {error}", path.display()))? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        // Follow only real directories, never links outside snapshot storage.
+        if entry
+            .file_type()
+            .map_err(|error| error.to_string())?
+            .is_dir()
+        {
+            prune_empty_snapshot_directories(&entry.path())?;
+        }
+    }
+    remove_empty_directory(path)
 }
 #[derive(Clone)]
 pub(super) enum Dialog {
     Manager,
     Overwrite(String),
     Delete(String),
+    DeleteAll,
     Saving(String),
 }
 pub(super) struct SaveJob {
@@ -372,6 +405,13 @@ fn collect(a: &Analysis, stack: Option<&StackReport>) -> BTreeMap<String, u64> {
     }
     v
 }
+pub(super) fn removed_bytes(old: Option<u64>) -> String {
+    match old {
+        Some(0) => "0 B (removed)".into(),
+        Some(old) => format!("0 B (-{}; removed)", format_bytes(old)),
+        None => "0 B (removed; baseline ambiguous)".into(),
+    }
+}
 fn annotate(current: String, value: u64, old: Option<u64>, address: bool) -> String {
     match old {
         Some(old) if old != value => {
@@ -406,10 +446,50 @@ impl Explorer {
             .find(|s| s.firmware == firmware && &s.name == name)
     }
     pub(super) fn sync_snapshot_comparison(&mut self) {
+        // Baseline-only sections and regions have temporary display indexes.
+        // A different baseline can reuse them for unrelated entries.
+        if self.overview_section.is_some_and(|index| {
+            self.analysis
+                .as_ref()
+                .is_none_or(|a| !a.sections.iter().any(|s| s.index == index))
+        }) {
+            self.overview_section = None;
+            self.overview_unit = None;
+        }
+        let region_count = self
+            .analysis
+            .as_ref()
+            .map_or(0, |a| a.options.regions.len());
+        if self
+            .selected_region
+            .is_some_and(|index| index >= region_count)
+        {
+            self.selected_region = None;
+        }
+        for options in &mut self.tab_options {
+            if options
+                .selected_region
+                .is_some_and(|index| index >= region_count)
+            {
+                options.selected_region = None;
+            }
+        }
         self.comparison = self
             .snapshot_analysis()
             .zip(self.analysis.as_deref())
             .map(|(baseline, current)| super::compare(baseline, current));
+        self.baseline_display =
+            self.snapshot_analysis()
+                .zip(self.analysis.as_deref())
+                .map(|(old, current)| {
+                    super::baseline_display::BaselineDisplay::new(
+                        current,
+                        old,
+                        self.stack.as_ref(),
+                        self.selected_snapshot().and_then(|s| s.stack.as_ref()),
+                    )
+                });
+        self.region_cache_key = 0;
         self.table_cache = Default::default();
     }
     pub(super) fn snapshot_analysis(&self) -> Option<&Analysis> {
@@ -426,6 +506,17 @@ impl Explorer {
         snapshot.values.get(&key(domain, id, field)).copied()
     }
     pub(super) fn snapshot_bytes(&self, domain: &str, id: &str, field: &str, value: u64) -> String {
+        if self.snapshot_removed(domain, id) {
+            let old = self.snapshot_old(domain, id, field);
+            if old.is_none()
+                && self.selected_snapshot().is_some_and(|snapshot| {
+                    !snapshot.values.contains_key(&key(domain, id, "ambiguous"))
+                })
+            {
+                return "0 B (removed; baseline unknown)".into();
+            }
+            return removed_bytes(old);
+        }
         if let Some(snapshot) = self.selected_snapshot() {
             if snapshot.values.contains_key(&key(domain, id, "ambiguous")) {
                 return format!("{} (baseline ambiguous)", format_bytes(value));
@@ -448,6 +539,12 @@ impl Explorer {
         field: &str,
         value: u64,
     ) -> String {
+        if self.snapshot_removed(domain, id) {
+            return self
+                .snapshot_old(domain, id, field)
+                .map(|old| format!("— (removed; baseline {old:#010x})"))
+                .unwrap_or_else(|| "— (removed; baseline ambiguous)".into());
+        }
         if let Some(snapshot) = self.selected_snapshot() {
             if snapshot.values.contains_key(&key(domain, id, "ambiguous")) {
                 return format!("{value:#010x} (baseline ambiguous)");
@@ -464,6 +561,12 @@ impl Explorer {
         )
     }
     pub(super) fn snapshot_count(&self, domain: &str, id: &str, field: &str, value: u64) -> String {
+        if self.snapshot_removed(domain, id) {
+            return self
+                .snapshot_old(domain, id, field)
+                .map(|old| format!("0 (-{old}; removed)"))
+                .unwrap_or_else(|| "0 (removed; baseline ambiguous)".into());
+        }
         if self
             .selected_snapshot()
             .is_some_and(|snapshot| snapshot.values.contains_key(&key(domain, id, "ambiguous")))
@@ -557,16 +660,22 @@ impl Explorer {
                     .file_type()
                     .map_err(|error| error.to_string())?
                     .is_dir()
-                    && !retained.contains(&path)
                 {
-                    std::fs::remove_dir_all(&path)
-                        .map_err(|error| format!("{}: {error}", path.display()))?;
+                    if retained.contains(&path) {
+                        prune_empty_snapshot_directories(&path)?;
+                    } else {
+                        std::fs::remove_dir_all(&path)
+                            .map_err(|error| format!("{}: {error}", path.display()))?;
+                    }
                 }
                 Ok(())
             })();
             if let Err(error) = result {
                 errors.push(error);
             }
+        }
+        if let Err(error) = remove_empty_directory(&directory) {
+            errors.push(error);
         }
         if !errors.is_empty() {
             self.snapshot_error = Some(format!(
@@ -611,7 +720,7 @@ impl Explorer {
                             continue;
                         }
                         let loaded = (|| -> Result<Snapshot, String> {
-                            let mut stored: SnapshotFile = serde_json::from_slice(
+                            let stored: SnapshotFile = serde_json::from_slice(
                                 &std::fs::read(&path).map_err(|e| e.to_string())?,
                             )
                             .map_err(|e| e.to_string())?;
@@ -621,10 +730,6 @@ impl Explorer {
                             if snapshot_path(preferences, &build.root, &stored.snapshot)? != path {
                                 return Err("Snapshot identity does not match its file path".into());
                             }
-                            // Rebuild derived lookup data so reports saved by older versions
-                            // also benefit from identity and ambiguity fixes.
-                            stored.snapshot.values =
-                                collect(&stored.snapshot.analysis, stored.snapshot.stack.as_ref());
                             Ok(stored.snapshot)
                         })();
                         match loaded {
@@ -754,13 +859,9 @@ impl Explorer {
             .ok_or("Select a build folder first")?
             .root;
         // Check disk too, so a damaged or externally created file is never silently replaced.
-        let firmware_label = Path::new(&firmware)
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy();
         let path = build_directory(preferences, root)?
-            .join(component(&firmware_label, &firmware))
-            .join(format!("{}.json", component(&name, &name)));
+            .join(component(&firmware))
+            .join(format!("{}.json", component(&name)));
         self.snapshot_dialog_error = None;
         self.snapshot_message = None;
         if path.exists()
@@ -892,9 +993,42 @@ impl Explorer {
         self.snapshots
             .snapshots
             .retain(|s| s.firmware != firmware || s.name != name);
+        // Remove empty firmware/build/storage folders, stopping at the config folder.
+        for folder in path.ancestors().skip(1).take(3) {
+            if let Err(error) = remove_empty_directory(folder) {
+                self.snapshot_error = Some(format!("Could not clean up snapshots: {error}"));
+                break;
+            }
+        }
         self.report_revision = self.report_revision.wrapping_add(1);
         self.details = None;
         Ok(())
+    }
+    fn delete_all_snapshots(&mut self) -> Result<usize, String> {
+        let firmware = self.snapshot_firmware().ok_or("Select firmware first")?;
+        let names: Vec<_> = self
+            .snapshots
+            .snapshots
+            .iter()
+            .filter(|snapshot| snapshot.firmware == firmware)
+            .map(|snapshot| snapshot.name.clone())
+            .collect();
+        let mut deleted = 0;
+        let mut errors = Vec::new();
+        for name in names {
+            match self.delete_snapshot(&name) {
+                Ok(()) => deleted += 1,
+                Err(error) => errors.push(format!("“{name}”: {error}")),
+            }
+        }
+        if errors.is_empty() {
+            Ok(deleted)
+        } else {
+            Err(format!(
+                "Deleted {deleted} snapshots. Could not delete the remaining snapshots: {}",
+                errors.join("; ")
+            ))
+        }
     }
     pub(super) fn show_snapshot_dialog(&mut self, ctx: &egui::Context) {
         self.poll_snapshot_save();
@@ -906,6 +1040,8 @@ impl Explorer {
             Overwrite(String),
             AskDelete(String),
             Delete(String),
+            AskDeleteAll,
+            DeleteAll,
             Compare(String),
             Stop,
             Back,
@@ -913,7 +1049,21 @@ impl Explorer {
         }
         let mut action = None;
         let width = (ctx.screen_rect().width() - 64.0).clamp(240.0, 520.0);
-        let response = egui::Modal::new(egui::Id::new("snapshot_manager"))
+        let id = egui::Id::new("snapshot_manager");
+        let mut area = egui::Modal::default_area(id);
+        if let Some(rect) = ctx.memory(|memory| memory.area_rect(id)) {
+            // Tiny layout differences can put the centered origin on opposite
+            // sides of a half-pixel boundary at fractional display scales.
+            // Discard layout noise below 1/64 pixel before Area rounds its position.
+            let scale = ctx.pixels_per_point();
+            let size = (rect.size() * scale * 64.0).round() / (scale * 64.0);
+            area = area.anchor(
+                egui::Align2::LEFT_TOP,
+                (ctx.screen_rect().size() - size) * 0.5,
+            );
+        }
+        let response = egui::Modal::new(id)
+            .area(area)
             .backdrop_color(egui::Color32::from_black_alpha(160))
             .frame(egui::Frame::window(&ctx.style()).inner_margin(egui::Margin::same(16.0)))
             .show(ctx, |ui| {
@@ -954,6 +1104,17 @@ impl Explorer {
                             if ui.button("Cancel").clicked() { action = Some(Action::Back); }
                         });
                     }
+                    Dialog::DeleteAll => {
+                        let firmware = self.snapshot_firmware();
+                        let count = self.snapshots.snapshots.iter().filter(|s| firmware.as_ref() == Some(&s.firmware)).count();
+                        ui.label(format!("Delete all {count} snapshots for the current firmware? This cannot be undone."));
+                        if let Some(firmware) = firmware { ui.label(format!("ELF: {}", super::display::display_path(&firmware))); }
+                        if self.snapshot_label().is_some() { ui.label("This also stops the current baseline comparison."); }
+                        ui.horizontal(|ui| {
+                            if ui.button("Delete all snapshots").clicked() { action = Some(Action::DeleteAll); }
+                            if ui.button("Cancel").clicked() { action = Some(Action::Back); }
+                        });
+                    }
                     Dialog::Manager => {
                         if let Some(message) = &self.snapshot_message { ui.label(message); }
                         ui.label("Save the currently loaded firmware as a baseline.");
@@ -976,6 +1137,7 @@ impl Explorer {
                         let firmware = self.snapshot_firmware();
                         let mut snapshots: Vec<_> = self.snapshots.snapshots.iter().filter(|s|firmware.as_ref() == Some(&s.firmware)).collect();
                         snapshots.sort_by(|a,b| b.taken_at.cmp(&a.taken_at).then_with(|| a.name.cmp(&b.name)));
+                        let has_snapshots = !snapshots.is_empty();
                         ui.strong(format!("Saved snapshots ({})", snapshots.len()));
                         if snapshots.is_empty() { ui.label("No snapshots for this firmware yet."); }
                         else {
@@ -992,6 +1154,9 @@ impl Explorer {
                         }
                         ui.separator();
                         ui.horizontal(|ui| {
+                            if ui.add_enabled(has_snapshots, egui::Button::new("Delete all snapshots"))
+                                .on_hover_text("Delete every snapshot for the current firmware")
+                                .clicked() { action = Some(Action::AskDeleteAll); }
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| {
                                 if ui.button("Close").clicked() { action = Some(Action::Close); }
                                 if self.snapshot_label().is_some() && ui.button("Stop comparing").clicked() { action = Some(Action::Stop); }
@@ -1027,6 +1192,20 @@ impl Explorer {
                     self.snapshot_message = Some(format!("Deleted snapshot “{name}”."));
                 }
                 result
+            }
+            Some(Action::AskDeleteAll) => {
+                self.snapshot_dialog = Some(Dialog::DeleteAll);
+                self.snapshot_dialog_error = None;
+                self.snapshot_message = None;
+                Ok(())
+            }
+            Some(Action::DeleteAll) => {
+                let result = self.delete_all_snapshots();
+                self.snapshot_dialog = Some(Dialog::Manager);
+                result.map(|count| {
+                    self.snapshot_message =
+                        Some(format!("Deleted {count} snapshots for this firmware."));
+                })
             }
             Some(Action::Compare(name)) => {
                 let result = self.select_snapshot(Some(name));
@@ -1098,13 +1277,62 @@ mod tests {
         std::fs::write(root.join("app.su"), "diag.c:22:36:diagnose\t24\tstatic\n").unwrap();
     }
     #[test]
-    fn legacy_persisted_baseline_selection_is_ignored() {
-        let store: SnapshotStore = serde_json::from_value(serde_json::json!({
-            "active": {"app.elf": "baseline"}
-        }))
-        .unwrap();
-        assert!(store.active.is_empty());
-        let mut store = store;
+    fn snapshot_paths_fit_the_windows_path_budget_with_long_display_names() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        app.take_snapshot(&"baseline".repeat(20)).unwrap();
+        let mut snapshot = app.snapshots.snapshots[0].clone();
+        snapshot.firmware = format!("nested/{}.elf", "firmware".repeat(20));
+        // An ordinary Windows configuration directory. Its platform-independent
+        // length plus the generated relative path must stay below MAX_PATH.
+        let config = "C:\\Users\\Christopher\\AppData\\Roaming\\snout-firmware-explorer";
+        let preferences = directory.path().join("workspace.json");
+        let path = snapshot_path(&preferences, &root, &snapshot).unwrap();
+        let relative = path.strip_prefix(directory.path()).unwrap();
+        assert!(config.len() + 1 + relative.as_os_str().len() < 260);
+        assert_eq!(path.file_stem().unwrap().len(), 32);
+        snapshot.firmware = format!("other/{}.elf", "firmware".repeat(20));
+        assert_ne!(snapshot_path(&preferences, &root, &snapshot).unwrap(), path);
+    }
+    #[test]
+    fn snapshots_save_overwrite_reload_and_delete_with_paths_longer_than_max_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory
+            .path()
+            .join("long-config-directory-".repeat(5))
+            .join("nested-config-directory-".repeat(5));
+        let root = directory.path().join("build");
+        fixture(&root);
+        let preferences = config.join("workspace.json");
+        let mut app = open(&root);
+        app.preferences_file = Some(preferences.clone());
+        let name = "Before update: CON / firmware? 🐽";
+        app.take_snapshot(name).unwrap();
+        let mut snapshot = app.snapshots.snapshots[0].clone();
+        let path = snapshot_path(&preferences, &root, &snapshot).unwrap();
+        assert!(path.as_os_str().len() > 260);
+        assert!(path.is_file());
+        assert!(write_snapshot(&preferences, &root, &snapshot, false).is_err());
+        snapshot.analysis.totals.ram += 1024;
+        write_snapshot(&preferences, &root, &snapshot, true).unwrap();
+        app.load_snapshots();
+        assert!(app.snapshot_error.is_none(), "{:?}", app.snapshot_error);
+        assert_eq!(app.snapshots.snapshots.len(), 1);
+        assert_eq!(app.snapshots.snapshots[0].name, name);
+        assert_eq!(
+            app.snapshots.snapshots[0].analysis.totals,
+            snapshot.analysis.totals
+        );
+        app.delete_snapshot(name).unwrap();
+        assert!(!path.exists());
+        app.load_snapshots();
+        assert!(app.snapshots.snapshots.is_empty());
+    }
+    #[test]
+    fn baseline_selection_is_not_serialized() {
+        let mut store = SnapshotStore::default();
         store.active.insert("app.elf".into(), "baseline".into());
         assert!(serde_json::to_value(store).unwrap().get("active").is_none());
     }
@@ -1191,8 +1419,9 @@ mod tests {
         .collect();
         assert_eq!(snapshot_files.len(), 2);
         for path in &snapshot_files {
-            let stored: SnapshotFile =
-                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            let data = std::fs::read(path).unwrap();
+            assert!(!data.contains(&b'\n'), "Snapshot JSON should be compact");
+            let stored: SnapshotFile = serde_json::from_slice(&data).unwrap();
             assert_eq!(stored.version, 1);
             assert_eq!(stored.build_folder, root);
             assert_eq!(stored.snapshot.analysis.totals, original);
@@ -1348,14 +1577,6 @@ mod tests {
                 "4 (baseline ambiguous)"
             );
         }
-        // Old snapshot files can contain last-row-wins derived values. Loading
-        // must rebuild them from the captured report, preserving ambiguity.
-        let mut saved = app.snapshots.snapshots[0].clone();
-        for (domain, id, field) in identities {
-            saved.values.remove(&key(domain, id, "ambiguous"));
-            saved.values.insert(key(domain, id, field), 99);
-        }
-        write_snapshot(app.preferences_file.as_ref().unwrap(), &root, &saved, true).unwrap();
         let mut restarted = open(&root);
         restarted
             .select_snapshot(Some("duplicates".into()))
@@ -1364,7 +1585,11 @@ mod tests {
             assert_eq!(restarted.snapshot_old(domain, id, field), None);
             assert_eq!(
                 restarted.snapshot_bytes(domain, id, field, 4),
-                "4 B (baseline ambiguous)"
+                if restarted.snapshot_removed(domain, id) {
+                    "0 B (removed; baseline ambiguous)"
+                } else {
+                    "4 B (baseline ambiguous)"
+                }
             );
         }
     }
@@ -1527,6 +1752,69 @@ mod tests {
         assert!(unrelated.is_file());
     }
     #[test]
+    fn startup_prunes_empty_snapshot_directories_for_registered_builds() {
+        let directory = tempfile::tempdir().unwrap();
+        let preferences = directory.path().join("workspace.json");
+        let empty_root = directory.path().join("empty-build");
+        let kept_root = directory.path().join("kept-build");
+        let empty = build_directory(&preferences, &empty_root).unwrap();
+        let kept = build_directory(&preferences, &kept_root).unwrap();
+        std::fs::create_dir_all(empty.join("firmware/nested-empty")).unwrap();
+        std::fs::create_dir_all(kept.join("empty-firmware")).unwrap();
+        std::fs::create_dir_all(kept.join("saved-firmware")).unwrap();
+        let saved = kept.join("saved-firmware/baseline.json");
+        std::fs::write(&saved, b"preserve even corrupt snapshots").unwrap();
+        let settings = BTreeMap::from([
+            (empty_root.clone(), super::super::BuildSettings::default()),
+            (kept_root.clone(), super::super::BuildSettings::default()),
+        ]);
+        std::fs::write(
+            &preferences,
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1, "build_settings": settings
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut app = Explorer {
+            preferences_file: Some(preferences.clone()),
+            ..Default::default()
+        };
+        app.restore_preferences(false);
+        assert!(app.snapshot_error.is_none(), "{:?}", app.snapshot_error);
+        assert!(!empty.exists());
+        assert!(!kept.join("empty-firmware").exists());
+        assert!(saved.is_file());
+        assert!(app.build_settings.contains_key(&empty_root));
+        assert!(app.build_settings.contains_key(&kept_root));
+        std::fs::remove_file(saved).unwrap();
+        app.restore_preferences(false);
+        assert!(!directory.path().join("snapshots").exists());
+        assert!(preferences.is_file());
+    }
+
+    #[test]
+    fn deleting_the_last_snapshot_prunes_empty_folders_and_allows_saving_again() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        app.take_snapshot("first").unwrap();
+        app.take_snapshot("second").unwrap();
+        let preferences = app.preferences_file.clone().unwrap();
+        let path = snapshot_path(&preferences, &root, &app.snapshots.snapshots[0]).unwrap();
+        app.delete_snapshot("first").unwrap();
+        assert!(path.parent().unwrap().is_dir());
+        app.delete_snapshot("second").unwrap();
+        assert!(!directory.path().join("snapshots").exists());
+        assert!(preferences.is_file());
+        app.take_snapshot("new").unwrap();
+        let mut restarted = open(&root);
+        assert_eq!(restarted.snapshots.snapshots.len(), 1);
+        restarted.select_snapshot(Some("new".into())).unwrap();
+    }
+
+    #[test]
     fn startup_cleanup_skips_missing_corrupt_or_unsupported_build_settings() {
         let directory = tempfile::tempdir().unwrap();
         let preferences = directory.path().join("workspace.json");
@@ -1569,7 +1857,19 @@ mod tests {
         let orphan = snapshots.join("orphan-build");
         std::fs::create_dir(&orphan).unwrap();
         std::os::unix::fs::symlink(&outside, orphan.join("firmware-link")).unwrap();
-        std::fs::write(&preferences, b"{\"version\":1,\"build_settings\":{}}").unwrap();
+        let root = directory.path().join("registered-build");
+        let kept = build_directory(&preferences, &root).unwrap();
+        std::fs::create_dir_all(kept.join("empty-firmware")).unwrap();
+        std::os::unix::fs::symlink(&outside, kept.join("firmware-link")).unwrap();
+        let settings = BTreeMap::from([(root, super::super::BuildSettings::default())]);
+        std::fs::write(
+            &preferences,
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1, "build_settings": settings
+            }))
+            .unwrap(),
+        )
+        .unwrap();
         let mut app = Explorer {
             preferences_file: Some(preferences),
             ..Default::default()
@@ -1578,7 +1878,60 @@ mod tests {
         assert!(outside.join("keep.json").is_file());
         assert!(snapshots.join("orphan-link").is_symlink());
         assert!(!orphan.exists());
+        assert!(kept.join("firmware-link").is_symlink());
+        assert!(!kept.join("empty-firmware").exists());
     }
+    #[test]
+    fn snapshot_manager_stays_stationary_at_fractional_display_scales() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        app.take_snapshot("Before adding Bluetooth and enabling the diagnostics subsystem")
+            .unwrap();
+        let saved = app.snapshots.snapshots[0].clone();
+        for count in [0, 1, 3] {
+            app.snapshots.snapshots = vec![saved.clone(); count];
+            for (index, snapshot) in app.snapshots.snapshots.iter_mut().enumerate().skip(1) {
+                snapshot.name = format!("{} {index}", saved.name);
+            }
+            if count > 0 {
+                app.select_snapshot(Some(saved.name.clone())).unwrap();
+            }
+            for scale in [1.0, 1.1, 1.25, 1.5, 1.75, 2.0] {
+                app.open_snapshot_manager();
+                let ctx = egui::Context::default();
+                super::super::shell::configure_style(&ctx);
+                ctx.set_pixels_per_point(scale);
+                for physical_height in [500, 570, 577, 601, 773, 801, 843] {
+                    let screen = egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(801.0 / scale, physical_height as f32 / scale),
+                    );
+                    let mut settled = None;
+                    for frame in 0..20 {
+                        let _ = ctx.run(
+                            egui::RawInput {
+                                screen_rect: Some(screen),
+                                ..Default::default()
+                            },
+                            |ctx| app.show_snapshot_dialog(ctx),
+                        );
+                        let rect = ctx
+                            .memory(|memory| memory.area_rect(egui::Id::new("snapshot_manager")))
+                            .unwrap();
+                        if frame >= 10 {
+                            if let Some(previous) = settled {
+                                assert_eq!(rect, previous, "Snapshot manager moved at scale {scale}, count {count}, height {physical_height}, frame {frame}");
+                            }
+                            settled = Some(rect);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn snapshot_manager_is_compact_centered_and_places_the_name_label_left_of_the_field() {
         for size in [egui::vec2(800.0, 600.0), egui::vec2(1280.0, 900.0)] {
@@ -1858,6 +2211,96 @@ mod tests {
         assert!(restarted.comparison.is_none());
     }
     #[test]
+    fn delete_all_snapshots_confirms_and_only_deletes_the_current_firmware() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        let other_root = directory.path().join("other-build");
+        fixture(&root);
+        fixture(&other_root);
+        std::fs::copy(root.join("app.elf"), root.join("other.elf")).unwrap();
+        let mut app = open(&root);
+        app.open(root.join("other.elf"));
+        finish(&mut app);
+        app.take_snapshot("other firmware").unwrap();
+        let other_path = snapshot_path(
+            app.preferences_file.as_ref().unwrap(),
+            &root,
+            &app.snapshots.snapshots[0],
+        )
+        .unwrap();
+        app.open(root.join("app.elf"));
+        finish(&mut app);
+        app.take_snapshot("first").unwrap();
+        app.take_snapshot("second").unwrap();
+        app.select_snapshot(Some("first".into())).unwrap();
+        let current_paths: Vec<_> = app
+            .snapshots
+            .snapshots
+            .iter()
+            .filter(|s| s.firmware == "app.elf")
+            .map(|s| snapshot_path(app.preferences_file.as_ref().unwrap(), &root, s).unwrap())
+            .collect();
+        let mut other_app = open(&other_root);
+        other_app.take_snapshot("other build").unwrap();
+        let other_build_path = snapshot_path(
+            other_app.preferences_file.as_ref().unwrap(),
+            &other_root,
+            &other_app.snapshots.snapshots[0],
+        )
+        .unwrap();
+        app.open_snapshot_manager();
+        let ctx = egui::Context::default();
+        click_manager(&ctx, &mut app, "Delete all snapshots");
+        assert!(matches!(app.snapshot_dialog, Some(Dialog::DeleteAll)));
+        assert!(current_paths.iter().all(|path| path.is_file()));
+        click_manager(&ctx, &mut app, "Cancel");
+        assert_eq!(app.snapshot_label(), Some("first"));
+        assert!(current_paths.iter().all(|path| path.is_file()));
+        click_manager(&ctx, &mut app, "Delete all snapshots");
+        click_manager(&ctx, &mut app, "Delete all snapshots");
+        assert!(matches!(app.snapshot_dialog, Some(Dialog::Manager)));
+        assert!(current_paths.iter().all(|path| !path.exists()));
+        assert!(!current_paths[0].parent().unwrap().exists());
+        assert!(other_path.is_file());
+        assert!(other_build_path.is_file());
+        assert!(app.snapshot_label().is_none());
+        assert!(app.comparison.is_none());
+        click_manager(&ctx, &mut app, "Delete all snapshots");
+        assert!(
+            matches!(app.snapshot_dialog, Some(Dialog::Manager)),
+            "Delete-all must be disabled for an empty list"
+        );
+        let restarted = open(&root);
+        assert_eq!(restarted.snapshots.snapshots.len(), 1);
+        assert_eq!(restarted.snapshots.snapshots[0].firmware, "other.elf");
+    }
+
+    #[test]
+    fn delete_all_snapshots_keeps_failed_deletions_and_reports_partial_success() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        app.take_snapshot("blocked").unwrap();
+        app.take_snapshot("deletable").unwrap();
+        app.select_snapshot(Some("blocked".into())).unwrap();
+        let path = snapshot_path(
+            app.preferences_file.as_ref().unwrap(),
+            &root,
+            &app.snapshots.snapshots[0],
+        )
+        .unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let error = app.delete_all_snapshots().unwrap_err();
+        assert!(error.contains("Deleted 1 snapshots"));
+        assert!(error.contains("blocked"));
+        assert_eq!(app.snapshots.snapshots.len(), 1);
+        assert_eq!(app.snapshot_label(), Some("blocked"));
+        assert!(path.is_dir());
+    }
+
+    #[test]
     fn failed_background_saves_show_errors_inside_the_snapshot_manager() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
@@ -1959,6 +2402,445 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn removed_entries_are_visible_across_baseline_views_without_changing_current_reports() {
+        use super::super::{overview::Metric, View};
+        use firmware_analysis_core::dependencies::DependencyNode;
+        use firmware_analysis_core::{
+            Classification, FileTree, FileUsage, MemoryKind, MemoryRange, MemoryRegion, Usage,
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        let original = (**app.analysis.as_ref().unwrap()).clone();
+        let mut old = original.clone();
+        let mut section = old.sections.iter().find(|s| s.allocated).unwrap().clone();
+        section.index = old.sections.iter().map(|s| s.index).max().unwrap() + 1;
+        section.name = ".probe_removed".into();
+        section.address = 0x20008000;
+        section.load_address = None;
+        section.size = 1740;
+        section.runtime_size = 1740;
+        section.load_size = 0;
+        section.usage = Usage {
+            flash: 0,
+            ram: 1740,
+        };
+        section.classification = Classification::NoLoadRam;
+        let mut symbol = old.symbols[0].clone();
+        symbol.name = "moved_probe".into();
+        symbol.demangled_name = symbol.name.clone();
+        symbol.kind = "Global".into();
+        symbol.source_file = Some("old_probe.c".into());
+        symbol.compilation_unit = Some("old_probe.c".into());
+        symbol.dwarf_compilation_unit = Some("old_probe.c".into());
+        symbol.section_index = section.index;
+        symbol.section = section.name.clone();
+        symbol.address = section.address;
+        symbol.normalized_address = symbol.address;
+        symbol.size = 1740;
+        symbol.usage = section.usage;
+        let symbol_id = symbol_key(&symbol);
+        old.sections.push(section.clone());
+        old.symbols.push(symbol.clone());
+        old.files.push(FileUsage {
+            path: "old_probe.c".into(),
+            attribution: "test".into(),
+            usage: symbol.usage,
+            symbol_count: 1,
+        });
+        old.tree = FileTree {
+            name: "project".into(),
+            usage: symbol.usage,
+            children: vec![FileTree {
+                name: "old_probe.c".into(),
+                usage: symbol.usage,
+                children: vec![],
+            }],
+        };
+        old.options.regions.push(MemoryRegion {
+            name: "probe_RAM".into(),
+            start: section.address,
+            size: 4096,
+            kind: MemoryKind::Ram,
+        });
+        old.memory_map.push(MemoryRange {
+            name: ".probe_removed".into(),
+            address: section.address,
+            size: 1740,
+            space: "Runtime".into(),
+            evidence: "test".into(),
+        });
+        old.dependencies.nodes.push(DependencyNode {
+            id: "old_probe.c".into(),
+            label: "old_probe.c".into(),
+            objects: vec![],
+            usage: Some(symbol.usage),
+            evidence: "test".into(),
+        });
+        old.tls = Some(firmware_analysis_core::TlsReport {
+            source: "test".into(),
+            initialized_size: 1740,
+            zero_initialized_size: 0,
+            template_size: 1740,
+            alignment: 4,
+            total_runtime_ram: None,
+            symbols: vec![firmware_analysis_core::TlsSymbol {
+                name: "probe_tls".into(),
+                offset: 0,
+                size: 1740,
+                section: ".tdata".into(),
+            }],
+        });
+        let mut stack = app.stack.clone().unwrap();
+        let mut frame = stack.entries[0].clone();
+        frame.function = "probe_frame".into();
+        frame.local_bytes = 1740;
+        frame.symbol_candidates = vec!["moved_probe".into()];
+        let frame_id = stack_key(&frame);
+        stack.entries.push(frame);
+        app.analysis = Some(Arc::new(old.clone()));
+        app.stack = Some(stack);
+        app.take_snapshot("baseline").unwrap();
+        app.select_snapshot(Some("baseline".into())).unwrap();
+
+        // Keep the section and physical region, but move the symbol to another
+        // file. A separate baseline-only section tests historical drilldowns.
+        let mut current = original.clone();
+        current.sections.push(section.clone());
+        symbol.source_file = Some("new_probe.c".into());
+        symbol.compilation_unit = Some("new_probe.c".into());
+        symbol.dwarf_compilation_unit = Some("new_probe.c".into());
+        current.symbols.push(symbol.clone());
+        current.files.push(FileUsage {
+            path: "new_probe.c".into(),
+            attribution: "test".into(),
+            usage: symbol.usage,
+            symbol_count: 1,
+        });
+        current.tree = FileTree {
+            name: "project".into(),
+            usage: symbol.usage,
+            children: vec![FileTree {
+                name: "new_probe.c".into(),
+                usage: symbol.usage,
+                children: vec![],
+            }],
+        };
+        current.options.regions = old.options.regions.clone();
+        let mut removed_section = section.clone();
+        removed_section.index += 1;
+        removed_section.name = ".other_probe_removed".into();
+        // Add this extra section to the captured baseline, then rebuild its values.
+        app.snapshots.snapshots[0]
+            .analysis
+            .sections
+            .push(removed_section.clone());
+        app.snapshots.snapshots[0].values = collect(
+            &app.snapshots.snapshots[0].analysis,
+            app.snapshots.snapshots[0].stack.as_ref(),
+        );
+        app.analysis = Some(Arc::new(current.clone()));
+        app.stack = None;
+        app.sync_snapshot_comparison();
+        assert_eq!(
+            app.snapshot_bytes("symbol", &symbol_id, "usage.ram", 0),
+            "0 B (-1.70 KiB; removed)"
+        );
+        assert_eq!(
+            app.snapshot_bytes("symbol", &symbol_key(&symbol), "usage.ram", 1740),
+            "1.70 KiB (new)"
+        );
+        assert_eq!(
+            app.snapshot_bytes("file", "old_probe.c", "usage.flash", 0),
+            "0 B (removed)"
+        );
+        assert!(app
+            .snapshot_address("symbol", &symbol_id, "address", 0)
+            .contains("removed; baseline 0x20008000"));
+        assert_eq!(
+            app.snapshot_bytes("stack", &frame_id, "local_bytes", 0),
+            "0 B (-1.70 KiB; removed)"
+        );
+        let display = app.baseline_display_analysis().unwrap();
+        assert_eq!(display.totals, current.totals);
+        assert_eq!(
+            app.analysis.as_ref().unwrap().symbols.len(),
+            current.symbols.len()
+        );
+        assert_eq!(display.symbols.len(), current.symbols.len() + 1);
+        let region = display
+            .options
+            .regions
+            .iter()
+            .find(|r| r.name == "probe_RAM")
+            .unwrap();
+        let usage = app.display_region_usage(&display, region);
+        let actual_usage = firmware_analysis_core::regions::region_usage(&current, region);
+        assert_eq!(
+            (usage.used, usage.free),
+            (actual_usage.used, actual_usage.free)
+        );
+        assert!(usage
+            .symbols
+            .iter()
+            .any(|e| symbol_key(&display.symbols[e.symbol_index]) == symbol_id));
+
+        let ctx = egui::Context::default();
+        let render = |app: &mut Explorer, view: View| {
+            app.change_view(view);
+            app.search = "probe".into();
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1600.0, 1200.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| match view {
+                        View::Files => app.files(ui, &current),
+                        View::Symbols => app.symbols(ui, &current),
+                        View::Sections => app.sections(ui, &current),
+                        View::MemoryMap => app.memory_map(ui, &current),
+                        View::Stack => app.stack_view(ui),
+                        View::Overview => app.overview_pie(ui, &current),
+                        _ => unreachable!(),
+                    });
+                },
+            );
+            output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(t) => Some(t.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        for view in [
+            View::Files,
+            View::Symbols,
+            View::Sections,
+            View::MemoryMap,
+            View::Stack,
+        ] {
+            let texts = render(&mut app, view);
+            assert!(
+                texts.iter().any(|t| t.contains("0 B (-1.70 KiB; removed)")),
+                "{}: {texts:?}",
+                view.label()
+            );
+        }
+        app.overview_metric = Metric::Ram;
+        let texts = render(&mut app, View::Overview);
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains(".other_probe_removed") && t.contains("removed")),
+            "{texts:?}"
+        );
+        app.overview_section = Some(section.index);
+        let texts = render(&mut app, View::Overview);
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("old_probe.c") && t.contains("removed")),
+            "{texts:?}"
+        );
+        app.overview_unit = Some(super::super::pie::UnitKey::Dwarf("old_probe.c".into()));
+        let texts = render(&mut app, View::Overview);
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("moved_probe") && t.contains("removed")),
+            "{texts:?}"
+        );
+        app.change_view(View::MemoryMap);
+        app.selected_region = Some(
+            current
+                .options
+                .regions
+                .iter()
+                .position(|r| r.name == "probe_RAM")
+                .unwrap(),
+        );
+        let texts = render(&mut app, View::MemoryMap);
+        assert!(
+            texts.iter().any(|t| t.contains("0 B (-1.70 KiB; removed)")),
+            "{texts:?}"
+        );
+
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1600.0, 1200.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.directory_tree(ui, &current));
+            },
+        );
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(t) if t.galley.text().contains("old_probe.c") && t.galley.text().contains("removed"))));
+        assert_eq!(
+            app.snapshot_bytes("tls_symbol", "probe_tls", "size", 0),
+            "0 B (-1.70 KiB; removed)"
+        );
+        assert_eq!(display.tls.as_ref().unwrap().template_size, 0);
+        assert_eq!(display.tls.as_ref().unwrap().symbols[0].size, 0);
+        assert_eq!(
+            display.dependencies.edges.len(),
+            current.dependencies.edges.len()
+        );
+        assert_eq!(
+            app.snapshot_bytes("dependency", "old_probe.c", "ram", 0),
+            "0 B (-1.70 KiB; removed)"
+        );
+        app.change_view(View::Dependencies);
+        app.search = "old_probe".into();
+        let output = super::super::dependencies::settle_graph(&mut app, |app| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1600.0, 1200.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| app.dependency_view(ui, &current));
+                },
+            )
+        });
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(t) if t.galley.text().contains("old_probe.c") && t.galley.text().contains("removed"))));
+
+        app.take_snapshot("current").unwrap();
+        let saved = app
+            .snapshots
+            .snapshots
+            .iter()
+            .find(|s| s.name == "current")
+            .unwrap();
+        assert_eq!(saved.analysis.symbols.len(), current.symbols.len());
+        assert!(!saved.analysis.files.iter().any(|f| f.path == "old_probe.c"));
+        app.select_snapshot(None).unwrap();
+        assert!(app.baseline_display.is_none());
+        let texts = render(&mut app, View::Symbols);
+        assert!(!texts.iter().any(|t| t.contains("; removed)")), "{texts:?}");
+    }
+
+    #[test]
+    fn rebuilding_baseline_clears_display_only_navigation() {
+        use super::super::{pie::UnitKey, View};
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        let current = app.analysis.clone().unwrap();
+        let mut old = (*current).clone();
+        let mut section = old.sections.iter().find(|s| s.allocated).unwrap().clone();
+        section.index = old.sections.iter().map(|s| s.index).max().unwrap() + 1;
+        section.name = ".baseline_only".into();
+        old.sections.push(section);
+        old.options
+            .regions
+            .push(firmware_analysis_core::MemoryRegion {
+                name: "baseline_only".into(),
+                start: 0,
+                size: 4096,
+                kind: firmware_analysis_core::MemoryKind::Ram,
+            });
+        app.analysis = Some(Arc::new(old));
+        app.take_snapshot("baseline").unwrap();
+        app.analysis = Some(current.clone());
+        app.select_snapshot(Some("baseline".into())).unwrap();
+        let display = app.baseline_display_analysis().unwrap();
+        let section = display
+            .sections
+            .iter()
+            .find(|s| s.name == ".baseline_only")
+            .unwrap()
+            .index;
+        let region = display
+            .options
+            .regions
+            .iter()
+            .position(|r| r.name == "baseline_only")
+            .unwrap();
+        app.overview_section = Some(section);
+        app.overview_unit = Some(UnitKey::Other);
+        app.selected_region = Some(region);
+        app.tab_options[View::MemoryMap as usize].selected_region = Some(region);
+        // Even rebuilding the same baseline must not carry temporary indexes
+        // into a newly constructed display report.
+        app.sync_snapshot_comparison();
+        assert_eq!(app.overview_section, None);
+        assert_eq!(app.overview_unit, None);
+        assert_eq!(app.selected_region, None);
+        assert_eq!(
+            app.tab_options[View::MemoryMap as usize].selected_region,
+            None
+        );
+
+        // Current section selections remain valid when comparison ends.
+        let section = current.sections.iter().find(|s| s.allocated).unwrap().index;
+        app.overview_section = Some(section);
+        app.select_snapshot(None).unwrap();
+        assert_eq!(app.overview_section, Some(section));
+    }
+
+    #[test]
+    fn overview_keeps_zero_byte_current_symbols_present_in_baseline_drilldowns() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        app.take_snapshot("baseline").unwrap();
+        app.select_snapshot(Some("baseline".into())).unwrap();
+        let mut current = (**app.analysis.as_ref().unwrap()).clone();
+        let symbol = current
+            .symbols
+            .iter_mut()
+            .find(|s| s.usage.flash > 0)
+            .unwrap();
+        let name = symbol.demangled_name.clone();
+        app.overview_section = Some(symbol.section_index);
+        app.overview_unit = Some(if let Some(unit) = &symbol.dwarf_compilation_unit {
+            super::super::pie::UnitKey::Dwarf(unit.clone())
+        } else if let Some(unit) = &symbol.compilation_unit {
+            super::super::pie::UnitKey::Elf(unit.clone())
+        } else {
+            super::super::pie::UnitKey::Other
+        });
+        app.overview_metric = super::super::overview::Metric::Flash;
+        symbol.size = 0;
+        symbol.usage = Default::default();
+        app.analysis = Some(Arc::new(current.clone()));
+        app.sync_snapshot_comparison();
+        let ctx = egui::Context::default();
+        let output = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| app.overview_pie(ui, &current));
+        });
+        let label = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text)
+                    if text.galley.text().starts_with(&format!("{name} - ")) =>
+                {
+                    Some(text.galley.text())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert!(label.contains("0 B (-"), "{label}");
+        assert!(!label.contains("removed"), "{label}");
+    }
+
     #[test]
     fn default_tabs_and_compare_share_the_snapshot_baseline() {
         let directory = tempfile::tempdir().unwrap();

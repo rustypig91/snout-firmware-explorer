@@ -7,6 +7,7 @@ mod wake;
 use wake::Wake;
 static RESTART_PATH: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
 mod artifact_browser;
+mod baseline_display;
 mod dependencies;
 mod display;
 mod insights;
@@ -177,6 +178,7 @@ struct Explorer {
     preview: Option<(PathBuf, String)>,
     layout_override: Option<AnalysisOptions>,
     comparison: Option<Comparison>,
+    baseline_display: Option<baseline_display::BaselineDisplay>,
     stack: Option<StackReport>,
     stack_show_unresolved: bool,
     options: AnalysisOptions,
@@ -233,6 +235,7 @@ impl Default for Explorer {
             preview: None,
             layout_override: None,
             comparison: None,
+            baseline_display: None,
             stack: None,
             stack_show_unresolved: false,
             options: AnalysisOptions::default(),

@@ -3,7 +3,7 @@ use super::Explorer;
 use eframe::egui;
 use firmware_analysis_core::{format_bytes as bytes, Analysis};
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) enum UnitKey {
     Dwarf(String),
     Elf(String),
@@ -35,7 +35,7 @@ enum Target {
     Unit(UnitKey),
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 enum SliceIdentity {
     Section(String),
     Unit(UnitKey),
@@ -147,7 +147,22 @@ fn metric_slices_for_display(
             .iter()
             .filter(|s| {
                 s.allocated
-                    && (metric == super::overview::Metric::All || metric.section_size(s) > 0)
+                    && (metric == super::overview::Metric::All
+                        || metric.section_size(s) > 0
+                        || app.is_some_and(|app| {
+                            app.snapshot_removed("section", &s.name)
+                                && app
+                                    .snapshot_old(
+                                        "section",
+                                        &s.name,
+                                        if metric == super::overview::Metric::Ram {
+                                            "usage.ram"
+                                        } else {
+                                            "usage.flash"
+                                        },
+                                    )
+                                    .is_some_and(|size| size > 0)
+                        }))
             })
             .map(|s| Slice {
                 identity: SliceIdentity::Section(s.name.clone()),
@@ -182,10 +197,21 @@ fn baseline_slices(
     metric: super::overview::Metric,
 ) -> Result<Vec<Slice>, ()> {
     let section = if let Some(index) = section {
-        let Some(current) = current.sections.iter().find(|s| s.index == index) else {
+        let Some(selected) = current.sections.iter().find(|s| s.index == index) else {
             return Ok(Vec::new());
         };
-        let mut matches = baseline.sections.iter().filter(|s| s.name == current.name);
+        // A name must identify exactly one section in both builds. Otherwise
+        // each current duplicate would compare against the same baseline bytes.
+        if current
+            .sections
+            .iter()
+            .filter(|s| s.name == selected.name)
+            .count()
+            != 1
+        {
+            return Err(());
+        }
+        let mut matches = baseline.sections.iter().filter(|s| s.name == selected.name);
         let Some(old) = matches.next() else {
             return Ok(Vec::new());
         };
@@ -202,14 +228,23 @@ fn baseline_slices(
 // A display label can be shared by different units or symbols. Only compare
 // stable identities, and leave duplicate identities unknown rather than summing
 // multiple baseline rows into the delta for one current row.
-fn baseline_size(item: &Slice, baseline: &[Slice]) -> Result<u64, ()> {
-    let mut matches = baseline.iter().filter(|old| old.identity == item.identity);
-    let size = matches.next().map_or(0, |old| old.size);
-    if matches.next().is_some() {
-        Err(())
-    } else {
-        Ok(size)
+fn baseline_sizes(baseline: &[Slice]) -> std::collections::HashMap<SliceIdentity, Result<u64, ()>> {
+    let mut sizes = std::collections::HashMap::with_capacity(baseline.len());
+    for item in baseline {
+        sizes
+            .entry(item.identity.clone())
+            .and_modify(|size| *size = Err(()))
+            .or_insert(Ok(item.size));
     }
+    sizes
+}
+
+#[cfg(test)]
+fn baseline_size(item: &Slice, baseline: &[Slice]) -> Result<u64, ()> {
+    baseline_sizes(baseline)
+        .get(&item.identity)
+        .copied()
+        .unwrap_or(Ok(0))
 }
 
 pub(super) fn color(name: &str) -> egui::Color32 {
@@ -224,7 +259,9 @@ impl Explorer {
             self.overview_section = None;
         }
     }
-    pub(super) fn overview_pie(&mut self, ui: &mut egui::Ui, a: &Analysis) {
+    pub(super) fn overview_pie(&mut self, ui: &mut egui::Ui, current: &Analysis) {
+        let display = self.baseline_display_analysis();
+        let a = display.as_deref().unwrap_or(current);
         ui.horizontal_wrapped(|ui| {
             if self.overview_section.is_some() && ui.button("Back").clicked() {
                 self.overview_back();
@@ -243,7 +280,7 @@ impl Explorer {
                 ui.label(format!("/ {}", display_path(unit.label())));
             }
         });
-        let items = metric_slices_for_display(
+        let mut items = metric_slices_for_display(
             a,
             self.overview_section,
             self.overview_unit.as_ref(),
@@ -261,6 +298,44 @@ impl Explorer {
         });
         let ambiguous_section = matches!(baseline, Some(Err(())));
         let baseline_items = baseline.as_ref().and_then(|items| items.as_ref().ok());
+        // Presence is independent of byte size: zero-sized current labels are
+        // still current, while baseline-only rows take no current chart space.
+        let current_section = self
+            .overview_section
+            .and_then(|index| current.sections.iter().find(|s| s.index == index));
+        let current_items: std::collections::HashSet<_> =
+            if baseline.is_none() || self.overview_section.is_none() || current_section.is_none() {
+                Default::default()
+            } else {
+                metric_slices(
+                    current,
+                    current_section.map(|s| s.index),
+                    self.overview_unit.as_ref(),
+                    self.overview_metric,
+                )
+                .into_iter()
+                .map(|item| item.identity)
+                .collect()
+            };
+        let baseline_sizes = baseline_items.map(|items| baseline_sizes(items));
+        if let Some(baseline_items) = baseline_items {
+            let mut present: std::collections::HashSet<_> =
+                items.iter().map(|item| item.identity.clone()).collect();
+            for old in baseline_items {
+                if present.insert(old.identity.clone()) {
+                    let mut item = old.clone();
+                    item.size = 0;
+                    if let SliceIdentity::Section(name) = &item.identity {
+                        item.target = a
+                            .sections
+                            .iter()
+                            .find(|s| &s.name == name)
+                            .map(|s| Target::Section(s.index));
+                    }
+                    items.push(item);
+                }
+            }
+        }
         self.visible_rows = items.len();
         let total: u64 = items.iter().map(|s| s.size).sum();
         ui.label(format!(
@@ -290,10 +365,26 @@ impl Explorer {
             let old_size = if ambiguous_section {
                 Some(Err(()))
             } else {
-                baseline_items.map(|items| baseline_size(item, items))
+                baseline_sizes
+                    .as_ref()
+                    .map(|sizes| sizes.get(&item.identity).copied().unwrap_or(Ok(0)))
             };
-            let size_label = if old_size == Some(Err(())) {
+            let removed = baseline.is_some()
+                && match &item.identity {
+                    SliceIdentity::Section(name) => {
+                        !current.sections.iter().any(|s| &s.name == name)
+                    }
+                    _ => !current_items.contains(&item.identity),
+                };
+            let size_label = if removed {
+                super::snapshots::removed_bytes(old_size.and_then(Result::ok))
+            } else if old_size == Some(Err(())) {
                 format!("{} (baseline ambiguous)", bytes(item.size))
+            } else if baseline_sizes
+                .as_ref()
+                .is_some_and(|sizes| !sizes.contains_key(&item.identity))
+            {
+                format!("{} (new)", bytes(item.size))
             } else {
                 self.snapshot_difference(item.size, old_size.and_then(Result::ok))
             };
@@ -439,6 +530,20 @@ mod tests {
             )
             .is_err());
         }
+        // The inverse is equally ambiguous: two current sections cannot both
+        // claim the contents of one baseline section, even with different indexes.
+        for duplicate in baseline.sections.iter().filter(|s| s.name == section.name) {
+            for unit in [None, Some(UnitKey::Other)] {
+                assert!(baseline_slices(
+                    &baseline,
+                    &current,
+                    Some(duplicate.index),
+                    unit.as_ref(),
+                    super::super::overview::Metric::Flash,
+                )
+                .is_err());
+            }
+        }
         baseline.sections.retain(|s| s.name != section.name);
         assert!(baseline_slices(
             &current,
@@ -467,7 +572,13 @@ mod tests {
             identity: SliceIdentity::Padding,
             ..item.clone()
         };
-        assert_eq!(baseline_size(&padding, &[item]), Ok(0));
+        assert_eq!(baseline_size(&padding, std::slice::from_ref(&item)), Ok(0));
+        let sizes = baseline_sizes(&[item.clone(), padding.clone(), item]);
+        assert_eq!(sizes.get(&padding.identity), Some(&Ok(10)));
+        assert_eq!(
+            sizes.get(&SliceIdentity::Symbol("symbol".into())),
+            Some(&Err(()))
+        );
     }
 
     #[test]

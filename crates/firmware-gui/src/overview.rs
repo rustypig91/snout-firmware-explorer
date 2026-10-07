@@ -39,7 +39,7 @@ impl Explorer {
                 .options
                 .regions
                 .iter()
-                .map(|r| firmware_analysis_core::regions::region_usage(a, r))
+                .map(|r| self.display_region_usage(a, r))
                 .collect();
             for (slot, metric) in [Metric::Flash, Metric::Ram].into_iter().enumerate() {
                 let mut files: Vec<_> = (0..a.files.len())
@@ -119,12 +119,13 @@ impl Explorer {
                 self.firmware_heading(ui, a);
                 self.capacity_summary(ui, a);
                 self.ram_composition(ui, a);
-                if let Some(tls) = &a.tls {
+                let display = self.baseline_display_analysis();
+                if let Some(tls) = &display.as_deref().unwrap_or(a).tls {
                     ui.group(|ui| {
                         ui.strong("Thread-local storage");
                         ui.label(format!("Template per thread: {} — {} initialized, {} zero-initialized; alignment {}", self.snapshot_bytes("tls", "", "template_size", tls.template_size), self.snapshot_bytes("tls", "", "initialized_size", tls.initialized_size), self.snapshot_bytes("tls", "", "zero_initialized_size", tls.zero_initialized_size), self.snapshot_bytes("tls", "", "alignment", tls.alignment)));
                         ui.label("Total TLS RAM is unknown. Static RAM excludes TLS templates; allocation may be inside existing stack reservations.");
-                        ui.collapsing(format!("{} TLS variables", self.snapshot_count("counts", "", "tls", tls.symbols.len() as u64)), |ui| {
+                        ui.collapsing(format!("{} TLS variables", self.snapshot_count("counts", "", "tls", a.tls.as_ref().map_or(0, |t| t.symbols.len()) as u64)), |ui| {
                             for symbol in &tls.symbols {
                                 ui.monospace(format!("{}  {}  {} [{}]", self.snapshot_address("tls_symbol", &symbol.name, "offset", symbol.offset), self.snapshot_bytes("tls_symbol", &symbol.name, "size", symbol.size), symbol.name, symbol.section));
                             }
@@ -243,6 +244,21 @@ impl Explorer {
                     .desired_height(8.0),
             );
         }
+        if let Some(old) = self.snapshot_analysis() {
+            for region in old
+                .options
+                .regions
+                .iter()
+                .filter(|r| self.snapshot_removed("region", &r.name))
+            {
+                ui.label(format!(
+                    "{}: {} used / {} total (removed)",
+                    region.name,
+                    self.snapshot_bytes("region", &region.name, "used", 0),
+                    self.snapshot_bytes("region", &region.name, "size", 0)
+                ));
+            }
+        }
         ui.horizontal_wrapped(|ui| {
             let source = if self.layout_source.is_empty() {
                 "ELF inference"
@@ -269,6 +285,11 @@ impl Explorer {
             let mut roles = std::collections::BTreeMap::<&str, u64>::new();
             for section in a.sections.iter().filter(|s| s.usage.ram > 0) {
                 *roles.entry(super::insights::ram_role(section)).or_default() += section.usage.ram;
+            }
+            if let Some(old) = self.snapshot_analysis() {
+                for section in old.sections.iter().filter(|s| s.usage.ram > 0) {
+                    roles.entry(super::insights::ram_role(section)).or_default();
+                }
             }
             for (role, size) in roles {
                 ui.label(format!("{role}: {}", self.snapshot_bytes("ram_role", role, "size", size)));

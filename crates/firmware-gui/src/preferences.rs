@@ -1,4 +1,4 @@
-use super::{AnalysisOptions, Explorer, Loaded, RememberedFirmware, View};
+use super::{Explorer, Loaded, View};
 use std::path::{Path, PathBuf};
 
 pub(super) fn preferences_path() -> Option<PathBuf> {
@@ -20,16 +20,50 @@ fn write_preferences(
         )
     })?;
     std::fs::create_dir_all(parent)?;
+    // tempfile uses Win32 paths directly. Canonicalization supplies the
+    // extended-length prefix required when the configuration path is long.
+    let parent = std::fs::canonicalize(parent)?;
+    let destination = parent.join(path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Missing preferences filename",
+        )
+    })?);
     // Stage alongside the destination so replacement stays on one filesystem.
     // Keep the last saved workspace intact until the new file is complete.
-    let mut staged = tempfile::NamedTempFile::new_in(parent)?;
+    let mut staged = tempfile::NamedTempFile::new_in(&parent)?;
     serde_json::to_writer_pretty(&mut staged, value)?;
     staged.as_file().sync_all()?;
-    staged.persist(path).map_err(|error| error.error)?;
+    staged.persist(destination).map_err(|error| error.error)?;
     Ok(())
 }
 
 impl Explorer {
+    pub(super) fn open_configuration_folder(&self) -> Result<(), String> {
+        let folder = self
+            .preferences_file
+            .as_ref()
+            .and_then(|path| path.parent())
+            .ok_or("Configuration folder is unavailable")?;
+        std::fs::create_dir_all(folder)
+            .map_err(|error| format!("Could not create configuration folder: {error}"))?;
+        #[cfg(target_os = "windows")]
+        let launcher = "explorer.exe";
+        #[cfg(target_os = "macos")]
+        let launcher = "open";
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        let launcher = "xdg-open";
+        let mut child = std::process::Command::new(launcher)
+            .arg(folder)
+            .spawn()
+            .map_err(|error| format!("Could not open configuration folder: {error}"))?;
+        // Reap the launcher without blocking the UI while the file explorer runs.
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+        Ok(())
+    }
+
     pub(super) fn refresh(&mut self) {
         if self.receiver.is_some() {
             return;
@@ -74,7 +108,7 @@ impl Explorer {
     }
 
     pub(super) fn preference_value(&self) -> serde_json::Value {
-        serde_json::json!({"version": 1, "recent_build_folders": self.recent_build_folders, "build_settings": self.build_settings, "check_updates_on_startup": self.updates.check_on_startup, "skipped_version": self.updates.skipped_version, "folder": self.build.as_ref().map(|b| &b.root), "firmware": self.analysis.as_ref().map(|a| &a.path), "layout": self.layout_override, "layout_source": self.layout_source, "view": self.view.label()})
+        serde_json::json!({"version": 1, "recent_build_folders": self.recent_build_folders, "build_settings": self.build_settings, "check_updates_on_startup": self.updates.check_on_startup, "skipped_version": self.updates.skipped_version, "folder": self.build.as_ref().map(|b| &b.root), "view": self.view.label()})
     }
     pub(super) fn save_preferences(&self) -> Result<(), Box<dyn std::error::Error>> {
         let Some(path) = &self.preferences_file else {
@@ -136,13 +170,6 @@ impl Explorer {
                 break;
             }
         }
-        // Older preferences only stored the last open folder.
-        if self.recent_build_folders.is_empty() {
-            if let Some(folder) = value["folder"].as_str().map(PathBuf::from) {
-                let folder = folder.canonicalize().unwrap_or(folder);
-                self.remember_build_folder(folder);
-            }
-        }
         self.build_settings =
             serde_json::from_value(value["build_settings"].clone()).unwrap_or_default();
         self.updates.check_on_startup = value["check_updates_on_startup"].as_bool().unwrap_or(true);
@@ -161,43 +188,6 @@ impl Explorer {
         else {
             return;
         };
-        if let Some(firmware) = value["firmware"]
-            .as_str()
-            .map(PathBuf::from)
-            .filter(|p| p.is_file())
-            .and_then(|p| p.canonicalize().ok())
-            .filter(|p| p.starts_with(&folder))
-        {
-            let layout: Option<AnalysisOptions> = serde_json::from_value(value["layout"].clone())
-                .ok()
-                .flatten();
-            let layout = layout.filter(|l| firmware_analysis_core::validate_options(l).is_ok());
-            let settings = self.build_settings.entry(folder.clone()).or_default();
-            if settings.firmware.is_none() {
-                settings.firmware = Some(firmware.clone());
-            }
-            if let Some(options) = &layout {
-                settings
-                    .layouts
-                    .entry(firmware.clone())
-                    .or_insert_with(|| super::SavedLayout {
-                        options: options.clone(),
-                        source: value["layout_source"]
-                            .as_str()
-                            .unwrap_or("Saved layout")
-                            .into(),
-                    });
-            }
-            self.remembered_firmware = Some(RememberedFirmware {
-                folder: folder.clone(),
-                path: firmware,
-                layout,
-                source: value["layout_source"]
-                    .as_str()
-                    .unwrap_or("Saved layout")
-                    .into(),
-            });
-        }
         if restore_workspace {
             self.scan_build(folder);
         }
@@ -209,6 +199,30 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use std::io::Read;
+
+    #[test]
+    fn preferences_save_and_replace_beyond_windows_max_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory
+            .path()
+            .join("long-config-directory-".repeat(6))
+            .join("nested-config-directory-".repeat(6))
+            .join("workspace.json");
+        assert!(path.as_os_str().len() > 260);
+        for view in ["Overview", "Symbols"] {
+            let value = serde_json::json!({"version": 1, "view": view});
+            write_preferences(&path, &value).unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap())
+                    .unwrap(),
+                value
+            );
+            assert_eq!(
+                std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+                1
+            );
+        }
+    }
 
     #[test]
     fn saves_replace_complete_preferences_without_truncating_the_previous_file() {
