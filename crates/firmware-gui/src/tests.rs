@@ -2260,6 +2260,8 @@ fn sidebar_checkboxes_and_map_radios_apply_choices_to_current_elf() {
     let root = dir.path().canonicalize().unwrap();
     let elf = root.join("app.elf");
     std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+    let other_elf = root.join("second.elf");
+    std::fs::copy(&elf, &other_elf).unwrap();
     for name in ["app.map", "other.map"] {
         std::fs::write(
             root.join(name),
@@ -2274,6 +2276,7 @@ fn sidebar_checkboxes_and_map_radios_apply_choices_to_current_elf() {
     app.open(elf.clone());
     finish_job(&mut app);
     let ctx = egui::Context::default();
+    ctx.style_mut(|style| style.animation_time = 0.0);
     fn frame(
         ctx: &egui::Context,
         app: &mut Explorer,
@@ -2323,6 +2326,12 @@ fn sidebar_checkboxes_and_map_radios_apply_choices_to_current_elf() {
             })
             .unwrap_or_else(|| panic!("Missing sidebar label {name}"))
     };
+    // Firmware rows are top-level, and supporting files are indented beneath them.
+    let firmware = text_pos(&output, "app.elf");
+    let map = text_pos(&output, "app.map");
+    let report = text_pos(&output, "frame.su");
+    assert!(map.y > firmware.y && report.y > map.y);
+    assert!(map.x > firmware.x && report.x > firmware.x);
     click(&ctx, &mut app, text_pos(&output, "frame.su"));
     finish_job(&mut app);
     assert_eq!(app.saved_stack_reports(&elf), Some(vec![]));
@@ -2354,6 +2363,33 @@ fn sidebar_checkboxes_and_map_radios_apply_choices_to_current_elf() {
     assert_eq!(
         app.saved_stack_reports(&elf),
         Some(vec![root.join("frame.su")])
+    );
+    app.artifact_search = "frame.su".into();
+    let output = frame(&ctx, &mut app, vec![]);
+    text_pos(&output, "app.elf");
+    text_pos(&output, "second.elf");
+    text_pos(&output, "frame.su");
+    app.artifact_search.clear();
+    // Switching via a top-level row exposes choices for the new ELF only.
+    let output = frame(&ctx, &mut app, vec![]);
+    click(&ctx, &mut app, text_pos(&output, "second.elf"));
+    finish_job(&mut app);
+    frame(&ctx, &mut app, vec![]);
+    let output = frame(&ctx, &mut app, vec![]);
+    assert_eq!(
+        app.analysis.as_ref().unwrap().path,
+        other_elf.display().to_string()
+    );
+    click(&ctx, &mut app, text_pos(&output, "frame.su"));
+    finish_job(&mut app);
+    assert_eq!(app.saved_stack_reports(&other_elf), Some(vec![]));
+    assert_eq!(
+        app.saved_stack_reports(&elf),
+        Some(vec![root.join("frame.su")])
+    );
+    assert_eq!(
+        app.build_settings[&root].layouts[&elf].source,
+        root.join("other.map").display().to_string()
     );
 }
 
