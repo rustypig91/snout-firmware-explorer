@@ -298,6 +298,11 @@ impl Explorer {
     }
 
     fn growth_summary(&mut self, ui: &mut egui::Ui) {
+        let display = self.baseline_display_analysis();
+        let paths = display
+            .as_deref()
+            .or(self.analysis.as_deref())
+            .map(|a| self.source_paths(a));
         let Some(c) = &self.comparison else {
             return;
         };
@@ -332,9 +337,14 @@ impl Explorer {
                                 for change in increases.into_iter().take(3) {
                                     any = true;
                                     let label = if group == 0 {
-                                        short_path(
-                                            &change.identity,
-                                            changes.iter().map(|c| c.identity.as_str()),
+                                        paths.as_ref().map_or_else(
+                                            || {
+                                                short_path(
+                                                    &change.identity,
+                                                    changes.iter().map(|c| c.identity.as_str()),
+                                                )
+                                            },
+                                            |p| p.short(&change.identity),
                                         )
                                     } else if group == 1 {
                                         change
@@ -352,7 +362,14 @@ impl Explorer {
                                             if ram { "RAM" } else { "Flash" },
                                             delta(change)
                                         ))
-                                        .on_hover_text(&change.identity)
+                                        .on_hover_text(if group == 0 {
+                                            paths.as_ref().map_or_else(
+                                                || change.identity.clone(),
+                                                |p| p.full(&change.identity),
+                                            )
+                                        } else {
+                                            change.identity.clone()
+                                        })
                                         .clicked()
                                     {
                                         open = Some((group, change.identity.clone()));
@@ -512,6 +529,7 @@ impl Explorer {
         }
     }
     fn contributors(&mut self, ui: &mut egui::Ui, a: &Analysis) {
+        let paths = self.source_paths(a);
         ui.horizontal_wrapped(|ui| {
             ui.strong("Largest contributors");
             ui.selectable_value(&mut self.contributor_ram, false, "Flash");
@@ -542,9 +560,9 @@ impl Explorer {
                         },
                         metric.value(file.usage)
                     ),
-                    short_path(&file.path, a.files.iter().map(|f| f.path.as_str()))
+                    paths.short(&file.path)
                 ))
-                .on_hover_text(display_path(&file.path))
+                .on_hover_text(paths.full(&file.path))
                 .clicked()
             {
                 self.change_view(View::Symbols);
@@ -591,9 +609,10 @@ impl Explorer {
                     ));
                     ui.label(format!(
                         "Source: {} | {}",
-                        display_path(symbol.source_file.as_deref().unwrap_or("Unknown")),
+                        paths.short(symbol.source_file.as_deref().unwrap_or("Unknown")),
                         symbol.attribution
-                    ));
+                    ))
+                    .on_hover_text(paths.full(symbol.source_file.as_deref().unwrap_or("Unknown")));
                     if ui.link("Open in Symbols").clicked() {
                         self.change_view(View::Symbols);
                         self.selected_file = None;

@@ -257,11 +257,13 @@ impl Explorer {
             ui.horizontal(|ui| {
                 for view in View::ALL {
                     let active = self.view == view;
-                    let response = ui.add(
-                        egui::Button::new(view.label())
-                            .frame(false)
-                            .min_size(egui::vec2(62.0, 28.0)),
-                    );
+                    let response = ui
+                        .add(
+                            egui::Button::new(view.label())
+                                .frame(false)
+                                .min_size(egui::vec2(62.0, 28.0)),
+                        )
+                        .on_hover_text(view.tooltip());
                     if active {
                         let rect = response.rect;
                         ui.painter().line_segment(

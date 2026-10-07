@@ -71,6 +71,18 @@ impl View {
             Self::Compare => "Compare",
         }
     }
+    fn tooltip(self) -> &'static str {
+        match self {
+            Self::Overview => "Firmware summary, Flash and RAM usage, and largest contributors.",
+            Self::Files => "Flash and RAM usage attributed to each source file.",
+            Self::Symbols => "Functions, variables, and labels with their sizes, addresses, and source files.",
+            Self::Sections => "ELF sections with their sizes, memory usage, and load and runtime addresses.",
+            Self::MemoryMap => "Memory regions, used and free space, and the symbols within them.",
+            Self::Dependencies => "Connections between compilation units and objects based on linker symbol references.",
+            Self::Stack => "Local function stack frames from compiler reports; total call-chain usage is unknown.",
+            Self::Compare => "Changes in section, file, and symbol memory usage against a saved snapshot.",
+        }
+    }
 }
 // Session-only settings for the controls shared by the data tabs.
 #[derive(Clone)]
@@ -169,6 +181,7 @@ struct Explorer {
     browser_cache: Option<artifact_browser::BrowserCache>,
     report_revision: u64,
     table_cache: views::TableCache,
+    source_path_cache: display::SourcePathCache,
     preferences_file: Option<PathBuf>,
     recent_build_folders: Vec<PathBuf>,
     analysis: Option<Arc<Analysis>>,
@@ -226,6 +239,7 @@ impl Default for Explorer {
             browser_cache: None,
             report_revision: 0,
             table_cache: Default::default(),
+            source_path_cache: Default::default(),
             preferences_file: None,
             recent_build_folders: Vec::new(),
             analysis: None,

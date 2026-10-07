@@ -230,6 +230,7 @@ impl Explorer {
         let current_nodes = analysis.dependencies.nodes.len();
         let display = self.baseline_display_analysis();
         let analysis = display.as_deref().unwrap_or(analysis);
+        let paths = self.source_paths(analysis);
         let graph = &analysis.dependencies;
         ui.horizontal_wrapped(|ui| {
             ui.label("Compilation units");
@@ -292,7 +293,7 @@ impl Explorer {
         }
         ui.horizontal_top(|ui| {
             let size = egui::vec2((ui.available_width() - 295.0).max(180.0), ui.available_height().max(200.0));
-            self.graph_canvas(ui, graph, &nodes, size, filter_changed);
+            self.graph_canvas(ui, graph, &paths, &nodes, size, filter_changed);
             ui.vertical(|ui| {
                 ui.set_width(280.0);
                 egui::ScrollArea::vertical().id_salt("graph_inspector").show(ui, |ui| {
@@ -301,7 +302,7 @@ impl Explorer {
                             ui.heading("Symbol references");
                             for (index, id) in [from, to].into_iter().enumerate() {
                                 if index == 1 { ui.small("uses symbols defined by ↓"); }
-                                if let Some(node) = graph.nodes.iter().find(|n| &n.id == id) { ui.label(&node.label); }
+                                if let Some(node) = graph.nodes.iter().find(|n| &n.id == id) { ui.label(paths.short(&node.label)).on_hover_text(paths.full(&node.label)); }
                             }
                             ui.separator();
                             for symbol in &edge.symbols { ui.label(symbol); }
@@ -309,7 +310,7 @@ impl Explorer {
                     } else if let Some(id) = self.graph_view.selected.clone() {
                         if let Some(node) = graph.nodes.iter().find(|n| n.id == id) {
                             ui.heading("Selected unit");
-                            ui.label(&node.label);
+                            ui.label(paths.short(&node.label)).on_hover_text(paths.full(&node.label));
                             ui.small(&node.evidence);
                             if let Some(usage) = node.usage { ui.label(format!("Flash {} · RAM {}", self.snapshot_bytes("dependency", &node.id, "flash", usage.flash), self.snapshot_bytes("dependency", &node.id, "ram", usage.ram))); }
                             else { ui.label("Memory contribution unknown"); }
@@ -321,7 +322,7 @@ impl Explorer {
                                 for edge in edges {
                                     let peer = if outgoing { &edge.to } else { &edge.from };
                                     if let Some(node) = graph.nodes.iter().find(|n| &n.id == peer) {
-                                        if ui.button(format!("{} ({} symbols)", short_path(&node.label, []), edge.symbols.len())).on_hover_text(&node.label).clicked() {
+                                        if ui.button(format!("{} ({} symbols)", paths.short(&node.label), edge.symbols.len())).on_hover_text(paths.full(&node.label)).clicked() {
                                             self.graph_view.select_edge(&edge.from, &edge.to);
                                         }
                                     }
@@ -343,6 +344,7 @@ impl Explorer {
         &mut self,
         ui: &mut egui::Ui,
         graph: &DependencyGraph,
+        paths: &super::display::SourcePaths,
         nodes: &[&firmware_analysis_core::dependencies::DependencyNode],
         size: egui::Vec2,
         filter_changed: bool,
@@ -359,24 +361,11 @@ impl Explorer {
             .fold((u64::MAX, 0), |(smallest, largest), bytes| {
                 (smallest.min(bytes), largest.max(bytes))
             });
-        let short_labels = super::display::short_paths(
-            &nodes.iter().map(|n| n.label.as_str()).collect::<Vec<_>>(),
-        );
+        let short_labels = nodes.iter().map(|n| paths.short(&n.label));
         let texts: BTreeMap<_, _> = nodes
             .iter()
             .zip(short_labels)
             .map(|(node, label)| {
-                let label = if label.chars().count() > 30 {
-                    format!(
-                        "…{}",
-                        label
-                            .chars()
-                            .skip(label.chars().count() - 29)
-                            .collect::<String>()
-                    )
-                } else {
-                    label
-                };
                 let bytes = node
                     .usage
                     .map(|u| if self.graph_view.ram { u.ram } else { u.flash });
@@ -601,7 +590,7 @@ impl Explorer {
         if let Some(node) = hit_node {
             response.clone().on_hover_text(format!(
                 "{}\n{}\n{}",
-                node.label,
+                paths.full(&node.label),
                 node.evidence,
                 node.usage
                     .map(|u| format!(
