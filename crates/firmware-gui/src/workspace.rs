@@ -509,6 +509,18 @@ impl Explorer {
                     if build.artifacts.is_empty() {
                         ui.label("No compatible files found in this folder or its subfolders.");
                     }
+                    // Record newly loaded firmware's expansion even when the search
+                    // hides its row. The cache consumes the change on this frame.
+                    if firmware_changed {
+                        if let Some(analysis) = &self.analysis {
+                            ui.push_id(std::path::Path::new(&analysis.path), |ui| {
+                                let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+                                    ui.ctx(), ui.make_persistent_id("firmware_files"), true);
+                                state.set_open(true);
+                                state.store(ui.ctx());
+                            });
+                        }
+                    }
                     let supporting_match = !self.artifact_search.is_empty()
                         && (!cache.artifacts[1].is_empty() || !cache.artifacts[2].is_empty());
                     let has_firmware = build.artifacts.iter().any(|a| a.kind == ArtifactKind::Firmware);
@@ -562,10 +574,6 @@ impl Explorer {
                             // Only the loaded firmware exposes editable supporting files.
                             if !active && self.receiver.is_none() {
                                 state.set_open(false);
-                            } else if active && firmware_changed {
-                                // Startup restoration and external opens may complete after
-                                // this row has already been stored in its collapsed state.
-                                state.set_open(true);
                             }
                             let was_open = state.is_open();
                             let mut clicked = false;

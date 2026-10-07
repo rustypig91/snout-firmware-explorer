@@ -2260,6 +2260,8 @@ fn sidebar_expands_firmware_loaded_outside_the_sidebar() {
     let root = dir.path().canonicalize().unwrap();
     let elf = root.join("app.elf");
     std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+    let other_elf = root.join("second.elf");
+    std::fs::copy(&elf, &other_elf).unwrap();
     let mut app = Explorer::default();
     app.scan_build(root);
     finish_job(&mut app);
@@ -2317,7 +2319,7 @@ fn sidebar_expands_firmware_loaded_outside_the_sidebar() {
             ],
         );
     }
-    app.open(elf);
+    app.open(elf.clone());
     finish_job(&mut app);
     frame(&mut app, vec![]);
     let output = frame(&mut app, vec![]);
@@ -2325,6 +2327,26 @@ fn sidebar_expands_firmware_loaded_outside_the_sidebar() {
         &shape.shape,
         egui::Shape::Text(t) if t.galley.text() == "Map file (0)"
     )));
+
+    // Loading while a search hides the collapsed row must expand it when revealed.
+    app.open(other_elf);
+    finish_job(&mut app);
+    frame(&mut app, vec![]);
+    app.artifact_search = "no-match".into();
+    frame(&mut app, vec![]);
+    app.open(elf.clone());
+    finish_job(&mut app);
+    frame(&mut app, vec![]);
+    app.artifact_search.clear();
+    frame(&mut app, vec![]);
+    let output = frame(&mut app, vec![]);
+    assert!(
+        output.shapes.iter().any(|shape| matches!(
+            &shape.shape,
+            egui::Shape::Text(t) if t.galley.text() == "Map file (0)"
+        )),
+        "firmware loaded while filtered out should expand when the search is cleared"
+    );
 }
 
 #[test]
