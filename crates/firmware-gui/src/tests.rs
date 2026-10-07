@@ -2385,6 +2385,44 @@ fn sidebar_expands_firmware_loaded_outside_the_sidebar() {
     frame(&mut app, vec![]);
     app.open(elf.clone());
     finish_job(&mut app);
+    let output = frame(&mut app, vec![]);
+    // The first frame after a load must use the same widget IDs as later frames.
+    // A user can immediately select another firmware after loading completes.
+    let label = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(t) if t.galley.text() == "second.elf" => {
+                Some(t.pos + t.galley.size() * 0.5)
+            }
+            _ => None,
+        })
+        .unwrap();
+    for pressed in [true, false] {
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(label),
+                egui::Event::PointerButton {
+                    pos: label,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    assert!(
+        app.receiver.is_some(),
+        "firmware label must respond immediately after loading"
+    );
+    finish_job(&mut app);
+    assert_eq!(
+        app.analysis.as_ref().unwrap().path,
+        other_elf.display().to_string()
+    );
+    app.open(elf.clone());
+    finish_job(&mut app);
     frame(&mut app, vec![]);
     let output = frame(&mut app, vec![]);
     assert!(

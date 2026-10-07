@@ -513,12 +513,15 @@ impl Explorer {
                     // hides its row. The cache consumes the change on this frame.
                     if firmware_changed {
                         if let Some(analysis) = &self.analysis {
-                            ui.push_id(std::path::Path::new(&analysis.path), |ui| {
-                                let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
-                                    ui.ctx(), ui.make_persistent_id("firmware_files"), true);
-                                state.set_open(true);
-                                state.store(ui.ctx());
-                            });
+                            // Match the row's persistent ID without creating a
+                            // one-frame UI scope that shifts subsequent widget IDs.
+                            let id = ui.id()
+                                .with(egui::Id::new(std::path::Path::new(&analysis.path)))
+                                .with("firmware_files");
+                            let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+                                ui.ctx(), id, true);
+                            state.set_open(true);
+                            state.store(ui.ctx());
                         }
                     }
                     let supporting_match = !self.artifact_search.is_empty()
