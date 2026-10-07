@@ -2303,6 +2303,15 @@ fn sidebar_large_firmware_list_only_builds_visible_rows() {
         ctx.memory(|memory| memory.data.len()) < 200,
         "offscreen firmware widgets should not be constructed"
     );
+    // A background job must not disable virtualization for every firmware row.
+    let (_sender, receiver) = mpsc::channel();
+    app.receiver = Some(receiver);
+    frame(&mut app, false);
+    assert!(
+        ctx.memory(|memory| memory.data.len()) < 200,
+        "offscreen collapsed firmware widgets should not be constructed while loading"
+    );
+    app.receiver = None;
     let mut output = frame(&mut app, true);
     for _ in 0..10 {
         output = frame(&mut app, true);

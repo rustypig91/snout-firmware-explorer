@@ -568,17 +568,27 @@ impl Explorer {
                         let artifact = &build.artifacts[index];
                         let active = self.analysis.as_ref().is_some_and(|a|
                             std::path::Path::new(&a.path) == artifact.path);
-                        // Inactive rows are collapsed once loading completes. Reserve
-                        // their height without constructing offscreen header widgets.
-                        // Keep the active row and loading animations variable-height.
+                        // Reserve collapsed offscreen rows even during background jobs.
+                        // Previously opened rows still need their body/animation height.
                         let height = ui.spacing().interact_size.y
                             .max(ui.text_style_height(&egui::TextStyle::Button))
                             .max(ui.spacing().icon_width);
                         let row_rect = egui::Rect::from_min_size(ui.next_widget_position(),
                             egui::vec2(ui.available_width(), height));
-                        if !active && self.receiver.is_none() && !ui.is_rect_visible(row_rect) {
-                            ui.allocate_space(row_rect.size());
-                            continue;
+                        if !active && !ui.is_rect_visible(row_rect) {
+                            let id = ui.id().with(&artifact.path).with("firmware_files");
+                            let expanded = egui::collapsing_header::CollapsingState::load(ui.ctx(), id)
+                                .is_some_and(|mut state| {
+                                    if self.receiver.is_none() && state.is_open() {
+                                        state.set_open(false);
+                                        state.store(ui.ctx());
+                                    }
+                                    state.openness(ui.ctx()) > 0.0
+                                });
+                            if !expanded {
+                                ui.allocate_space(row_rect.size());
+                                continue;
+                            }
                         }
                         ui.push_id(&artifact.path, |ui| {
                             let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
