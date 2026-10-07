@@ -66,10 +66,10 @@ impl View {
             Self::Files => "Files",
             Self::Symbols => "Symbols",
             Self::Sections => "Sections",
-            Self::MemoryMap => "Memory map",
+            Self::MemoryMap => "Memory regions",
             Self::Dependencies => "Dependencies",
             Self::Stack => "Stack",
-            Self::Memory => "Memory View",
+            Self::Memory => "Hex viewer",
         }
     }
     fn tooltip(self) -> &'static str {

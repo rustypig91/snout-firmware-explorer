@@ -658,7 +658,7 @@ impl Explorer {
                                             });
                                     });
                                 egui::CollapsingHeader::new(format!("Stack usage files ({})", cache.artifacts[2].len()))
-                                    .id_salt("reports").default_open(true).show(ui, |ui| {
+                                    .id_salt("reports").default_open(false).show(ui, |ui| {
                                         if cache.artifacts[2].is_empty() {
                                             ui.small("No stack usage files found.");
                                         } else {
