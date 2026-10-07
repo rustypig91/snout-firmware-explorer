@@ -4403,3 +4403,57 @@ fn section_distributions_use_separate_flash_and_static_ram_sizes() {
             .any(|shape| matches!(shape.shape, egui::Shape::Mesh(_))));
     }
 }
+
+#[test]
+fn dashboard_memory_controls_fit_at_minimum_window_size() {
+    let options = firmware_analysis_core::map::parse_map_regions(include_str!(
+        "../../../fixtures/build/cortex-m.map"
+    ))
+    .unwrap();
+    let analysis = firmware_analysis_core::analyze_bytes(
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        "fixture.elf",
+        &options,
+    )
+    .unwrap();
+    let mut app = Explorer {
+        analysis: Some(Arc::new(analysis)),
+        ..Default::default()
+    };
+    let ctx = egui::Context::default();
+    shell::configure_style(&ctx);
+    let mut output = egui::FullOutput::default();
+    for _ in 0..3 {
+        output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| app.show(ctx),
+        );
+    }
+    let bars: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Rect(rect) if rect.fill == egui::Color32::from_rgb(45, 60, 79) => {
+                Some((rect.rect, shape.clip_rect))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(bars.len(), 2);
+    for (bar, clip) in bars {
+        assert!(
+            clip.contains_rect(bar),
+            "Memory bar {bar:?} clipped by {clip:?}"
+        );
+    }
+    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+        egui::Shape::Text(text) if text.galley.text().starts_with("View all regions")
+            && shape.clip_rect.contains_rect(egui::Rect::from_min_size(text.pos, text.galley.size()))
+    )), "Region navigation must be visible");
+}

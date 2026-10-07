@@ -212,7 +212,11 @@ impl Explorer {
         self.visible_rows = 0;
         let (area, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
         let gap = 12.0;
-        let top_height = (area.height() * 0.43).min(270.0);
+        // Reserve enough height for both region selectors, occupancy details and
+        // navigation even when card titles wrap at the minimum window width.
+        let top_height = (area.height() * 0.43)
+            .clamp(250.0, 270.0)
+            .min(area.height());
         let top_width = (area.width() - gap * 3.0) / 4.0;
         for (index, title) in [
             "Binary information",
