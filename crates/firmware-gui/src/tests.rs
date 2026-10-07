@@ -2339,8 +2339,8 @@ fn sidebar_scrolls_past_long_supporting_lists_to_the_next_firmware() {
         last = labels(&frame(true));
     }
     assert!(
-        last.iter().any(|s| s == "file_1999.su"),
-        "last report must be reachable: {last:?}"
+        last.iter().any(|s| s == "Stack usage files (2000)"),
+        "collapsed stack group must be reachable: {last:?}"
     );
     assert!(
         last.iter().any(|s| s == "second.elf"),
@@ -2713,6 +2713,10 @@ fn sidebar_checkboxes_and_map_radios_apply_choices_to_current_elf() {
             })
             .unwrap_or_else(|| panic!("Missing sidebar label {name}"))
     };
+    assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+        egui::Shape::Text(t) if t.galley.text() == "frame.su")));
+    click(&ctx, &mut app, text_pos(&output, "Stack usage files (1)"));
+    let output = frame(&ctx, &mut app, vec![]);
     // Firmware rows are top-level, and supporting files are indented beneath them.
     let firmware = text_pos(&output, "app.elf");
     let map = text_pos(&output, "app.map");
@@ -2767,6 +2771,10 @@ fn sidebar_checkboxes_and_map_radios_apply_choices_to_current_elf() {
         app.analysis.as_ref().unwrap().path,
         other_elf.display().to_string()
     );
+    assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+        egui::Shape::Text(t) if t.galley.text() == "frame.su")));
+    click(&ctx, &mut app, text_pos(&output, "Stack usage files (1)"));
+    let output = frame(&ctx, &mut app, vec![]);
     click(&ctx, &mut app, text_pos(&output, "frame.su"));
     finish_job(&mut app);
     assert_eq!(app.saved_stack_reports(&other_elf), Some(vec![]));

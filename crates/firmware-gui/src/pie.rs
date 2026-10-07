@@ -266,25 +266,23 @@ impl Explorer {
         let display = self.baseline_display_analysis();
         let a = display.as_deref().unwrap_or(current);
         let paths = self.source_paths(a);
-        ui.horizontal_wrapped(|ui| {
-            if self.overview_section.is_some() && ui.button("Back").clicked() {
-                self.overview_back();
-            }
-            if ui.link("Sections").clicked() {
-                self.overview_section = None;
-                self.overview_unit = None;
-            }
-            if let Some(section) = self
-                .overview_section
-                .and_then(|i| a.sections.iter().find(|s| s.index == i))
-            {
-                ui.label(format!("/ {}", section.name));
-            }
-            if let Some(unit) = &self.overview_unit {
-                ui.label(format!("/ {}", paths.short(unit.label())))
-                    .on_hover_text(paths.full(unit.label()));
-            }
-        });
+        if self.overview_section.is_some() {
+            ui.horizontal_wrapped(|ui| {
+                if self.overview_section.is_some() && ui.button("Back").clicked() {
+                    self.overview_back();
+                }
+                if let Some(section) = self
+                    .overview_section
+                    .and_then(|i| a.sections.iter().find(|s| s.index == i))
+                {
+                    ui.label(&section.name);
+                }
+                if let Some(unit) = &self.overview_unit {
+                    ui.label(format!("/ {}", paths.short(unit.label())))
+                        .on_hover_text(paths.full(unit.label()));
+                }
+            });
+        }
         let mut items = metric_slices_for_display(
             a,
             self.overview_section,
@@ -392,8 +390,6 @@ impl Explorer {
                 )
             }
         ));
-        ui.weak("Select a row to explore")
-            .on_hover_text("Aliases share unique bytes; zero-sized labels remain listed.");
         let mut selected = None;
         for item in &items {
             let fraction = if total == 0 {
