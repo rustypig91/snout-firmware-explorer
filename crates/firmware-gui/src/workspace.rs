@@ -456,6 +456,11 @@ impl Explorer {
         let mut selected = None;
         let mut selected_map = None;
         let previous = self.browser_cache.take();
+        let firmware_changed = previous
+            .as_ref()
+            .and_then(|cache| cache.analysis.as_ref())
+            .map(|analysis| &analysis.path)
+            != self.analysis.as_ref().map(|analysis| &analysis.path);
         let closed = previous
             .as_ref()
             .map(|c| c.closed.clone())
@@ -557,6 +562,10 @@ impl Explorer {
                             // Only the loaded firmware exposes editable supporting files.
                             if !active && self.receiver.is_none() {
                                 state.set_open(false);
+                            } else if active && firmware_changed {
+                                // Startup restoration and external opens may complete after
+                                // this row has already been stored in its collapsed state.
+                                state.set_open(true);
                             }
                             let was_open = state.is_open();
                             let mut clicked = false;

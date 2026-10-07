@@ -2255,6 +2255,79 @@ fn selected_report_folder_remains_recursive_and_discovers_new_reports_on_refresh
 }
 
 #[test]
+fn sidebar_expands_firmware_loaded_outside_the_sidebar() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let elf = root.join("app.elf");
+    std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+    let mut app = Explorer::default();
+    app.scan_build(root);
+    finish_job(&mut app);
+    let ctx = egui::Context::default();
+    ctx.style_mut(|style| style.animation_time = 0.0);
+    let frame = |app: &mut Explorer, events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 800.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.build_browser(ctx),
+        )
+    };
+    // The folder is drawn before startup restoration or an external open completes.
+    frame(&mut app, vec![]);
+    app.open(elf.clone());
+    finish_job(&mut app);
+    frame(&mut app, vec![]);
+    let output = frame(&mut app, vec![]);
+    assert!(
+        output.shapes.iter().any(|shape| matches!(
+            &shape.shape,
+            egui::Shape::Text(t) if t.galley.text() == "Map file (0)"
+        )),
+        "loaded firmware should expose its supporting-file controls"
+    );
+
+    // Refreshing the same firmware must preserve a deliberate collapse.
+    let arrow = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(t) if t.galley.text() == "app.elf" => {
+                Some(t.pos + egui::vec2(-12.0, t.galley.size().y * 0.5))
+            }
+            _ => None,
+        })
+        .unwrap();
+    for pressed in [true, false] {
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(arrow),
+                egui::Event::PointerButton {
+                    pos: arrow,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    app.open(elf);
+    finish_job(&mut app);
+    frame(&mut app, vec![]);
+    let output = frame(&mut app, vec![]);
+    assert!(!output.shapes.iter().any(|shape| matches!(
+        &shape.shape,
+        egui::Shape::Text(t) if t.galley.text() == "Map file (0)"
+    )));
+}
+
+#[test]
 fn sidebar_previews_supporting_files_without_firmware() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
