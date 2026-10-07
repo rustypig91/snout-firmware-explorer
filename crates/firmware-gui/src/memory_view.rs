@@ -92,20 +92,23 @@ struct ByteRun {
     reversed: bool,
 }
 impl ByteRun {
+    fn byte_at(&self, display_index: usize) -> Option<(u64, egui::Rect)> {
+        let offset = if self.reversed {
+            self.count - 1 - display_index
+        } else {
+            display_index
+        };
+        let address = self.address.checked_add(offset as u64)?;
+        let rect = egui::Rect::from_min_size(
+            self.rect.min + egui::vec2(display_index as f32 * self.byte_width, 0.0),
+            egui::vec2(self.byte_width, self.rect.height()),
+        );
+        Some((address, rect))
+    }
     fn highlights(&self, hovered: HoverRange) -> impl Iterator<Item = egui::Rect> + '_ {
         (0..self.count).filter_map(move |display_index| {
-            let offset = if self.reversed {
-                self.count - 1 - display_index
-            } else {
-                display_index
-            };
-            let address = self.address.checked_add(offset as u64)?;
-            hovered.contains(address).then(|| {
-                egui::Rect::from_min_size(
-                    self.rect.min + egui::vec2(display_index as f32 * self.byte_width, 0.0),
-                    egui::vec2(self.byte_width, self.rect.height()),
-                )
-            })
+            let (address, rect) = self.byte_at(display_index)?;
+            hovered.contains(address).then_some(rect)
         })
     }
 }
@@ -280,6 +283,41 @@ impl MemoryView {
             }
         }
         self.annotations.sort_by_key(|a| a.address);
+    }
+    fn byte_tooltip(&self, kind: MemoryKind, address: u64, byte: MemoryByte) -> String {
+        let contents = match byte {
+            MemoryByte::File(value) => {
+                format!("0x{value:02X} · {value} decimal · ELF initial value")
+            }
+            MemoryByte::InferredZero => {
+                "0x00 · inferred BSS zero; startup code is not verified".into()
+            }
+            MemoryByte::Unknown => "?? · unknown contents".into(),
+        };
+        let mut text = format!("Address 0x{address:X} · {}\n{contents}", kind_name(kind));
+        let end = self.annotations.partition_point(|a| a.address <= address);
+        let mut matched = false;
+        for annotation in self.annotations[..end]
+            .iter()
+            .filter(|a| a.kind == kind && (a.address == address || address - a.address < a.size))
+        {
+            matched = true;
+            text.push_str(&format!(
+                "\n{} · starts at 0x{:X} · offset +0x{:X}{}",
+                annotation.detail,
+                annotation.address,
+                address - annotation.address,
+                if annotation.size == 0 {
+                    " · no byte extent is defined"
+                } else {
+                    ""
+                },
+            ));
+        }
+        if !matched {
+            text.push_str("\nNo associated section or symbol.");
+        }
+        text
     }
     fn navigate(&mut self) {
         let input = self.jump.trim();
@@ -583,80 +621,208 @@ impl Explorer {
             + 12.0;
         let hex_width = digit_width * 32.0 + (16 / state.unit - 1) as f32 * 10.0 + 12.0;
         let ascii_width = digit_width * 16.0 + 12.0;
-        ui.allocate_ui_with_layout(egui::vec2((available.width() - 20.0).max(1.0), height), egui::Layout::top_down(egui::Align::Min), |ui| {
-        egui::ScrollArea::horizontal().id_salt("memory_horizontal").show(ui, |ui| {
-            ui.set_min_height(height);
-            ui.set_min_width(address_width + hex_width + ascii_width + 350.0);
-            let mut table = TableBuilder::new(ui).id_salt((state.range, Arc::as_ptr(analysis) as usize))
-                .vertical_scroll_offset(offset)
-                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-                .max_scroll_height(body_height)
-                .min_scrolled_height(body_height)
-                .auto_shrink([false, false])
-                .striped(false).resizable(true)
-                .column(Column::initial(address_width).at_least(address_width).clip(true))
-                .column(Column::initial(hex_width).at_least(hex_width).clip(true))
-                .column(Column::initial(ascii_width).at_least(ascii_width).clip(true))
-                .column(Column::remainder().at_least(300.0));
-            table = table.cell_layout(egui::Layout::left_to_right(egui::Align::Center));
-            let output = table.header(ROW_HEIGHT, |mut header| {
-                for title in ["Address", "Hex values", "ASCII", "Sections / symbols starting on this line"] {
-                    header.col(|ui| { ui.strong(title); });
-                }
-            }).body(|body| {
-                body.rows(ROW_HEIGHT, count, |mut row| {
-                    rendered_rows += 1;
-                    let address = base + (origin + row.index() as u64) * LINE_BYTES;
-                    row.set_selected(state.target.is_some_and(|target| target >= address && target - address < LINE_BYTES));
-                    let values: [MemoryByte; 16] = std::array::from_fn(|offset| {
-                        address.checked_add(offset as u64).filter(|a| *a >= range.start && *a < range.end)
-                            .map_or(MemoryByte::Unknown, |a| image.byte(range.kind, a))
+        ui.allocate_ui_with_layout(
+            egui::vec2((available.width() - 20.0).max(1.0), height),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                egui::ScrollArea::horizontal()
+                    .id_salt("memory_horizontal")
+                    .show(ui, |ui| {
+                        ui.set_min_height(height);
+                        ui.set_min_width(address_width + hex_width + ascii_width + 350.0);
+                        let mut table = TableBuilder::new(ui)
+                            .id_salt((state.range, Arc::as_ptr(analysis) as usize))
+                            .vertical_scroll_offset(offset)
+                            .scroll_bar_visibility(
+                                egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
+                            )
+                            .max_scroll_height(body_height)
+                            .min_scrolled_height(body_height)
+                            .auto_shrink([false, false])
+                            .striped(false)
+                            .resizable(true)
+                            .column(
+                                Column::initial(address_width)
+                                    .at_least(address_width)
+                                    .clip(true),
+                            )
+                            .column(Column::initial(hex_width).at_least(hex_width).clip(true))
+                            .column(
+                                Column::initial(ascii_width)
+                                    .at_least(ascii_width)
+                                    .clip(true),
+                            )
+                            .column(Column::remainder().at_least(300.0));
+                        table = table.cell_layout(egui::Layout::left_to_right(egui::Align::Center));
+                        let output = table
+                            .header(ROW_HEIGHT, |mut header| {
+                                for title in [
+                                    "Address",
+                                    "Hex values",
+                                    "ASCII",
+                                    "Sections / symbols starting on this line",
+                                ] {
+                                    header.col(|ui| {
+                                        ui.strong(title);
+                                    });
+                                }
+                            })
+                            .body(|body| {
+                                body.rows(ROW_HEIGHT, count, |mut row| {
+                                    rendered_rows += 1;
+                                    let address = base + (origin + row.index() as u64) * LINE_BYTES;
+                                    row.set_selected(state.target.is_some_and(|target| {
+                                        target >= address && target - address < LINE_BYTES
+                                    }));
+                                    let values: [MemoryByte; 16] = std::array::from_fn(|offset| {
+                                        address
+                                            .checked_add(offset as u64)
+                                            .filter(|a| *a >= range.start && *a < range.end)
+                                            .map_or(MemoryByte::Unknown, |a| {
+                                                image.byte(range.kind, a)
+                                            })
+                                    });
+                                    row.col(|ui| {
+                                        ui.monospace(format!(
+                                            "{address:0width$X}",
+                                            width = if analysis.metadata.bitness == 64 {
+                                                16
+                                            } else {
+                                                8
+                                            }
+                                        ));
+                                    });
+                                    row.col(|ui| {
+                                        ui.spacing_mut().item_spacing.x = 10.0;
+                                        let mut cell = ByteCell::new(ui);
+                                        for (group_index, group) in
+                                            values.chunks(state.unit).enumerate()
+                                        {
+                                            let text =
+                                                RichText::new(group_hex(group, state.little))
+                                                    .monospace();
+                                            let text = if group.contains(&MemoryByte::InferredZero)
+                                            {
+                                                text.color(super::views::ACCENT)
+                                            } else if group
+                                                .iter()
+                                                .all(|b| *b == MemoryByte::Unknown)
+                                            {
+                                                text.weak()
+                                            } else {
+                                                text
+                                            };
+                                            let response = ui.label(text);
+                                            let run = ByteRun {
+                                                rect: response.rect,
+                                                address: address
+                                                    + (group_index * state.unit) as u64,
+                                                count: group.len(),
+                                                byte_width: response.rect.width()
+                                                    / group.len() as f32,
+                                                reversed: state.little,
+                                            };
+                                            for display_index in 0..run.count {
+                                                let Some((byte_address, rect)) =
+                                                    run.byte_at(display_index)
+                                                else {
+                                                    continue;
+                                                };
+                                                let response = ui.interact(
+                                                    rect,
+                                                    ui.id().with(("hex_byte", byte_address)),
+                                                    egui::Sense::hover(),
+                                                );
+                                                if response.hovered() {
+                                                    hovered_range = Some(HoverRange {
+                                                        address: byte_address,
+                                                        size: 1,
+                                                    });
+                                                }
+                                                response.on_hover_ui(|ui| {
+                                                    let byte =
+                                                        values[(byte_address - address) as usize];
+                                                    ui.label(state.byte_tooltip(
+                                                        range.kind,
+                                                        byte_address,
+                                                        byte,
+                                                    ));
+                                                });
+                                            }
+                                            cell.runs.push(run);
+                                        }
+                                        byte_cells.push(cell);
+                                    });
+                                    row.col(|ui| {
+                                        let ascii: String = values
+                                            .iter()
+                                            .map(|b| match b.value() {
+                                                Some(v @ 32..=126) => char::from(v),
+                                                Some(_) => '.',
+                                                None => '?',
+                                            })
+                                            .collect();
+                                        let mut cell = ByteCell::new(ui);
+                                        let response = ui.monospace(ascii);
+                                        cell.runs.push(ByteRun {
+                                            rect: response.rect,
+                                            address,
+                                            count: values.len(),
+                                            byte_width: response.rect.width() / values.len() as f32,
+                                            reversed: false,
+                                        });
+                                        byte_cells.push(cell);
+                                    });
+                                    row.col(|ui| {
+                                        let first = state
+                                            .annotations
+                                            .partition_point(|a| a.address < address);
+                                        let labels: Vec<_> = state.annotations[first..]
+                                            .iter()
+                                            .take_while(|a| a.address - address < LINE_BYTES)
+                                            .filter(|a| a.kind == range.kind)
+                                            .collect();
+                                        ui.spacing_mut().item_spacing.x = 6.0;
+                                        for label in labels {
+                                            let response = ui
+                                                .add(
+                                                    egui::Label::new(
+                                                        RichText::new(format!(
+                                                            "+{:02X} {}",
+                                                            label.address - address,
+                                                            label.name
+                                                        ))
+                                                        .monospace(),
+                                                    )
+                                                    .truncate(),
+                                                )
+                                                .on_hover_text(format!(
+                                                    "0x{:X}: {}{}",
+                                                    label.address,
+                                                    label.detail,
+                                                    if label.size == 0 {
+                                                        " · no byte extent is defined"
+                                                    } else {
+                                                        ""
+                                                    }
+                                                ));
+                                            if response.hovered() {
+                                                hovered_range = Some(HoverRange {
+                                                    address: label.address,
+                                                    size: label.size,
+                                                });
+                                            }
+                                        }
+                                    });
+                                });
+                            });
+                        state
+                            .scroll
+                            .read_offset(origin, output.state.offset.y, stride);
+                        state.scroll.clamp(limit);
                     });
-                    row.col(|ui| { ui.monospace(format!("{address:0width$X}", width = if analysis.metadata.bitness == 64 { 16 } else { 8 })); });
-                    row.col(|ui| {
-                        ui.spacing_mut().item_spacing.x = 10.0;
-                        let mut cell = ByteCell::new(ui);
-                        for (group_index, group) in values.chunks(state.unit).enumerate() {
-                            let text = RichText::new(group_hex(group, state.little)).monospace();
-                            let text = if group.contains(&MemoryByte::InferredZero) { text.color(super::views::ACCENT) }
-                                else if group.iter().all(|b| *b == MemoryByte::Unknown) { text.weak() } else { text };
-                            let response = ui.label(text).on_hover_text(if group.contains(&MemoryByte::InferredZero) {
-                                "Contains inferred zero initialization for conventional BSS; startup code is not verified."
-                            } else { "?? denotes an unknown byte; the selected endian setting controls byte significance within each value." });
-                            cell.runs.push(ByteRun { rect: response.rect, address: address + (group_index * state.unit) as u64,
-                                count: group.len(), byte_width: digit_width * 2.0, reversed: state.little });
-                        }
-                        byte_cells.push(cell);
-                    });
-                    row.col(|ui| {
-                        let ascii: String = values.iter().map(|b| match b.value() {
-                            Some(v @ 32..=126) => char::from(v), Some(_) => '.', None => '?',
-                        }).collect();
-                        let mut cell = ByteCell::new(ui);
-                        let response = ui.monospace(ascii);
-                        cell.runs.push(ByteRun { rect: response.rect, address, count: values.len(), byte_width: digit_width, reversed: false });
-                        byte_cells.push(cell);
-                    });
-                    row.col(|ui| {
-                        let first = state.annotations.partition_point(|a| a.address < address);
-                        let labels: Vec<_> = state.annotations[first..].iter()
-                            .take_while(|a| a.address - address < LINE_BYTES).filter(|a| a.kind == range.kind).collect();
-                        ui.spacing_mut().item_spacing.x = 6.0;
-                        for label in labels {
-                            let response = ui.add(egui::Label::new(RichText::new(format!("+{:02X} {}", label.address - address, label.name)).monospace()).truncate())
-                                .on_hover_text(format!("0x{:X}: {}{}", label.address, label.detail,
-                                    if label.size == 0 { " · no byte extent is defined" } else { "" }));
-                            if response.hovered() {
-                                hovered_range = Some(HoverRange { address: label.address, size: label.size });
-                            }
-                        }
-                    });
-                });
-            });
-            state.scroll.read_offset(origin, output.state.offset.y, stride);
-            state.scroll.clamp(limit);
-        });
-        });
+            },
+        );
         if let Some(hovered) = hovered_range {
             for cell in &byte_cells {
                 cell.highlight(hovered);
@@ -669,6 +835,173 @@ impl Explorer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn byte_tooltips_resolve_aliases_extents_and_both_load_and_runtime_addresses() {
+        let mut analysis = firmware_analysis_core::analyze_bytes(
+            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            "fixture",
+            &Default::default(),
+        )
+        .unwrap();
+        let section = analysis
+            .sections
+            .iter()
+            .find(|s| s.name == ".data")
+            .unwrap();
+        let runtime = section.address;
+        let load = section.load_address.unwrap();
+        let mut symbol = analysis.symbols[0].clone();
+        symbol.section_index = section.index;
+        symbol.normalized_address = runtime;
+        symbol.demangled_name = "data_symbol".into();
+        symbol.size = 2;
+        let mut alias = symbol.clone();
+        alias.demangled_name = "data_alias".into();
+        let mut zero = symbol.clone();
+        zero.demangled_name = "zero_label".into();
+        zero.size = 0;
+        analysis.symbols = vec![symbol, alias, zero];
+        let analysis = Arc::new(analysis);
+        let mut view = MemoryView::default();
+        view.prepare(&analysis);
+        for (kind, address) in [(MemoryKind::Flash, load), (MemoryKind::Ram, runtime)] {
+            let tooltip = view.byte_tooltip(kind, address, MemoryByte::File(42));
+            assert!(tooltip.contains(&format!("Address 0x{address:X}")));
+            assert!(tooltip.contains("0x2A · 42 decimal · ELF initial value"));
+            for name in ["Section .data", "data_symbol", "data_alias", "zero_label"] {
+                assert!(tooltip.contains(name), "{tooltip}");
+            }
+            let interior = view.byte_tooltip(kind, address + 1, MemoryByte::File(0));
+            assert!(interior.contains("data_symbol"));
+            assert!(interior.contains("data_alias"));
+            assert!(interior.contains("offset +0x1"));
+            assert!(!interior.contains("zero_label"));
+            let end = view.byte_tooltip(kind, address + 2, MemoryByte::File(0));
+            assert!(!end.contains("data_symbol"));
+            assert!(!end.contains("data_alias"));
+        }
+        let unknown = view.byte_tooltip(MemoryKind::Flash, 0, MemoryByte::Unknown);
+        assert!(unknown.contains("unknown contents"));
+        assert!(unknown.contains("No associated section or symbol"));
+        let inferred = view.byte_tooltip(MemoryKind::Ram, runtime, MemoryByte::InferredZero);
+        assert!(inferred.contains("inferred BSS zero; startup code is not verified"));
+    }
+
+    #[test]
+    fn hovering_hex_pairs_shows_the_exact_address_for_all_groupings_and_byte_orders() {
+        let analysis = Arc::new(
+            firmware_analysis_core::analyze_bytes(
+                include_bytes!("../../../fixtures/build/cortex-m.elf"),
+                "fixture",
+                &Default::default(),
+            )
+            .unwrap(),
+        );
+        for unit in [1, 2, 4, 8] {
+            for little in [false, true] {
+                let mut app = Explorer::default();
+                app.memory_view.prepare(&analysis);
+                app.memory_view.unit = unit;
+                app.memory_view.little = little;
+                let base = app.memory_view.ranges[0].start & !15;
+                let ctx = egui::Context::default();
+                super::super::shell::configure_style(&ctx);
+                let mut render = |time, pointer: Option<egui::Pos2>| {
+                    ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(1500.0, 820.0),
+                            )),
+                            time: Some(time),
+                            events: pointer
+                                .map(|pos| vec![egui::Event::PointerMoved(pos)])
+                                .unwrap_or_default(),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::CentralPanel::default()
+                                .show(ctx, |ui| app.memory_view(ui, &analysis));
+                        },
+                    )
+                };
+                render(0.0, None);
+                let initial = render(0.1, None);
+                let row_y = initial
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == format!("{base:08X}") => {
+                            Some(text.pos.y)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                let hex = initial
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text)
+                            if (text.pos.y - row_y).abs() < 0.5
+                                && text.galley.text() != format!("{base:08X}") =>
+                        {
+                            Some(text)
+                        }
+                        _ => None,
+                    })
+                    .min_by(|a, b| a.pos.x.total_cmp(&b.pos.x))
+                    .unwrap();
+                let pair_width = hex.galley.size().x / unit as f32;
+                fn outlines(shape: &egui::Shape) -> Vec<egui::Rect> {
+                    match shape {
+                        egui::Shape::Vec(shapes) => shapes.iter().flat_map(outlines).collect(),
+                        egui::Shape::Rect(rect) if rect.stroke.color == SYMBOL_HIGHLIGHT => {
+                            vec![rect.rect]
+                        }
+                        _ => Vec::new(),
+                    }
+                }
+                for display_index in 0..unit {
+                    let pointer = hex.pos
+                        + egui::vec2(
+                            pair_width * (display_index as f32 + 0.5),
+                            hex.galley.size().y / 2.0,
+                        );
+                    let time = 1.0 + display_index as f64 * 3.0;
+                    let hovered = render(time, Some(pointer));
+                    let rects: Vec<_> = hovered
+                        .shapes
+                        .iter()
+                        .flat_map(|shape| outlines(&shape.shape))
+                        .collect();
+                    assert_eq!(
+                        rects.len(),
+                        2,
+                        "Highlight one hex byte and its ASCII character"
+                    );
+                    let hex_rect = rects.iter().find(|rect| rect.contains(pointer)).unwrap();
+                    assert!((hex_rect.width() - (pair_width + 4.0)).abs() < 0.5);
+                    assert!((hex_rect.center().x - pointer.x).abs() < 1.0, "unit {unit}, little {little}, pair {display_index}: rect {hex_rect:?}, pointer {pointer:?}");
+                    render(time + 1.0, Some(pointer));
+                    let output = render(time + 2.0, Some(pointer));
+                    let offset = if little {
+                        unit - 1 - display_index
+                    } else {
+                        display_index
+                    };
+                    let expected = format!("Address 0x{:X} · Flash", base + offset as u64);
+                    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains(&expected))),
+                        "Missing {expected} for unit {unit}, little {little}, pair {display_index}");
+                    let cleared = render(time + 2.5, Some(egui::pos2(5.0, 5.0)));
+                    assert!(cleared
+                        .shapes
+                        .iter()
+                        .all(|shape| outlines(&shape.shape).is_empty()));
+                }
+            }
+        }
+    }
+
     #[test]
     fn hover_highlights_exact_byte_positions_for_each_grouping_and_endian_mode() {
         for count in [1, 2, 4, 8] {
