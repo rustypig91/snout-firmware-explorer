@@ -134,6 +134,7 @@ fn visible_nodes<'a>(
     graph: &'a DependencyGraph,
     state: &GraphView,
     search: &str,
+    paths: &super::display::SourcePaths,
 ) -> Vec<&'a firmware_analysis_core::dependencies::DependencyNode> {
     let mut neighbors = BTreeSet::new();
     if let Some(selected) = &state.selected {
@@ -162,6 +163,7 @@ fn visible_nodes<'a>(
         .iter()
         .filter(|node| {
             node.label.to_lowercase().contains(&search)
+                || paths.full(&node.label).to_lowercase().contains(&search)
                 || node
                     .objects
                     .iter()
@@ -275,7 +277,7 @@ impl Explorer {
             for note in &graph.notes { ui.label(note); }
             ui.label("Sizes include uniquely attributed ELF symbol bytes only. Padding, unowned symbols and units removed by optimization are not assigned to source units. Object-only nodes have unknown size.");
         });
-        let nodes = visible_nodes(graph, &self.graph_view, &self.search);
+        let nodes = visible_nodes(graph, &self.graph_view, &self.search, &paths);
         let filter = (
             self.search.clone(),
             if self.graph_view.focused {
@@ -751,13 +753,38 @@ mod tests {
             focused: true,
             ..Default::default()
         };
-        let visible = visible_nodes(&graph, &state, "");
+        let visible = visible_nodes(&graph, &state, "", &Default::default());
         assert_eq!(visible.len(), 2);
         assert!(!visible.iter().any(|n| n.id == "unused/main.c"));
-        let filtered = visible_nodes(&graph, &state, "main.c");
+        let filtered = visible_nodes(&graph, &state, "main.c", &Default::default());
         assert_eq!(filtered.len(), 2);
         assert_eq!(filtered[0].id, "app/main.c");
-        assert!(visible_nodes(&graph, &state, "no match").is_empty());
+        assert!(visible_nodes(&graph, &state, "no match", &Default::default()).is_empty());
+    }
+
+    #[test]
+    fn dependency_search_matches_resolved_hover_paths_and_recorded_labels() {
+        let mut a = firmware_analysis_core::analyze_bytes(
+            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            "fixture.elf",
+            &Default::default(),
+        )
+        .unwrap();
+        a.dependencies = graph();
+        a.symbols[0].dwarf_compilation_unit = Some("app/main.c".into());
+        let paths = super::super::display::SourcePaths::new(
+            &a,
+            None,
+            Some(std::path::Path::new("/project/build")),
+        );
+        assert_eq!(paths.full("app/main.c"), "/project/build/app/main.c");
+        for query in ["/PROJECT/BUILD/APP/MAIN.C", "app/main.c"] {
+            let visible = visible_nodes(&a.dependencies, &GraphView::default(), query, &paths);
+            assert_eq!(
+                visible.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(),
+                ["app/main.c", "drivers/spi.c"]
+            );
+        }
     }
 
     #[test]
@@ -771,7 +798,7 @@ mod tests {
         });
         let state = GraphView::default();
         let ids = |state: &GraphView, query| {
-            visible_nodes(&graph, state, query)
+            visible_nodes(&graph, state, query, &Default::default())
                 .iter()
                 .map(|node| node.id.as_str())
                 .collect::<Vec<_>>()

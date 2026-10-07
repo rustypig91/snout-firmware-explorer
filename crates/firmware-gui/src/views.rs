@@ -104,6 +104,11 @@ impl Row {
             .map_or_else(|| self.tip().clone(), |p| p.short_detail(self.tip()))
     }
 
+    fn with_search(mut self, text: &str) -> Self {
+        self.search_cells.push(text.to_lowercase());
+        self
+    }
+
     fn with_path(mut self, column: usize, full: String) -> Self {
         self.search_cells.push(full.to_lowercase());
         self.cell_tips.insert(column, full);
@@ -542,6 +547,7 @@ impl Explorer {
                     )
                     .with_source_paths(paths.clone())
                     .with_path(0, paths.full(&f.path))
+                    .with_search(&f.path)
                     .with_bars(&[1, 2]);
                     row.action = Some(f.path.clone());
                     row
@@ -821,6 +827,12 @@ impl Explorer {
                                     s.attribution
                                 ),
                             )
+                            .with_search(
+                                s.source_file
+                                    .as_deref()
+                                    .or(s.compilation_unit.as_deref())
+                                    .unwrap_or("[unattributed]"),
+                            )
                             .with_path(
                                 5,
                                 paths.full(
@@ -1043,6 +1055,7 @@ impl Explorer {
                             e.source_line
                         ),
                     )
+                    .with_search(&format!("{}:{}", e.source_file, e.source_line))
                     .with_bars(&[1])
                 })
                 .collect()
@@ -1130,6 +1143,7 @@ impl Explorer {
                             bytes(c.new.ram)
                         ),
                     )
+                    .with_search(&c.identity)
                     .with_path(
                         0,
                         if self.comparison_group == 0 {
@@ -1405,6 +1419,59 @@ mod cache_tests {
         let filtered = app.prepare_table(rows, 5);
         assert_eq!(filtered.indices, [0]);
         assert_eq!(filtered.source[0].cells[0], "app/src/main.c");
+    }
+
+    #[test]
+    fn file_and_comparison_search_keep_recorded_paths_after_resolution() {
+        let mut a = firmware_analysis_core::analyze_bytes(
+            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            "fixture.elf",
+            &Default::default(),
+        )
+        .unwrap();
+        let recorded = "/project/build/../src/main.c";
+        a.symbols.truncate(1);
+        a.symbols[0].source_file = Some(recorded.into());
+        a.symbols[0].dwarf_compilation_unit = None;
+        a.symbols[0].compilation_unit = None;
+        a.files = vec![firmware_analysis_core::FileUsage {
+            path: recorded.into(),
+            attribution: "DWARF".into(),
+            usage: Default::default(),
+            symbol_count: 1,
+        }];
+        a.dependencies.nodes.clear();
+        let old = a.clone();
+        a.files[0].usage.flash = 1;
+        let a = std::sync::Arc::new(a);
+        let mut app = Explorer {
+            analysis: Some(a.clone()),
+            comparison: Some(super::super::compare(&old, &a)),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        for view in [View::Files, View::Compare] {
+            app.change_view(view);
+            let _ = ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| match view {
+                    View::Files => app.files(ui, &a),
+                    _ => app.compare_view(ui),
+                });
+            });
+            let rows = app.table_cache.rows[view as usize]
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .1
+                .clone();
+            assert_eq!(rows[0].cells[0], "src/main.c");
+            assert_eq!(rows[0].cell_tips[&0], "/project/src/main.c");
+            // Growth-summary navigation searches by the recorded identity.
+            for query in [recorded, "/project/src/main.c"] {
+                app.search = query.into();
+                assert_eq!(app.prepare_table(rows.clone(), 4).indices, [0]);
+            }
+        }
     }
 
     #[test]
