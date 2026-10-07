@@ -217,14 +217,23 @@ fn baseline_slices(
 // A display label can be shared by different units or symbols. Only compare
 // stable identities, and leave duplicate identities unknown rather than summing
 // multiple baseline rows into the delta for one current row.
-fn baseline_size(item: &Slice, baseline: &[Slice]) -> Result<u64, ()> {
-    let mut matches = baseline.iter().filter(|old| old.identity == item.identity);
-    let size = matches.next().map_or(0, |old| old.size);
-    if matches.next().is_some() {
-        Err(())
-    } else {
-        Ok(size)
+fn baseline_sizes(baseline: &[Slice]) -> std::collections::HashMap<SliceIdentity, Result<u64, ()>> {
+    let mut sizes = std::collections::HashMap::with_capacity(baseline.len());
+    for item in baseline {
+        sizes
+            .entry(item.identity.clone())
+            .and_modify(|size| *size = Err(()))
+            .or_insert(Ok(item.size));
     }
+    sizes
+}
+
+#[cfg(test)]
+fn baseline_size(item: &Slice, baseline: &[Slice]) -> Result<u64, ()> {
+    baseline_sizes(baseline)
+        .get(&item.identity)
+        .copied()
+        .unwrap_or(Ok(0))
 }
 
 pub(super) fn color(name: &str) -> egui::Color32 {
@@ -298,9 +307,12 @@ impl Explorer {
                 .map(|item| item.identity)
                 .collect()
             };
+        let baseline_sizes = baseline_items.map(|items| baseline_sizes(items));
         if let Some(baseline_items) = baseline_items {
+            let mut present: std::collections::HashSet<_> =
+                items.iter().map(|item| item.identity.clone()).collect();
             for old in baseline_items {
-                if !items.iter().any(|item| item.identity == old.identity) {
+                if present.insert(old.identity.clone()) {
                     let mut item = old.clone();
                     item.size = 0;
                     if let SliceIdentity::Section(name) = &item.identity {
@@ -343,7 +355,9 @@ impl Explorer {
             let old_size = if ambiguous_section {
                 Some(Err(()))
             } else {
-                baseline_items.map(|items| baseline_size(item, items))
+                baseline_sizes
+                    .as_ref()
+                    .map(|sizes| sizes.get(&item.identity).copied().unwrap_or(Ok(0)))
             };
             let removed = baseline.is_some()
                 && match &item.identity {
@@ -356,8 +370,9 @@ impl Explorer {
                 super::snapshots::removed_bytes(old_size.and_then(Result::ok))
             } else if old_size == Some(Err(())) {
                 format!("{} (baseline ambiguous)", bytes(item.size))
-            } else if baseline_items
-                .is_some_and(|old| !old.iter().any(|old| old.identity == item.identity))
+            } else if baseline_sizes
+                .as_ref()
+                .is_some_and(|sizes| !sizes.contains_key(&item.identity))
             {
                 format!("{} (new)", bytes(item.size))
             } else {
@@ -533,7 +548,13 @@ mod tests {
             identity: SliceIdentity::Padding,
             ..item.clone()
         };
-        assert_eq!(baseline_size(&padding, &[item]), Ok(0));
+        assert_eq!(baseline_size(&padding, std::slice::from_ref(&item)), Ok(0));
+        let sizes = baseline_sizes(&[item.clone(), padding.clone(), item]);
+        assert_eq!(sizes.get(&padding.identity), Some(&Ok(10)));
+        assert_eq!(
+            sizes.get(&SliceIdentity::Symbol("symbol".into())),
+            Some(&Err(()))
+        );
     }
 
     #[test]
