@@ -245,7 +245,7 @@ fn compute_large(input: &LayoutInput) -> GraphLayout {
             chunks.last_mut().unwrap().push(i);
             length += cross + 36.0;
         }
-        for (chunk_index, members) in chunks.into_iter().enumerate() {
+        for members in chunks {
             let width = members
                 .iter()
                 .map(|&i| {
@@ -256,7 +256,9 @@ fn compute_large(input: &LayoutInput) -> GraphLayout {
                     }
                 })
                 .fold(0.0, f32::max);
-            if input.grouped && chunk_index == 0 {
+            if input.grouped {
+                // Every wrapped band needs its own label to preserve directory
+                // ownership when a group spans several columns.
                 headings.push((lane.clone(), transform(egui::pos2(x + width / 2.0, -24.0))));
             }
             let mut y = 0.0;
@@ -1181,7 +1183,16 @@ fn large_grouped_graph_places_many_separate_cycles_deterministically() {
     assert!(start.elapsed() < std::time::Duration::from_secs(3));
     assert_eq!(geometry.cards.len(), count);
     assert_eq!(geometry.edges.len(), count);
-    assert_eq!(geometry.headings.len(), 20);
+    assert!(geometry.headings.len() > 20, "directories must wrap");
+    assert_eq!(
+        geometry
+            .headings
+            .iter()
+            .map(|(label, _)| label)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        20
+    );
     assert!(geometry
         .cards
         .values()
@@ -1242,4 +1253,42 @@ fn broad_dependency_ranks_wrap_instead_of_collapsing_into_a_strip() {
             assert!(geometry.cards[&edge.to].contains(*edge.points.last().unwrap()));
         }
     }
+}
+
+#[test]
+fn wrapped_directory_bands_each_keep_their_heading() {
+    let input = LayoutInput {
+        nodes: (0..301)
+            .map(|i| NodeSpec {
+                id: format!("unit{i:03}"),
+                directory: if i < 300 { "src" } else { "drivers" }.into(),
+                size: egui::vec2(180.0, 48.0),
+            })
+            .collect(),
+        edges: (0..300)
+            .map(|i| (format!("unit{i:03}"), "unit300".into()))
+            .collect(),
+        grouped: true,
+        ram: false,
+        vertical: false,
+    };
+    let geometry = compute(&input);
+    let src_bands: BTreeSet<_> = input.nodes[..300]
+        .iter()
+        .map(|node| geometry.cards[&node.id].center().x as i64)
+        .collect();
+    assert!(src_bands.len() > 1, "directory must wrap across bands");
+    for node in &input.nodes {
+        let center = geometry.cards[&node.id].center();
+        assert!(
+            geometry
+                .headings
+                .iter()
+                .any(|(label, position)| label == &node.directory
+                    && (position.x - center.x).abs() < 0.01),
+            "{} has no directory heading above its band",
+            node.id
+        );
+    }
+    assert_eq!(geometry.headings.len(), src_bands.len() + 1);
 }
