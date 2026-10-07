@@ -924,6 +924,7 @@ fn all_data_views_render_headlessly() {
                         View::MemoryMap => app.memory_map(ui, &analysis),
                         View::Dependencies => app.dependency_view(ui, &analysis),
                         View::Stack => app.stack_view(ui),
+                        View::Memory => app.memory_view(ui, &Arc::new(analysis.clone())),
                     });
                 },
             );

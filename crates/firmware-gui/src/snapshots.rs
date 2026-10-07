@@ -24,6 +24,13 @@ struct Snapshot {
     stack: Option<StackReport>,
     values: BTreeMap<String, u64>,
 }
+// Baselines retain accounting and symbols, never the session's raw memory image.
+fn snapshot_analysis(analysis: &Analysis) -> Analysis {
+    let mut report = analysis.clone();
+    report.memory_image = None;
+    report
+}
+
 impl Snapshot {
     fn time_label(&self) -> String {
         format!(
@@ -799,7 +806,7 @@ impl Explorer {
             firmware,
             taken_at: chrono::Utc::now(),
             values: collect(analysis, self.stack.as_ref()),
-            analysis: (**analysis).clone(),
+            analysis: snapshot_analysis(analysis),
             stack: self.stack.clone(),
         };
         let preferences = self
@@ -1048,7 +1055,7 @@ impl Explorer {
                 firmware,
                 taken_at,
                 values: collect(&analysis, stack.as_ref()),
-                analysis: (*analysis).clone(),
+                analysis: snapshot_analysis(&analysis),
                 stack,
             };
             let result =
@@ -3148,11 +3155,13 @@ mod tests {
         fixture(&root);
         let mut app = open(&root);
         app.take_snapshot("baseline").unwrap();
+        assert!(app.snapshots.snapshots[0].analysis.memory_image.is_none());
+        assert!(app.analysis.as_ref().unwrap().memory_image.is_some());
         app.select_snapshot(Some("baseline".into())).unwrap();
         let ctx = egui::Context::default();
         for view in View::ALL {
             app.change_view(view);
-            let _ = ctx.run(
+            let output = ctx.run(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -3162,7 +3171,25 @@ mod tests {
                 },
                 |ctx| app.show(ctx),
             );
-            assert_eq!(app.visible_rows, 0, "{}", view.label());
+            if view == View::Memory {
+                assert!(app.visible_rows > 0);
+                let texts: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some(text.galley.text()),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(texts
+                    .iter()
+                    .any(|text| text.contains("Memory View does not support baseline comparison")));
+                assert!(!texts
+                    .iter()
+                    .any(|text| text.contains("Showing only differences")));
+            } else {
+                assert_eq!(app.visible_rows, 0, "{}", view.label());
+            }
         }
         app.change_view(View::Symbols);
         let a = app.analysis.clone().unwrap();

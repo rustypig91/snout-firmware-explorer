@@ -17,6 +17,9 @@ pub struct Analysis {
     pub files: Vec<FileUsage>,
     pub tree: FileTree,
     pub memory_map: Vec<MemoryRange>,
+    /// Session-only bytes captured from the analyzed ELF, excluded from JSON/baselines.
+    #[serde(skip)]
+    pub memory_image: Option<std::sync::Arc<crate::memory::MemoryImage>>,
     pub warnings: Vec<String>,
     #[serde(default)]
     pub dependencies: crate::dependencies::DependencyGraph,

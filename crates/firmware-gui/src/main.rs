@@ -11,6 +11,7 @@ mod baseline_display;
 mod dependencies;
 mod display;
 mod insights;
+mod memory_view;
 mod overview;
 #[cfg(test)]
 mod performance;
@@ -46,9 +47,10 @@ enum View {
     MemoryMap,
     Dependencies,
     Stack,
+    Memory,
 }
 impl View {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::Overview,
         Self::Files,
         Self::Symbols,
@@ -56,6 +58,7 @@ impl View {
         Self::MemoryMap,
         Self::Dependencies,
         Self::Stack,
+        Self::Memory,
     ];
     fn label(self) -> &'static str {
         match self {
@@ -66,6 +69,7 @@ impl View {
             Self::MemoryMap => "Memory map",
             Self::Dependencies => "Dependencies",
             Self::Stack => "Stack",
+            Self::Memory => "Memory View",
         }
     }
     fn tooltip(self) -> &'static str {
@@ -76,6 +80,7 @@ impl View {
             Self::Sections => "ELF sections with their sizes, memory usage, and load and runtime addresses.",
             Self::MemoryMap => "Memory regions, used and free space, and the symbols within them.",
             Self::Dependencies => "Connections between compilation units and objects based on linker symbol references.",
+            Self::Memory => "Hexdump of Flash and inferred RAM startup contents; current firmware only.",
             Self::Stack => "Local function stack frames from compiler reports; total call-chain usage is unknown.",
         }
     }
@@ -183,19 +188,20 @@ struct Explorer {
     recent_build_folders: Vec<PathBuf>,
     analysis: Option<Arc<Analysis>>,
     graph_view: dependencies::GraphView,
+    memory_view: memory_view::MemoryView,
     build: Option<Arc<firmware_analysis_core::build::BuildFolder>>,
     artifact_search: String,
     preview: Option<(PathBuf, String)>,
     layout_override: Option<AnalysisOptions>,
     comparison: Option<Comparison>,
     baseline_display: Option<baseline_display::BaselineDisplay>,
-    show_address_changes: [bool; 7],
+    show_address_changes: [bool; View::ALL.len()],
     stack: Option<StackReport>,
     stack_show_unresolved: bool,
     options: AnalysisOptions,
     receiver: Option<mpsc::Receiver<JobResult>>,
     view: View,
-    tab_options: [TabOptions; 7],
+    tab_options: [TabOptions; View::ALL.len()],
     search: String,
     selected_file: Option<String>,
     selected_region: Option<usize>,
@@ -242,13 +248,14 @@ impl Default for Explorer {
             recent_build_folders: Vec::new(),
             analysis: None,
             graph_view: Default::default(),
+            memory_view: Default::default(),
             build: None,
             artifact_search: String::new(),
             preview: None,
             layout_override: None,
             comparison: None,
             baseline_display: None,
-            show_address_changes: [false; 7],
+            show_address_changes: [false; View::ALL.len()],
             stack: None,
             stack_show_unresolved: false,
             options: AnalysisOptions::default(),
