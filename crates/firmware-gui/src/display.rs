@@ -112,7 +112,7 @@ impl SourcePaths {
         if let Some(stack) = stack {
             let mut suffixes = std::collections::HashMap::<String, Option<String>>::new();
             for source in &sources {
-                let normalized = source.replace('\\', "/");
+                let normalized = absolute_path(source, None);
                 let canonical = &full[*source];
                 for suffix in std::iter::once(normalized.as_str()).chain(
                     normalized
@@ -131,7 +131,7 @@ impl SourcePaths {
             }
             for entry in &stack.entries {
                 // Prefer a unique DWARF path over guessing the compiler cwd.
-                let suffix = entry.source_file.replace('\\', "/");
+                let suffix = absolute_path(&entry.source_file, None);
                 let source = suffixes
                     .get(&suffix)
                     .and_then(|source| source.as_deref())
@@ -250,25 +250,25 @@ pub(super) fn absolute_path(path: &str, root: Option<&std::path::Path>) -> Strin
             path
         )
     } else {
-        return path;
+        path
     };
-    let (prefix, rest, protected) = if joined.starts_with("//") {
-        ("//", joined.trim_start_matches('/'), 2)
+    let (prefix, rest, protected, rooted) = if joined.starts_with("//") {
+        ("//", joined.trim_start_matches('/'), 2, true)
     } else if joined.starts_with('/') {
-        ("/", joined.trim_start_matches('/'), 0)
+        ("/", joined.trim_start_matches('/'), 0, true)
     } else if joined.as_bytes().get(1) == Some(&b':') && joined.as_bytes().get(2) == Some(&b'/') {
-        (&joined[..3], &joined[3..], 0)
+        (&joined[..3], &joined[3..], 0, true)
     } else {
-        return joined;
+        ("", joined.as_str(), 0, false)
     };
     let mut parts = Vec::new();
     for part in rest.split('/') {
         match part {
             "" | "." => {}
-            ".." if parts.len() > protected => {
+            ".." if parts.len() > protected && parts.last() != Some(&"..") => {
                 parts.pop();
             }
-            ".." => {}
+            ".." if rooted => {}
             _ => parts.push(part),
         }
     }
@@ -431,6 +431,11 @@ mod tests {
             "[unattributed]"
         );
         assert_eq!(absolute_path("src/main.c", None), "src/main.c");
+        assert_eq!(
+            absolute_path("./generated/../src//main.c", None),
+            "src/main.c"
+        );
+        assert_eq!(absolute_path("../../src/main.c", None), "../../src/main.c");
     }
 
     #[test]
@@ -495,7 +500,7 @@ mod tests {
         )
         .unwrap();
         let mut symbol = a.symbols[0].clone();
-        symbol.source_file = Some("/project/src/main.c".into());
+        symbol.source_file = Some("/project/generated/../src/main.c".into());
         symbol.dwarf_compilation_unit = None;
         symbol.compilation_unit = None;
         let mut alias = symbol.clone();
@@ -506,7 +511,7 @@ mod tests {
         a.files.clear();
         a.dependencies.nodes.clear();
         let (entries, _) = firmware_analysis_core::stack::parse_stack_usage(
-            "src/main.c:12:1:probe\t8\tstatic\n",
+            "src/main.c:12:1:probe\t8\tstatic\n./src/main.c:13:1:probe_dot\t8\tstatic\ngenerated/../src/main.c:14:1:probe_parent\t8\tstatic\nsrc//main.c:15:1:probe_separator\t8\tstatic\n",
             "probe.su",
         );
         let stack = firmware_analysis_core::stack::StackReport {
@@ -521,6 +526,10 @@ mod tests {
             Some(std::path::Path::new("/project/build")),
         );
         assert_eq!(paths.full("src/main.c"), "/project/src/main.c");
+        for entry in &stack.entries {
+            assert_eq!(paths.full(&entry.source_file), "/project/src/main.c");
+            assert_eq!(paths.short(&entry.source_file), "src/main.c");
+        }
         assert_eq!(
             paths.short("src/main.c"),
             paths.short("/project/src/main.c")
@@ -535,6 +544,9 @@ mod tests {
             Some(std::path::Path::new("/project/build")),
         );
         assert_eq!(paths.full("src/main.c"), "/project/build/src/main.c");
+        for entry in &stack.entries {
+            assert_eq!(paths.full(&entry.source_file), "/project/build/src/main.c");
+        }
     }
 
     #[test]
