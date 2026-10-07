@@ -153,9 +153,13 @@ fn changed_entries_with_addresses(
                     if domain == "region" {
                         let parts = value.as_array_mut().unwrap();
                         parts[0].as_object_mut().unwrap().remove("start");
-                        for symbol in parts[3].as_array_mut().unwrap() {
+                        let symbols = parts[3].as_array_mut().unwrap();
+                        for symbol in symbols.iter_mut() {
                             symbol.as_array_mut().unwrap()[2] = serde_json::Value::Null;
                         }
+                        // Address removal changes the ordering of duplicate identities.
+                        // Compare their remaining placement and size as a multiset.
+                        symbols.sort_by_cached_key(|symbol| symbol.to_string());
                     }
                 }
             }
@@ -606,6 +610,36 @@ mod tests {
         assert!(changed.contains(&("dependency".into(), from)));
         assert!(changed.contains(&("dependency".into(), to)));
         assert!(changed.iter().all(|(domain, _)| domain == "dependency"));
+    }
+
+    #[test]
+    fn hidden_address_changes_do_not_reorder_duplicate_region_symbols() {
+        let mut old = fixture();
+        let symbol = old.symbols.iter().find(|s| s.size > 4).unwrap().clone();
+        let section = old
+            .sections
+            .iter()
+            .find(|s| s.index == symbol.section_index)
+            .unwrap();
+        old.options.regions = vec![firmware_analysis_core::MemoryRegion {
+            name: "duplicate symbols".into(),
+            start: section.address,
+            size: section.size,
+            kind: firmware_analysis_core::MemoryKind::Flash,
+        }];
+        let mut duplicate = symbol.clone();
+        duplicate.address += 2;
+        duplicate.normalized_address += 2;
+        duplicate.size = 1;
+        old.symbols = vec![symbol, duplicate];
+        let mut current = old.clone();
+        current.symbols[0].address += 2;
+        current.symbols[0].normalized_address += 2;
+        current.symbols[1].address -= 2;
+        current.symbols[1].normalized_address -= 2;
+        let region = ("region".into(), "duplicate symbols".into());
+        assert!(changed_entries(&current, &old, None, None).contains(&region));
+        assert!(changed_entries_with_addresses(&current, &old, None, None, false).is_empty());
     }
 
     #[test]
