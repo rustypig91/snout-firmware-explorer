@@ -134,6 +134,7 @@ fn visible_nodes<'a>(
     graph: &'a DependencyGraph,
     state: &GraphView,
     search: &str,
+    paths: &super::display::SourcePaths,
 ) -> Vec<&'a firmware_analysis_core::dependencies::DependencyNode> {
     let mut neighbors = BTreeSet::new();
     if let Some(selected) = &state.selected {
@@ -162,6 +163,7 @@ fn visible_nodes<'a>(
         .iter()
         .filter(|node| {
             node.label.to_lowercase().contains(&search)
+                || paths.full(&node.label).to_lowercase().contains(&search)
                 || node
                     .objects
                     .iter()
@@ -230,6 +232,7 @@ impl Explorer {
         let current_nodes = analysis.dependencies.nodes.len();
         let display = self.baseline_display_analysis();
         let analysis = display.as_deref().unwrap_or(analysis);
+        let paths = self.source_paths(analysis);
         let graph = &analysis.dependencies;
         ui.horizontal_wrapped(|ui| {
             ui.label("Compilation units");
@@ -274,7 +277,7 @@ impl Explorer {
             for note in &graph.notes { ui.label(note); }
             ui.label("Sizes include uniquely attributed ELF symbol bytes only. Padding, unowned symbols and units removed by optimization are not assigned to source units. Object-only nodes have unknown size.");
         });
-        let nodes = visible_nodes(graph, &self.graph_view, &self.search);
+        let nodes = visible_nodes(graph, &self.graph_view, &self.search, &paths);
         let filter = (
             self.search.clone(),
             if self.graph_view.focused {
@@ -292,7 +295,7 @@ impl Explorer {
         }
         ui.horizontal_top(|ui| {
             let size = egui::vec2((ui.available_width() - 295.0).max(180.0), ui.available_height().max(200.0));
-            self.graph_canvas(ui, graph, &nodes, size, filter_changed);
+            self.graph_canvas(ui, graph, &paths, &nodes, size, filter_changed);
             ui.vertical(|ui| {
                 ui.set_width(280.0);
                 egui::ScrollArea::vertical().id_salt("graph_inspector").show(ui, |ui| {
@@ -301,7 +304,7 @@ impl Explorer {
                             ui.heading("Symbol references");
                             for (index, id) in [from, to].into_iter().enumerate() {
                                 if index == 1 { ui.small("uses symbols defined by ↓"); }
-                                if let Some(node) = graph.nodes.iter().find(|n| &n.id == id) { ui.label(&node.label); }
+                                if let Some(node) = graph.nodes.iter().find(|n| &n.id == id) { ui.label(paths.short(&node.label)).on_hover_text(paths.full(&node.label)); }
                             }
                             ui.separator();
                             for symbol in &edge.symbols { ui.label(symbol); }
@@ -309,7 +312,7 @@ impl Explorer {
                     } else if let Some(id) = self.graph_view.selected.clone() {
                         if let Some(node) = graph.nodes.iter().find(|n| n.id == id) {
                             ui.heading("Selected unit");
-                            ui.label(&node.label);
+                            ui.label(paths.short(&node.label)).on_hover_text(paths.full(&node.label));
                             ui.small(&node.evidence);
                             if let Some(usage) = node.usage { ui.label(format!("Flash {} · RAM {}", self.snapshot_bytes("dependency", &node.id, "flash", usage.flash), self.snapshot_bytes("dependency", &node.id, "ram", usage.ram))); }
                             else { ui.label("Memory contribution unknown"); }
@@ -321,7 +324,7 @@ impl Explorer {
                                 for edge in edges {
                                     let peer = if outgoing { &edge.to } else { &edge.from };
                                     if let Some(node) = graph.nodes.iter().find(|n| &n.id == peer) {
-                                        if ui.button(format!("{} ({} symbols)", short_path(&node.label, []), edge.symbols.len())).on_hover_text(&node.label).clicked() {
+                                        if ui.button(format!("{} ({} symbols)", paths.short(&node.label), edge.symbols.len())).on_hover_text(paths.full(&node.label)).clicked() {
                                             self.graph_view.select_edge(&edge.from, &edge.to);
                                         }
                                     }
@@ -343,6 +346,7 @@ impl Explorer {
         &mut self,
         ui: &mut egui::Ui,
         graph: &DependencyGraph,
+        paths: &super::display::SourcePaths,
         nodes: &[&firmware_analysis_core::dependencies::DependencyNode],
         size: egui::Vec2,
         filter_changed: bool,
@@ -359,24 +363,11 @@ impl Explorer {
             .fold((u64::MAX, 0), |(smallest, largest), bytes| {
                 (smallest.min(bytes), largest.max(bytes))
             });
-        let short_labels = super::display::short_paths(
-            &nodes.iter().map(|n| n.label.as_str()).collect::<Vec<_>>(),
-        );
+        let short_labels = nodes.iter().map(|n| paths.short(&n.label));
         let texts: BTreeMap<_, _> = nodes
             .iter()
             .zip(short_labels)
             .map(|(node, label)| {
-                let label = if label.chars().count() > 30 {
-                    format!(
-                        "…{}",
-                        label
-                            .chars()
-                            .skip(label.chars().count() - 29)
-                            .collect::<String>()
-                    )
-                } else {
-                    label
-                };
                 let bytes = node
                     .usage
                     .map(|u| if self.graph_view.ram { u.ram } else { u.flash });
@@ -601,7 +592,7 @@ impl Explorer {
         if let Some(node) = hit_node {
             response.clone().on_hover_text(format!(
                 "{}\n{}\n{}",
-                node.label,
+                paths.full(&node.label),
                 node.evidence,
                 node.usage
                     .map(|u| format!(
@@ -762,13 +753,38 @@ mod tests {
             focused: true,
             ..Default::default()
         };
-        let visible = visible_nodes(&graph, &state, "");
+        let visible = visible_nodes(&graph, &state, "", &Default::default());
         assert_eq!(visible.len(), 2);
         assert!(!visible.iter().any(|n| n.id == "unused/main.c"));
-        let filtered = visible_nodes(&graph, &state, "main.c");
+        let filtered = visible_nodes(&graph, &state, "main.c", &Default::default());
         assert_eq!(filtered.len(), 2);
         assert_eq!(filtered[0].id, "app/main.c");
-        assert!(visible_nodes(&graph, &state, "no match").is_empty());
+        assert!(visible_nodes(&graph, &state, "no match", &Default::default()).is_empty());
+    }
+
+    #[test]
+    fn dependency_search_matches_resolved_hover_paths_and_recorded_labels() {
+        let mut a = firmware_analysis_core::analyze_bytes(
+            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            "fixture.elf",
+            &Default::default(),
+        )
+        .unwrap();
+        a.dependencies = graph();
+        a.symbols[0].dwarf_compilation_unit = Some("app/main.c".into());
+        let paths = super::super::display::SourcePaths::new(
+            &a,
+            None,
+            Some(std::path::Path::new("/project/build")),
+        );
+        assert_eq!(paths.full("app/main.c"), "/project/build/app/main.c");
+        for query in ["/PROJECT/BUILD/APP/MAIN.C", "app/main.c"] {
+            let visible = visible_nodes(&a.dependencies, &GraphView::default(), query, &paths);
+            assert_eq!(
+                visible.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(),
+                ["app/main.c", "drivers/spi.c"]
+            );
+        }
     }
 
     #[test]
@@ -782,7 +798,7 @@ mod tests {
         });
         let state = GraphView::default();
         let ids = |state: &GraphView, query| {
-            visible_nodes(&graph, state, query)
+            visible_nodes(&graph, state, query, &Default::default())
                 .iter()
                 .map(|node| node.id.as_str())
                 .collect::<Vec<_>>()

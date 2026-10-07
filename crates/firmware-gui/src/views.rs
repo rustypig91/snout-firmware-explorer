@@ -17,6 +17,8 @@ pub(super) const RAM_HELP: &str = "Static memory required while running. Include
 struct Row {
     cells: Vec<String>,
     search_cells: Vec<String>,
+    cell_tips: std::collections::HashMap<usize, String>,
+    source_paths: Option<Rc<super::display::SourcePaths>>,
     values: Vec<Option<i128>>,
     tip: OnceCell<String>,
     tip_builder: Option<Box<dyn Fn() -> String>>,
@@ -81,12 +83,36 @@ impl Row {
         Self {
             search_cells: cells.iter().map(|cell| cell.to_lowercase()).collect(),
             cells,
+            cell_tips: Default::default(),
+            source_paths: None,
             values,
             tip: OnceCell::from(tip),
             tip_builder: None,
             action: None,
             bar_columns: vec![],
         }
+    }
+
+    fn with_source_paths(mut self, paths: Rc<super::display::SourcePaths>) -> Self {
+        self.source_paths = Some(paths);
+        self
+    }
+
+    fn detail_text(&self) -> String {
+        self.source_paths
+            .as_ref()
+            .map_or_else(|| self.tip().clone(), |p| p.short_detail(self.tip()))
+    }
+
+    fn with_search(mut self, text: &str) -> Self {
+        self.search_cells.push(text.to_lowercase());
+        self
+    }
+
+    fn with_path(mut self, column: usize, full: String) -> Self {
+        self.search_cells.push(full.to_lowercase());
+        self.cell_tips.insert(column, full);
+        self
     }
 
     fn with_lazy_tip(mut self, build: impl Fn() -> String + 'static) -> Self {
@@ -299,7 +325,7 @@ impl Explorer {
                         let detail_text = expanded.map(|index| {
                             let ui = body.ui_mut();
                             ui.painter().layout(
-                                rows[index].tip().clone(),
+                                rows[index].detail_text(),
                                 egui::TextStyle::Body.resolve(ui.style()),
                                 ui.visuals().text_color(),
                                 (width - 24.0).max(100.0),
@@ -387,7 +413,9 @@ impl Explorer {
                                                     .sense(egui::Sense::hover()),
                                             );
                                             line_clicked |= response.clicked();
-                                            response.on_hover_text(cell);
+                                            response.on_hover_text(
+                                                item.cell_tips.get(&index).unwrap_or(cell),
+                                            );
                                         },
                                     );
                                 });
@@ -411,6 +439,7 @@ impl Explorer {
                                     clip,
                                     detail_text.clone(),
                                     item.action.clone(),
+                                    item.tip().clone(),
                                 ));
                             }
                         };
@@ -432,7 +461,8 @@ impl Explorer {
                 // TableBuilder paints its full-height resize dividers after the body.
                 // Paint the spanning detail area last so those dividers cannot cross
                 // its text or capture selection gestures over the detail widgets.
-                if let Some((mut ui, background, clip, text, action)) = expanded_detail {
+                if let Some((mut ui, background, clip, text, action, full_detail)) = expanded_detail
+                {
                     ui.painter().with_clip_rect(clip).rect_filled(
                         background,
                         0.0,
@@ -440,7 +470,8 @@ impl Explorer {
                     );
                     ui.visuals_mut().selection.bg_fill = TEXT_SELECTION;
                     if let Some(text) = text {
-                        ui.add(egui::Label::new(text).selectable(true));
+                        ui.add(egui::Label::new(text).selectable(true))
+                            .on_hover_text(full_detail);
                     }
                     if let Some(file) = action {
                         if ui.small_button("Show symbols for this file").clicked() {
@@ -456,7 +487,19 @@ impl Explorer {
         let a = display.as_deref().unwrap_or(a);
         let mut selected = None;
         egui::ScrollArea::both().show(ui, |ui| {
-            tree(ui, &a.tree, "", "project", "", &mut selected, self);
+            let paths = self.source_paths(a);
+            tree(
+                ui,
+                &a.tree,
+                "",
+                "project",
+                "",
+                &mut selected,
+                &TreeDisplay {
+                    app: self,
+                    paths: &paths,
+                },
+            );
         });
         if let Some(path) = selected {
             if let Some(file) = a
@@ -471,14 +514,14 @@ impl Explorer {
     pub(super) fn files(&mut self, ui: &mut egui::Ui, a: &Analysis) {
         let display = self.baseline_display_analysis();
         let a = display.as_deref().unwrap_or(a);
-        let build_root = self.build.as_ref().map(|build| build.root.as_path());
+        let paths = self.source_paths(a);
         let rows = self.cached_rows(a as *const Analysis as usize, || {
             a.files
                 .iter()
                 .map(|f| {
                     let mut row = Row::new(
                         vec![
-                            build_relative_path(&f.path, build_root),
+                            paths.short(&f.path),
                             self.snapshot_bytes("file", &f.path, "usage.flash", f.usage.flash),
                             self.snapshot_bytes("file", &f.path, "usage.ram", f.usage.ram),
                             self.snapshot_count(
@@ -496,12 +539,15 @@ impl Explorer {
                         ],
                         format!(
                             "{}\n{}\nFlash: {} / RAM: {}",
-                            build_relative_path(&f.path, build_root),
+                            paths.full(&f.path),
                             f.attribution,
                             self.snapshot_bytes("file", &f.path, "usage.flash", f.usage.flash),
                             self.snapshot_bytes("file", &f.path, "usage.ram", f.usage.ram)
                         ),
                     )
+                    .with_source_paths(paths.clone())
+                    .with_path(0, paths.full(&f.path))
+                    .with_search(&f.path)
                     .with_bars(&[1, 2]);
                     row.action = Some(f.path.clone());
                     row
@@ -525,8 +571,9 @@ impl Explorer {
     pub(super) fn symbols(&mut self, ui: &mut egui::Ui, a: &Analysis) {
         let display = self.baseline_display_analysis();
         let a = display.as_deref().unwrap_or(a);
+        let paths = self.source_paths(a);
         if let Some(file) = &self.selected_file {
-            ui.weak(display_path(file));
+            ui.weak(paths.short(file)).on_hover_text(paths.full(file));
         }
         let comparing = self.snapshot_label().is_some();
         let rows = self.cached_rows(a as *const Analysis as usize, || {
@@ -578,8 +625,10 @@ impl Explorer {
                         ],
                         String::new(),
                     )
+                    .with_source_paths(paths.clone())
                     .with_lazy_tip({
                         let source = source.clone();
+                        let paths = paths.clone();
                         let address = symbol_address("address", s.address);
                         let normalized = (s.address != s.normalized_address)
                             .then(|| symbol_address("normalized_address", s.normalized_address));
@@ -601,11 +650,11 @@ impl Explorer {
                                     String::new()
                                 },
                                 s.weak,
-                                display_path(s.source_file.as_deref().unwrap_or("Unknown")),
+                                paths.full(s.source_file.as_deref().unwrap_or("Unknown")),
                                 s.source_line
                                     .map(|l| l.to_string())
                                     .unwrap_or_else(|| "?".into()),
-                                display_path(s.compilation_unit.as_deref().unwrap_or("Unknown")),
+                                paths.full(s.dwarf_compilation_unit.as_deref().or(s.compilation_unit.as_deref()).unwrap_or("Unknown")),
                                 s.attribution
                             )
                         }
@@ -739,6 +788,7 @@ impl Explorer {
                 if usage.symbols.is_empty() {
                     ui.label("No symbols available in this region. Stripped firmware can still occupy space.");
                 }
+                let paths = self.source_paths(a);
                 let rows = self.cached_rows(a as *const Analysis as usize, || {
                     usage
                         .symbols
@@ -760,7 +810,7 @@ impl Explorer {
                                     s.source_file
                                         .as_ref()
                                         .or(s.compilation_unit.as_ref())
-                                        .map(|path| display_path(path).into_owned())
+                                        .map(|path| paths.short(path))
                                         .unwrap_or_else(|| "[unattributed]".into()),
                                 ],
                                 &[(1, entry.address.into()), (2, s.size.into())],
@@ -775,6 +825,21 @@ impl Explorer {
                                     ),
                                     self.snapshot_bytes("symbol", &symbol_key(s), "size", s.size),
                                     s.attribution
+                                ),
+                            )
+                            .with_search(
+                                s.source_file
+                                    .as_deref()
+                                    .or(s.compilation_unit.as_deref())
+                                    .unwrap_or("[unattributed]"),
+                            )
+                            .with_path(
+                                5,
+                                paths.full(
+                                    s.source_file
+                                        .as_deref()
+                                        .or(s.compilation_unit.as_deref())
+                                        .unwrap_or("[unattributed]"),
                                 ),
                             )
                         })
@@ -935,6 +1000,9 @@ impl Explorer {
         }
         ui.weak("Expand a frame for evidence").on_hover_text("Multiple ELF candidates are ambiguous. Each expanded row includes matching evidence and its report path.");
         let build_root = self.build.as_ref().map(|build| build.root.as_path());
+        let display = self.baseline_display_analysis();
+        let analysis = display.as_deref().or(self.analysis.as_deref());
+        let paths = analysis.map(|a| self.source_paths(a));
         let rows = self.cached_rows(report as *const _ as usize, || {
             report
                 .entries
@@ -958,7 +1026,13 @@ impl Explorer {
                             e.qualifier.clone(),
                             format!(
                                 "{}:{}",
-                                build_relative_path(&e.source_file, build_root),
+                                paths.as_ref().map_or_else(
+                                    || super::display::short_path(
+                                        &e.source_file,
+                                        report.entries.iter().map(|e| e.source_file.as_str())
+                                    ),
+                                    |p| p.short(&e.source_file)
+                                ),
                                 e.source_line
                             ),
                         ],
@@ -970,6 +1044,18 @@ impl Explorer {
                             e.symbol_candidates
                         ),
                     )
+                    .with_path(
+                        3,
+                        format!(
+                            "{}:{}",
+                            paths.as_ref().map_or_else(
+                                || super::display::absolute_path(&e.source_file, build_root),
+                                |p| p.full(&e.source_file)
+                            ),
+                            e.source_line
+                        ),
+                    )
+                    .with_search(&format!("{}:{}", e.source_file, e.source_line))
                     .with_bars(&[1])
                 })
                 .collect()
@@ -1002,6 +1088,11 @@ impl Explorer {
                 display_path(&c.new_path)
             ));
         });
+        let display = self.baseline_display_analysis();
+        let paths = display
+            .as_deref()
+            .or(self.analysis.as_deref())
+            .map(|a| self.source_paths(a));
         let changes = match self.comparison_group {
             1 => &c.symbols,
             2 => &c.sections,
@@ -1013,7 +1104,32 @@ impl Explorer {
                 .map(|c| {
                     Row::new(
                         vec![
-                            c.identity.clone(),
+                            if self.comparison_group == 0 {
+                                paths.as_ref().map_or_else(
+                                    || {
+                                        super::display::short_path(
+                                            &c.identity,
+                                            changes.iter().map(|c| c.identity.as_str()),
+                                        )
+                                    },
+                                    |p| p.short(&c.identity),
+                                )
+                            } else if self.comparison_group == 1 {
+                                c.identity.split_once(" | ").map_or_else(
+                                    || c.identity.clone(),
+                                    |(owner, rest)| {
+                                        format!(
+                                            "{} | {rest}",
+                                            paths.as_ref().map_or_else(
+                                                || super::display::short_path(owner, []),
+                                                |p| p.short(owner)
+                                            )
+                                        )
+                                    },
+                                )
+                            } else {
+                                c.identity.clone()
+                            },
                             format!("{:+} B", c.flash_delta),
                             format!("{:+} B", c.ram_delta),
                             c.status.clone(),
@@ -1026,6 +1142,17 @@ impl Explorer {
                             bytes(c.old.ram),
                             bytes(c.new.ram)
                         ),
+                    )
+                    .with_search(&c.identity)
+                    .with_path(
+                        0,
+                        if self.comparison_group == 0 {
+                            paths
+                                .as_ref()
+                                .map_or_else(|| c.identity.clone(), |p| p.full(&c.identity))
+                        } else {
+                            c.identity.clone()
+                        },
                     )
                 })
                 .collect()
@@ -1149,6 +1276,11 @@ fn sort_header(ui: &mut egui::Ui, title: &str, descending: Option<bool>) -> egui
     }
     response
 }
+struct TreeDisplay<'a> {
+    app: &'a Explorer,
+    paths: &'a super::display::SourcePaths,
+}
+
 fn tree(
     ui: &mut egui::Ui,
     node: &FileTree,
@@ -1156,8 +1288,9 @@ fn tree(
     id: &str,
     parent: &str,
     selected: &mut Option<String>,
-    app: &Explorer,
+    display: &TreeDisplay<'_>,
 ) {
+    let TreeDisplay { app, paths } = display;
     fn matches(node: &FileTree, filter: &str) -> bool {
         node.name.to_lowercase().contains(filter)
             || node.children.iter().any(|c| matches(c, filter))
@@ -1180,7 +1313,7 @@ fn tree(
     );
     let help = format!(
         "{}\nFlash: {} B\nRAM: {} B",
-        display_path(&node.name),
+        paths.tree_full(&path),
         node.usage.flash,
         node.usage.ram
     );
@@ -1210,7 +1343,7 @@ fn tree(
                         &format!("{id}/{index}"),
                         &path,
                         selected,
-                        app,
+                        display,
                     );
                 }
             })
@@ -1240,6 +1373,105 @@ mod cache_tests {
         assert!(Rc::ptr_eq(&ordered, &app.prepare_table(reused, 2)));
         app.report_revision += 1;
         assert!(!Rc::ptr_eq(&symbols, &app.cached_rows(1, rows)));
+    }
+
+    #[test]
+    fn file_rows_keep_absolute_hover_search_and_selection_with_short_labels() {
+        let mut a = firmware_analysis_core::analyze_bytes(
+            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            "fixture.elf",
+            &Default::default(),
+        )
+        .unwrap();
+        a.files = ["/project/app/src/main.c", "/project/lib/src/main.c"]
+            .into_iter()
+            .map(|path| firmware_analysis_core::FileUsage {
+                path: path.into(),
+                attribution: "DWARF".into(),
+                usage: Default::default(),
+                symbol_count: 1,
+            })
+            .collect();
+        a.symbols.clear();
+        a.dependencies.nodes.clear();
+        let a = std::sync::Arc::new(a);
+        let mut app = Explorer {
+            view: View::Files,
+            analysis: Some(a.clone()),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| app.files(ui, &a));
+        });
+        let rows = app.table_cache.rows[View::Files as usize]
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .1
+            .clone();
+        assert_eq!(rows[0].cells[0], "app/src/main.c");
+        assert_eq!(rows[1].cells[0], "lib/src/main.c");
+        assert_eq!(rows[0].cell_tips[&0], "/project/app/src/main.c");
+        assert_eq!(rows[0].action.as_deref(), Some("/project/app/src/main.c"));
+        assert!(rows[0].detail_text().starts_with("app/src/main.c\n"));
+        app.search = "/project/app".into();
+        let filtered = app.prepare_table(rows, 5);
+        assert_eq!(filtered.indices, [0]);
+        assert_eq!(filtered.source[0].cells[0], "app/src/main.c");
+    }
+
+    #[test]
+    fn file_and_comparison_search_keep_recorded_paths_after_resolution() {
+        let mut a = firmware_analysis_core::analyze_bytes(
+            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            "fixture.elf",
+            &Default::default(),
+        )
+        .unwrap();
+        let recorded = "/project/build/../src/main.c";
+        a.symbols.truncate(1);
+        a.symbols[0].source_file = Some(recorded.into());
+        a.symbols[0].dwarf_compilation_unit = None;
+        a.symbols[0].compilation_unit = None;
+        a.files = vec![firmware_analysis_core::FileUsage {
+            path: recorded.into(),
+            attribution: "DWARF".into(),
+            usage: Default::default(),
+            symbol_count: 1,
+        }];
+        a.dependencies.nodes.clear();
+        let old = a.clone();
+        a.files[0].usage.flash = 1;
+        let a = std::sync::Arc::new(a);
+        let mut app = Explorer {
+            analysis: Some(a.clone()),
+            comparison: Some(super::super::compare(&old, &a)),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        for view in [View::Files, View::Compare] {
+            app.change_view(view);
+            let _ = ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| match view {
+                    View::Files => app.files(ui, &a),
+                    _ => app.compare_view(ui),
+                });
+            });
+            let rows = app.table_cache.rows[view as usize]
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .1
+                .clone();
+            assert_eq!(rows[0].cells[0], "src/main.c");
+            assert_eq!(rows[0].cell_tips[&0], "/project/src/main.c");
+            // Growth-summary navigation searches by the recorded identity.
+            for query in [recorded, "/project/src/main.c"] {
+                app.search = query.into();
+                assert_eq!(app.prepare_table(rows.clone(), 4).indices, [0]);
+            }
+        }
     }
 
     #[test]

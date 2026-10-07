@@ -1,4 +1,4 @@
-use super::display::display_path;
+use super::display::SourcePaths;
 use super::Explorer;
 use eframe::egui;
 use firmware_analysis_core::{format_bytes as bytes, Analysis};
@@ -71,6 +71,9 @@ fn metric_slices_for_display(
     metric: super::overview::Metric,
     app: Option<&Explorer>,
 ) -> Vec<Slice> {
+    let paths = app
+        .map(|app| app.source_paths(a))
+        .unwrap_or_else(|| std::rc::Rc::new(SourcePaths::new(a, None, None)));
     let mut slices = Vec::new();
     if let Some(section) = section.and_then(|index| a.sections.iter().find(|s| s.index == index)) {
         let symbols: Vec<_> = a
@@ -106,7 +109,7 @@ fn metric_slices_for_display(
                             s.size
                         ))
                         .unwrap_or_else(|| bytes(s.size)),
-                        display_path(s.source_file.as_deref().unwrap_or("Unknown source"))
+                        paths.full(s.source_file.as_deref().unwrap_or("Unknown source"))
                     ),
                 });
             }
@@ -131,12 +134,12 @@ fn metric_slices_for_display(
             for (key, size) in units {
                 slices.push(Slice {
                     identity: SliceIdentity::Unit(key.clone()),
-                    name: display_path(key.label()).into_owned(), size,
+                    name: paths.short(key.label()), size,
                     tip: match &key {
                         UnitKey::Dwarf(_) => "DWARF compilation unit. Click to inspect functions and data symbols.",
                         UnitKey::Elf(_) => "ELF compilation-unit label (not a proven object path). Click to inspect symbols.",
                         UnitKey::Other => "Symbols without a known compilation unit, padding and reservations.",
-                    }.into(),
+                    }.to_owned() + "\n" + &paths.full(key.label()),
                     target: Some(Target::Unit(key)),
                 });
             }
@@ -262,6 +265,7 @@ impl Explorer {
     pub(super) fn overview_pie(&mut self, ui: &mut egui::Ui, current: &Analysis) {
         let display = self.baseline_display_analysis();
         let a = display.as_deref().unwrap_or(current);
+        let paths = self.source_paths(a);
         ui.horizontal_wrapped(|ui| {
             if self.overview_section.is_some() && ui.button("Back").clicked() {
                 self.overview_back();
@@ -277,7 +281,8 @@ impl Explorer {
                 ui.label(format!("/ {}", section.name));
             }
             if let Some(unit) = &self.overview_unit {
-                ui.label(format!("/ {}", display_path(unit.label())));
+                ui.label(format!("/ {}", paths.short(unit.label())))
+                    .on_hover_text(paths.full(unit.label()));
             }
         });
         let mut items = metric_slices_for_display(
