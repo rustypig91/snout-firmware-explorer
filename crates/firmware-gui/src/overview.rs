@@ -529,7 +529,8 @@ impl Explorer {
         }
     }
     fn contributors(&mut self, ui: &mut egui::Ui, a: &Analysis) {
-        let paths = self.source_paths(a);
+        let display = self.baseline_display_analysis();
+        let paths = self.source_paths(display.as_deref().unwrap_or(a));
         ui.horizontal_wrapped(|ui| {
             ui.strong("Largest contributors");
             ui.selectable_value(&mut self.contributor_ram, false, "Flash");
@@ -623,5 +624,55 @@ impl Explorer {
             );
         }
         ui.weak("Unique attributed bytes").on_hover_text("Aliases share storage and are not counted twice. ELF symbol sizes can be larger than their unique contribution.");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contributors_share_baseline_path_labels_and_reuse_the_display_cache() {
+        let mut current = firmware_analysis_core::analyze_bytes(
+            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            "fixture.elf",
+            &Default::default(),
+        )
+        .unwrap();
+        current.symbols.truncate(1);
+        current.symbols[0].source_file = Some("/project/app/src/main.c".into());
+        current.symbols[0].dwarf_compilation_unit = current.symbols[0].source_file.clone();
+        current.symbols[0].compilation_unit = None;
+        current.files = vec![firmware_analysis_core::FileUsage {
+            path: "/project/app/src/main.c".into(),
+            attribution: "DWARF".into(),
+            usage: Usage { flash: 4, ram: 0 },
+            symbol_count: 1,
+        }];
+        current.dependencies.nodes.clear();
+        let mut old = current.clone();
+        old.files[0].path = "/project/lib/src/main.c".into();
+        old.symbols[0].source_file = Some(old.files[0].path.clone());
+        old.symbols[0].dwarf_compilation_unit = old.symbols[0].source_file.clone();
+        let mut app = Explorer {
+            baseline_display: Some(super::super::baseline_display::BaselineDisplay::new(
+                &current, &old, None, None,
+            )),
+            ..Default::default()
+        };
+        app.ensure_region_cache(&current);
+        let display = app.baseline_display_analysis().unwrap();
+        let paths = app.source_paths(&display);
+        assert_eq!(paths.short(&current.files[0].path), "app/src/main.c");
+        let ctx = egui::Context::default();
+        for _ in 0..2 {
+            let output = ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.contributors(ui, &current));
+            });
+            assert!(output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains("app/src/main.c"))
+            }));
+            assert!(std::rc::Rc::ptr_eq(&paths, &app.source_paths(&display)));
+        }
     }
 }
