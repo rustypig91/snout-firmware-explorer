@@ -15,6 +15,77 @@ fn finish_job(app: &mut Explorer) {
 }
 
 #[test]
+fn interface_text_respects_minimum_size_except_zoomable_graph_labels() {
+    let ctx = egui::Context::default();
+    ctx.style_mut(|style| {
+        style.text_styles.insert(
+            egui::TextStyle::Name("tiny".into()),
+            egui::FontId::proportional(6.0),
+        );
+    });
+    shell::configure_style(&ctx);
+    assert!(ctx
+        .style()
+        .text_styles
+        .values()
+        .all(|font| font.size >= shell::MIN_TEXT_SIZE));
+    assert_eq!(ctx.style().text_styles[&egui::TextStyle::Small].size, 12.0);
+    assert_eq!(ctx.style().text_styles[&egui::TextStyle::Body].size, 13.0);
+    let analysis = firmware_analysis_core::analyze_bytes(
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        "test.elf",
+        &Default::default(),
+    )
+    .unwrap();
+    let mut app = Explorer {
+        analysis: Some(Arc::new(analysis)),
+        ..Default::default()
+    };
+    for view in View::ALL {
+        app.change_view(view);
+        let frame = |app: &mut Explorer| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1400.0, 1000.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| app.show(ctx),
+            )
+        };
+        let output = if view == View::Dependencies {
+            dependencies::settle_graph(&mut app, frame)
+        } else {
+            frame(&mut app)
+        };
+        for shape in &output.shapes {
+            if let egui::Shape::Text(text) = &shape.shape {
+                // Diagram labels scale with zoom; surrounding UI stays readable.
+                if view == View::Dependencies
+                    && (text.galley.text().contains("\nFlash ")
+                        || text.galley.text().contains("\nRAM "))
+                {
+                    continue;
+                }
+
+                assert!(
+                    text.galley
+                        .job
+                        .sections
+                        .iter()
+                        .all(|section| section.format.font_id.size >= shell::MIN_TEXT_SIZE),
+                    "{}: {}",
+                    view.label(),
+                    text.galley.text()
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn changing_layout_reloads_stack_reports_against_the_current_elf() {
     for use_map in [false, true] {
         let directory = tempfile::tempdir().unwrap();
@@ -257,8 +328,7 @@ fn overview_explains_reservations_and_links_growth_to_section_comparison() {
             .map(|s| s.index)
     );
     click_text(&ctx, &mut app, "RAM +32 B | .bss");
-    assert!(app.view == View::Compare);
-    assert_eq!(app.comparison_group, 2);
+    assert!(app.view == View::Sections);
     assert_eq!(app.search, ".bss");
     frame(&ctx, &mut app, vec![]);
     assert_eq!(app.visible_rows, 1);
@@ -854,7 +924,6 @@ fn all_data_views_render_headlessly() {
                         View::MemoryMap => app.memory_map(ui, &analysis),
                         View::Dependencies => app.dependency_view(ui, &analysis),
                         View::Stack => app.stack_view(ui),
-                        View::Compare => app.compare_view(ui),
                     });
                 },
             );
@@ -2674,7 +2743,6 @@ fn tab_controls_are_independent_and_remembered_for_the_session() {
         app.kind_filter = format!("kind {index}");
     }
     app.stack_show_unresolved = true;
-    app.comparison_group = 2;
     app.overview_metric = overview::Metric::Ram;
     app.contributor_ram = true;
     for (index, view) in View::ALL.into_iter().enumerate() {
@@ -2689,7 +2757,6 @@ fn tab_controls_are_independent_and_remembered_for_the_session() {
         assert_eq!(app.kind_filter, format!("kind {index}"));
     }
     assert!(app.stack_show_unresolved);
-    assert_eq!(app.comparison_group, 2);
     assert!(app.overview_metric == overview::Metric::Ram);
     assert!(app.contributor_ram);
 
@@ -2704,6 +2771,7 @@ fn tab_controls_are_independent_and_remembered_for_the_session() {
         "contributor_ram",
         "stack_show_unresolved",
         "comparison_group",
+        "only_diffs",
     ] {
         assert!(preferences.get(key).is_none(), "{key} must remain in RAM");
     }

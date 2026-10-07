@@ -341,8 +341,33 @@ impl Explorer {
                 }
             }
         }
-        self.visible_rows = items.len();
         let total: u64 = items.iter().map(|s| s.size).sum();
+        if self.diffs_active() {
+            items.retain(|item| match &item.identity {
+                SliceIdentity::Section(name) => self.diff_visible("section", name),
+                SliceIdentity::Symbol(id) => self.diff_visible("symbol", id),
+                SliceIdentity::Unit(unit) => {
+                    a.symbols.iter().any(|s| {
+                        Some(s.section_index) == self.overview_section
+                            && unit_key(s) == *unit
+                            && self.diff_visible("symbol", &super::snapshots::symbol_key(s))
+                    }) || ambiguous_section
+                        || baseline_sizes.as_ref().is_some_and(|sizes| {
+                            sizes.get(&item.identity).copied() != Some(Ok(item.size))
+                        })
+                }
+                SliceIdentity::Padding => {
+                    ambiguous_section
+                        || baseline_sizes.as_ref().is_some_and(|sizes| {
+                            sizes.get(&item.identity).copied() != Some(Ok(item.size))
+                        })
+                }
+            });
+        }
+        self.visible_rows = items.len();
+        if items.is_empty() && self.diffs_active() {
+            ui.weak("No differences in this breakdown.");
+        }
         ui.label(format!(
             "{}: {}",
             self.overview_metric.label(),

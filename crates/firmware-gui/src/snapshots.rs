@@ -248,6 +248,7 @@ pub(super) enum Dialog {
 pub(super) struct SaveJob {
     receiver: std::sync::mpsc::Receiver<Result<Snapshot, String>>,
     presented: bool,
+    select_after_save: bool,
 }
 pub(super) fn symbol_key(s: &Symbol) -> String {
     // Never include placement or source line: both can change after a rebuild.
@@ -837,7 +838,145 @@ impl Explorer {
         self.details = None;
         Ok(())
     }
+    pub(super) fn baseline_menu(&mut self, ui: &mut egui::Ui) {
+        enum Action {
+            Select(Option<String>),
+            Create,
+            Manage,
+        }
+        let popup_id = ui.id().with("baseline_menu");
+        let active = self.snapshot_label().map(str::to_owned);
+        let label = active.as_ref().map_or_else(
+            || "Baseline: none".to_owned(),
+            |name| format!("Baseline: {name} · Diffs only"),
+        );
+        let mut text = egui::RichText::new(label).small();
+        if active.is_some() {
+            text = text.strong().color(super::views::ACCENT);
+        }
+        let response = ui
+            .add_enabled(
+                self.receiver.is_none() && self.snapshot_job.is_none(),
+                egui::Button::new(text).selected(active.is_some()),
+            )
+            .on_hover_text("Select, create, or clear the comparison baseline");
+        if response.clicked() {
+            if !ui.memory(|memory| memory.is_popup_open(popup_id)) {
+                self.snapshot_name.clear();
+                self.snapshot_dialog_error = None;
+                self.snapshot_select_after_save = false;
+            }
+            ui.memory_mut(|memory| memory.toggle_popup(popup_id));
+        }
+        let mut action = None;
+        egui::popup::popup_above_or_below_widget(
+            ui,
+            popup_id,
+            &response,
+            egui::AboveOrBelow::Above,
+            egui::popup::PopupCloseBehavior::CloseOnClickOutside,
+            |ui| {
+                ui.set_width(320.0_f32.min((ui.ctx().screen_rect().width() - 32.0).max(160.0)));
+                ui.strong("Comparison baseline");
+                ui.label(
+                    egui::RichText::new(
+                        "Selecting a baseline shows only differences in every tab.",
+                    )
+                    .size(super::shell::MIN_TEXT_SIZE),
+                );
+                ui.separator();
+                if ui
+                    .selectable_label(active.is_none(), "No baseline — show all entries")
+                    .clicked()
+                {
+                    action = Some(Action::Select(None));
+                }
+                let firmware = self.snapshot_firmware();
+                let mut snapshots: Vec<_> = self
+                    .snapshots
+                    .snapshots
+                    .iter()
+                    .filter(|s| firmware.as_ref() == Some(&s.firmware))
+                    .collect();
+                snapshots.sort_by(|a, b| {
+                    b.taken_at
+                        .cmp(&a.taken_at)
+                        .then_with(|| a.name.cmp(&b.name))
+                });
+                if snapshots.is_empty() {
+                    ui.weak("No saved baselines for this firmware.");
+                }
+                egui::ScrollArea::vertical()
+                    .max_height(200.0)
+                    .show(ui, |ui| {
+                        for snapshot in snapshots {
+                            if ui
+                                .selectable_label(
+                                    active.as_deref() == Some(snapshot.name.as_str()),
+                                    &snapshot.name,
+                                )
+                                .on_hover_text(format!(
+                                    "{}\nELF: {}",
+                                    snapshot.time_label(),
+                                    super::display::display_path(&snapshot.firmware)
+                                ))
+                                .clicked()
+                            {
+                                action = Some(Action::Select(Some(snapshot.name.clone())));
+                            }
+                        }
+                    });
+                ui.separator();
+                ui.strong("Create a new baseline");
+                let name = ui.add(
+                    egui::TextEdit::singleline(&mut self.snapshot_name)
+                        .hint_text("Baseline name")
+                        .desired_width(f32::INFINITY),
+                );
+                let can_create = !self.snapshot_name.trim().is_empty()
+                    && self.preferences_file.is_some()
+                    && self.build.is_some();
+                if ui
+                    .add_enabled(can_create, egui::Button::new("Create and select baseline"))
+                    .clicked()
+                    || (can_create
+                        && name.lost_focus()
+                        && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                {
+                    action = Some(Action::Create);
+                }
+                if let Some(error) = &self.snapshot_dialog_error {
+                    ui.colored_label(egui::Color32::LIGHT_RED, error);
+                }
+                ui.separator();
+                if ui.button("Manage snapshots...").clicked() {
+                    action = Some(Action::Manage);
+                }
+            },
+        );
+        let result = match action {
+            Some(Action::Select(name)) => self.select_snapshot(name),
+            Some(Action::Create) => {
+                self.snapshot_select_after_save = true;
+                self.request_snapshot_save(ui.ctx())
+            }
+            Some(Action::Manage) => {
+                self.open_snapshot_manager();
+                Ok(())
+            }
+            None => return,
+        };
+        match result {
+            Ok(()) => ui.memory_mut(|memory| memory.close_popup()),
+            Err(error) => {
+                self.snapshot_select_after_save = false;
+                self.snapshot_dialog_error = Some(error);
+            }
+        }
+    }
+
     pub(super) fn open_snapshot_manager(&mut self) {
+        self.snapshot_select_after_save = false;
         self.snapshot_dialog = Some(Dialog::Manager);
         self.snapshot_name.clear();
         self.snapshot_dialog_error = None;
@@ -920,6 +1059,7 @@ impl Explorer {
         self.snapshot_job = Some(SaveJob {
             receiver,
             presented: false,
+            select_after_save: std::mem::take(&mut self.snapshot_select_after_save),
         });
         self.snapshot_dialog_error = None;
         self.snapshot_dialog = Some(Dialog::Saving(name));
@@ -940,10 +1080,12 @@ impl Explorer {
                 Err("The snapshot worker stopped unexpectedly.".into())
             }
         };
+        let select_after_save = job.select_after_save;
         self.snapshot_job = None;
         self.snapshot_dialog = Some(Dialog::Manager);
         match result {
             Ok(snapshot) => {
+                let saved_name = snapshot.name.clone();
                 self.snapshot_message = Some(format!("Saved snapshot “{}”.", snapshot.name));
                 self.snapshots
                     .snapshots
@@ -953,6 +1095,12 @@ impl Explorer {
                 self.sync_snapshot_comparison();
                 self.report_revision = self.report_revision.wrapping_add(1);
                 self.details = None;
+                if select_after_save {
+                    match self.select_snapshot(Some(saved_name)) {
+                        Ok(()) => self.snapshot_dialog = None,
+                        Err(error) => self.snapshot_dialog_error = Some(error),
+                    }
+                }
             }
             Err(error) => self.snapshot_dialog_error = Some(error),
         }
@@ -1222,11 +1370,13 @@ impl Explorer {
                 result
             }
             Some(Action::Back) => {
+                self.snapshot_select_after_save = false;
                 self.snapshot_dialog = Some(Dialog::Manager);
                 self.snapshot_dialog_error = None;
                 Ok(())
             }
             Some(Action::Close) => {
+                self.snapshot_select_after_save = false;
                 self.snapshot_dialog = None;
                 Ok(())
             }
@@ -2841,8 +2991,237 @@ mod tests {
         assert!(!label.contains("removed"), "{label}");
     }
 
+    fn footer_frame(
+        ctx: &egui::Context,
+        app: &mut Explorer,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400.0, 1000.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.show(ctx),
+        )
+    }
+    fn click_footer_text(ctx: &egui::Context, app: &mut Explorer, label: &str) {
+        let mut output = footer_frame(ctx, app, vec![]);
+        for _ in 0..2 {
+            output = footer_frame(ctx, app, vec![]);
+        }
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => {
+                    Some(text.pos + text.galley.size() / 2.0)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("Missing footer action {label}"));
+        for pressed in [true, false] {
+            footer_frame(
+                ctx,
+                app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+    }
     #[test]
-    fn default_tabs_and_compare_share_the_snapshot_baseline() {
+    fn header_clears_the_baseline_in_every_tab() {
+        use super::super::View;
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        app.take_snapshot("baseline").unwrap();
+        let ctx = egui::Context::default();
+        for view in View::ALL {
+            app.select_snapshot(Some("baseline".into())).unwrap();
+            app.change_view(view);
+            click_footer_text(&ctx, &mut app, "Clear baseline");
+            assert!(app.snapshot_label().is_none(), "{}", view.label());
+            assert!(app.comparison.is_none());
+            assert!(app.baseline_display.is_none());
+            assert!(!app.diffs_active());
+            assert!(app.view == view);
+        }
+        app.change_view(View::Symbols);
+        footer_frame(&ctx, &mut app, vec![]);
+        assert!(app.visible_rows > 0);
+    }
+
+    #[test]
+    fn footer_popup_selects_clears_and_creates_baselines() {
+        use super::super::View;
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        app.take_snapshot("saved baseline").unwrap();
+        app.change_view(View::Symbols);
+        let ctx = egui::Context::default();
+        super::super::shell::configure_style(&ctx);
+        footer_frame(&ctx, &mut app, vec![]);
+        assert!(app.visible_rows > 0);
+        click_footer_text(&ctx, &mut app, "Baseline: none");
+        let output = footer_frame(&ctx, &mut app, vec![]);
+        let menu = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Comparison baseline" => {
+                    Some(text.pos)
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert!(menu.y < 950.0, "The popup must open above the footer");
+        click_footer_text(&ctx, &mut app, "saved baseline");
+        assert_eq!(app.snapshot_label(), Some("saved baseline"));
+        let output = footer_frame(&ctx, &mut app, vec![]);
+        assert_eq!(app.visible_rows, 0);
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.text() == "Showing only differences · current minus baseline")));
+        click_footer_text(&ctx, &mut app, "Baseline: saved baseline · Diffs only");
+        click_footer_text(&ctx, &mut app, "No baseline — show all entries");
+        assert!(app.snapshot_label().is_none());
+        footer_frame(&ctx, &mut app, vec![]);
+        assert!(app.visible_rows > 0);
+        click_footer_text(&ctx, &mut app, "Baseline: none");
+        click_footer_text(&ctx, &mut app, "Baseline name");
+        footer_frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::Text("fresh baseline".into())],
+        );
+        assert_eq!(app.snapshot_name, "fresh baseline");
+        click_footer_text(&ctx, &mut app, "Create and select baseline");
+        assert!(app.snapshot_job.is_some());
+        finish_save(&mut app);
+        assert_eq!(app.snapshot_label(), Some("fresh baseline"));
+        assert!(app.snapshot_dialog.is_none());
+        assert!(app
+            .snapshots
+            .snapshots
+            .iter()
+            .any(|s| s.name == "fresh baseline"));
+    }
+
+    #[test]
+    fn footer_creation_confirms_overwrite_before_selecting_the_baseline() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        app.take_snapshot("existing").unwrap();
+        let ctx = egui::Context::default();
+        click_footer_text(&ctx, &mut app, "Baseline: none");
+        app.snapshot_name = "existing".into();
+        click_footer_text(&ctx, &mut app, "Create and select baseline");
+        assert!(matches!(app.snapshot_dialog, Some(Dialog::Overwrite(_))));
+        assert!(app.snapshot_job.is_none());
+        assert!(app.snapshot_label().is_none());
+        click_manager(&ctx, &mut app, "Overwrite");
+        finish_save(&mut app);
+        assert_eq!(app.snapshot_label(), Some("existing"));
+        assert!(app.snapshot_dialog.is_none());
+    }
+
+    #[test]
+    fn only_diffs_filters_identical_snapshots_in_every_tab_and_restores_rows() {
+        use super::super::View;
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        app.take_snapshot("baseline").unwrap();
+        app.select_snapshot(Some("baseline".into())).unwrap();
+        let ctx = egui::Context::default();
+        for view in View::ALL {
+            app.change_view(view);
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1400.0, 1200.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| app.show(ctx),
+            );
+            assert_eq!(app.visible_rows, 0, "{}", view.label());
+        }
+        app.change_view(View::Symbols);
+        let a = app.analysis.clone().unwrap();
+        let render = |app: &mut Explorer| {
+            let _ = ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.symbols(ui, &a));
+            });
+        };
+        render(&mut app);
+        assert_eq!(app.visible_rows, 0);
+        app.select_snapshot(None).unwrap();
+        render(&mut app);
+        assert!(
+            app.visible_rows > 0,
+            "Clearing the baseline restores the normal view"
+        );
+    }
+
+    #[test]
+    fn only_diffs_keeps_address_changes_and_added_and_removed_symbols() {
+        use super::super::View;
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        app.take_snapshot("baseline").unwrap();
+        app.select_snapshot(Some("baseline".into())).unwrap();
+        let mut current = (**app.analysis.as_ref().unwrap()).clone();
+        let removed = current.symbols.remove(0);
+        let moved = &mut current.symbols[0];
+        moved.address += 1024;
+        moved.normalized_address += 1024;
+        let moved_id = symbol_key(moved);
+        let mut added = removed.clone();
+        added.name = "diff_added_symbol".into();
+        added.demangled_name = added.name.clone();
+        let added_id = symbol_key(&added);
+        current.symbols.push(added);
+        app.analysis = Some(Arc::new(current));
+        app.sync_snapshot_comparison();
+        app.change_view(View::Symbols);
+        assert!(app.diff_visible("symbol", &symbol_key(&removed)));
+        assert!(app.diff_visible("symbol", &moved_id));
+        assert!(app.diff_visible("symbol", &added_id));
+        let a = app.analysis.clone().unwrap();
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| app.symbols(ui, &a));
+        });
+        assert_eq!(app.visible_rows, 3);
+        app.search = "diff_added_symbol".into();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| app.symbols(ui, &a));
+        });
+        assert_eq!(app.visible_rows, 1);
+    }
+
+    #[test]
+    fn default_tabs_share_the_snapshot_baseline() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
         fixture(&root);
@@ -2891,19 +3270,8 @@ mod tests {
             "{texts:?}"
         );
         assert!(app.comparison.is_some());
-        app.change_view(super::super::View::Compare);
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| app.compare_view(ui));
-        });
-        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
-            egui::Shape::Text(text) if text.galley.text() == "Baseline: baseline")));
         app.select_snapshot(None).unwrap();
         assert!(app.comparison.is_none());
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| app.compare_view(ui));
-        });
-        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
-            egui::Shape::Text(text) if text.galley.text() == "Select baseline...")));
         assert!(!app
             .snapshot_address("symbol", "missing", "address", 0)
             .contains('('));

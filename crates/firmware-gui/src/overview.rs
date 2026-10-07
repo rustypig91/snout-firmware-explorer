@@ -33,7 +33,7 @@ impl Metric {
 }
 impl Explorer {
     pub(super) fn ensure_region_cache(&mut self, a: &Analysis) {
-        let key = a as *const Analysis as usize;
+        let key = a as *const Analysis as usize | usize::from(self.diffs_active());
         if self.region_cache_key != key {
             self.region_cache = a
                 .options
@@ -43,6 +43,7 @@ impl Explorer {
                 .collect();
             for (slot, metric) in [Metric::Flash, Metric::Ram].into_iter().enumerate() {
                 let mut files: Vec<_> = (0..a.files.len())
+                    .filter(|&i| self.diff_visible("file", &a.files[i].path))
                     .filter(|&i| {
                         a.files[i].path != "[unattributed]" && metric.value(a.files[i].usage) > 0
                     })
@@ -56,6 +57,7 @@ impl Explorer {
                 files.truncate(5);
                 self.top_files[slot] = files;
                 let mut symbols: Vec<_> = (0..a.symbols.len())
+                    .filter(|&i| self.diff_visible("symbol", &symbol_key(&a.symbols[i])))
                     .filter(|&i| metric.value(a.symbols[i].usage) > 0)
                     .collect();
                 symbols.sort_by(|&i, &j| {
@@ -84,7 +86,7 @@ impl Explorer {
                     .flat_map(|s| s.warnings.iter().map(String::as_str)),
             );
         }
-        if matches!(self.view, View::Overview | View::Compare) {
+        if self.view == View::Overview {
             notes.extend(
                 self.comparison
                     .iter()
@@ -127,6 +129,7 @@ impl Explorer {
                         ui.label("Total TLS RAM is unknown. Static RAM excludes TLS templates; allocation may be inside existing stack reservations.");
                         ui.collapsing(format!("{} TLS variables", self.snapshot_count("counts", "", "tls", a.tls.as_ref().map_or(0, |t| t.symbols.len()) as u64)), |ui| {
                             for symbol in &tls.symbols {
+                                if !self.diff_visible("tls_symbol", &symbol.name) { continue; }
                                 ui.monospace(format!("{}  {}  {} [{}]", self.snapshot_address("tls_symbol", &symbol.name, "offset", symbol.offset), self.snapshot_bytes("tls_symbol", &symbol.name, "size", symbol.size), symbol.name, symbol.section));
                             }
                         });
@@ -394,9 +397,22 @@ impl Explorer {
                 }
             });
         if let Some((group, identity)) = open {
-            self.change_view(View::Compare);
-            self.comparison_group = group;
-            self.search = identity;
+            self.change_view(match group {
+                1 => View::Symbols,
+                2 => View::Sections,
+                _ => View::Files,
+            });
+            self.selected_file = None;
+            self.kind_filter = "All".into();
+            self.search = if group == 1 {
+                identity
+                    .rsplit(" | ")
+                    .next()
+                    .unwrap_or(&identity)
+                    .to_owned()
+            } else {
+                identity
+            };
         }
     }
 

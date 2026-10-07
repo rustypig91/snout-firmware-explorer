@@ -2,6 +2,8 @@ use super::display::display_path;
 use super::{egui, Explorer, View};
 use firmware_analysis_core::format_bytes as bytes;
 
+pub(super) const MIN_TEXT_SIZE: f32 = 12.0;
+
 // egui 0.30's nested menus only open to the right. Keep a separate left-hand
 // area and include it in the parent menu's hit test between frames.
 fn menu_with_left_submenu(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
@@ -146,6 +148,9 @@ pub(super) fn configure_style(ctx: &egui::Context) {
     style
         .text_styles
         .insert(egui::TextStyle::Heading, egui::FontId::proportional(17.0));
+    for font in style.text_styles.values_mut() {
+        font.size = font.size.max(MIN_TEXT_SIZE);
+    }
     ctx.set_style(style);
 }
 
@@ -396,6 +401,15 @@ impl Explorer {
             });
         });
         egui::TopBottomPanel::bottom("workbench_status").show(ctx, |ui| {
+            for style in [
+                egui::TextStyle::Small,
+                egui::TextStyle::Body,
+                egui::TextStyle::Button,
+            ] {
+                ui.style_mut()
+                    .text_styles
+                    .insert(style, egui::FontId::proportional(14.0));
+            }
             ui.horizontal(|ui| {
                 if let Some(a) = &self.analysis {
                     ui.small(format!(
@@ -414,11 +428,8 @@ impl Explorer {
                         );
                     ui.separator();
                     ui.small(format!("{} rows", self.visible_rows));
-                    if let Some(name) = self.snapshot_label() {
-                        ui.separator();
-                        ui.small(format!("Snapshot: {name}"))
-                            .on_hover_text("Selected comparison baseline · current minus snapshot");
-                    }
+                    ui.separator();
+                    self.baseline_menu(ui);
                 } else {
                     ui.small("Ready / Select or drop a build folder or ELF to begin");
                 }
@@ -489,8 +500,20 @@ impl Explorer {
             if let Some(error) = self.snapshot_error.clone() {
                 ui.horizontal_wrapped(|ui| { ui.colored_label(egui::Color32::LIGHT_RED, error); if ui.small_button("Dismiss snapshot error").clicked() { self.snapshot_error = None; } }); ui.separator();
             }
-            if self.view != View::Overview && self.view != View::Compare {
-                if let Some(name) = self.snapshot_label() { ui.label(format!("Comparing to snapshot: {name} · current minus baseline")); ui.separator(); }
+            if let Some(name) = self.snapshot_label().map(str::to_owned) {
+                egui::Frame::none().fill(egui::Color32::from_rgb(30, 49, 64)).inner_margin(8.0).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(egui::RichText::new(format!("Baseline: {name}")).strong().color(super::views::ACCENT));
+                        if ui.add_enabled(self.receiver.is_none() && self.snapshot_job.is_none(), egui::Button::new("Clear baseline"))
+                            .on_hover_text("Set baseline to none and show all entries")
+                            .clicked() {
+                            if let Err(error) = self.select_snapshot(None) { self.snapshot_error = Some(error); }
+                        }
+                        ui.label("Showing only differences · current minus baseline");
+                    });
+                });
+                ui.add_space(6.0);
             }
             if self.view == View::Overview && self.artifact_preview(ui) { return; }
             let Some(a) = self.analysis.clone() else {
@@ -512,22 +535,12 @@ impl Explorer {
                         });
                         if self.selected_file.is_some() && ui.small_button("All files").clicked() { self.selected_file = None; }
                     }
-                    if self.view == View::Compare {
-                        let previous = self.comparison_group;
-                        ui.selectable_value(&mut self.comparison_group, 2, "Sections");
-                        ui.selectable_value(&mut self.comparison_group, 0, "Files");
-                        ui.selectable_value(&mut self.comparison_group, 1, "Symbols");
-                        if previous != self.comparison_group {
-                            self.search.clear();
-                            self.details = None;
-                        }
-                    }
                 });
                 ui.separator();
             }
             ui.push_id(self.view.label(), |ui| match self.view {
                 View::Overview => self.overview(ui, &a), View::Files => self.files(ui, &a), View::Symbols => self.symbols(ui, &a),
-                View::Sections => self.sections(ui, &a), View::MemoryMap => self.memory_map(ui, &a), View::Dependencies => self.dependency_view(ui, &a), View::Stack => self.stack_view(ui), View::Compare => self.compare_view(ui),
+                View::Sections => self.sections(ui, &a), View::MemoryMap => self.memory_map(ui, &a), View::Dependencies => self.dependency_view(ui, &a), View::Stack => self.stack_view(ui),
             });
         });
     }
