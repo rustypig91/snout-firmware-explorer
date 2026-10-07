@@ -2255,6 +2255,68 @@ fn selected_report_folder_remains_recursive_and_discovers_new_reports_on_refresh
 }
 
 #[test]
+fn sidebar_large_firmware_list_only_builds_visible_rows() {
+    use firmware_analysis_core::build::{Artifact, ArtifactKind, BuildFolder};
+    let root = std::env::temp_dir().join("snout-firmware-list/build");
+    let mut app = Explorer {
+        build: Some(Arc::new(BuildFolder {
+            root: root.clone(),
+            artifacts: (0..2000)
+                .map(|i| Artifact {
+                    path: root.join(format!("firmware_{i:04}.elf")),
+                    kind: ArtifactKind::Firmware,
+                })
+                .collect(),
+            warnings: vec![],
+        })),
+        ..Default::default()
+    };
+    let ctx = egui::Context::default();
+    ctx.style_mut(|style| style.animation_time = 0.0);
+    let frame = |app: &mut Explorer, scroll| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 500.0),
+                )),
+                events: if scroll {
+                    vec![
+                        egui::Event::PointerMoved(egui::pos2(100.0, 250.0)),
+                        egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(0.0, -100_000.0),
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ]
+                } else {
+                    vec![]
+                },
+                ..Default::default()
+            },
+            |ctx| app.build_browser(ctx),
+        )
+    };
+    frame(&mut app, false);
+    // Each constructed collapsing header stores state, even if its paint is clipped.
+    assert!(
+        ctx.memory(|memory| memory.data.len()) < 200,
+        "offscreen firmware widgets should not be constructed"
+    );
+    let mut output = frame(&mut app, true);
+    for _ in 0..10 {
+        output = frame(&mut app, true);
+    }
+    assert!(
+        output.shapes.iter().any(|shape| matches!(
+            &shape.shape,
+            egui::Shape::Text(t) if t.galley.text() == "firmware_1999.elf"
+        )),
+        "the last firmware must remain reachable by scrolling"
+    );
+}
+
+#[test]
 fn sidebar_expands_firmware_loaded_outside_the_sidebar() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();

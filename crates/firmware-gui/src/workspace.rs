@@ -568,6 +568,18 @@ impl Explorer {
                         let artifact = &build.artifacts[index];
                         let active = self.analysis.as_ref().is_some_and(|a|
                             std::path::Path::new(&a.path) == artifact.path);
+                        // Inactive rows are collapsed once loading completes. Reserve
+                        // their height without constructing offscreen header widgets.
+                        // Keep the active row and loading animations variable-height.
+                        let height = ui.spacing().interact_size.y
+                            .max(ui.text_style_height(&egui::TextStyle::Button))
+                            .max(ui.spacing().icon_width);
+                        let row_rect = egui::Rect::from_min_size(ui.next_widget_position(),
+                            egui::vec2(ui.available_width(), height));
+                        if !active && self.receiver.is_none() && !ui.is_rect_visible(row_rect) {
+                            ui.allocate_space(row_rect.size());
+                            continue;
+                        }
                         ui.push_id(&artifact.path, |ui| {
                             let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
                                 ui.ctx(), ui.make_persistent_id("firmware_files"), active);
