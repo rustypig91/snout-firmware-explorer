@@ -341,8 +341,45 @@ impl Explorer {
                 }
             }
         }
-        self.visible_rows = items.len();
         let total: u64 = items.iter().map(|s| s.size).sum();
+        if self.diffs_active() {
+            // Keep the navigation path to changed symbols even when section
+            // and unit totals are unchanged. Include baseline-only symbols
+            // from the display analysis, whose section indexes are remapped.
+            let mut changed_sections = std::collections::HashSet::new();
+            let mut changed_units = std::collections::HashSet::new();
+            for symbol in &a.symbols {
+                if self.diff_visible("symbol", &super::snapshots::symbol_key(symbol)) {
+                    changed_sections.insert(symbol.section_index);
+                    if Some(symbol.section_index) == self.overview_section {
+                        changed_units.insert(unit_key(symbol));
+                    }
+                }
+            }
+            items.retain(|item| match &item.identity {
+                SliceIdentity::Section(name) => {
+                    self.diff_visible("section", name)
+                        || matches!(item.target, Some(Target::Section(index)) if changed_sections.contains(&index))
+                }
+                SliceIdentity::Symbol(id) => self.diff_visible("symbol", id),
+                SliceIdentity::Unit(unit) => {
+                    changed_units.contains(unit) || ambiguous_section
+                        || baseline_sizes.as_ref().is_some_and(|sizes| {
+                            sizes.get(&item.identity).copied() != Some(Ok(item.size))
+                        })
+                }
+                SliceIdentity::Padding => {
+                    ambiguous_section
+                        || baseline_sizes.as_ref().is_some_and(|sizes| {
+                            sizes.get(&item.identity).copied() != Some(Ok(item.size))
+                        })
+                }
+            });
+        }
+        self.visible_rows = items.len();
+        if items.is_empty() && self.diffs_active() {
+            ui.weak("No differences in this breakdown.");
+        }
         ui.label(format!(
             "{}: {}",
             self.overview_metric.label(),
@@ -358,9 +395,6 @@ impl Explorer {
         ui.weak("Select a row to explore")
             .on_hover_text("Aliases share unique bytes; zero-sized labels remain listed.");
         let mut selected = None;
-        let baseline_total: u64 = baseline_items
-            .as_ref()
-            .map_or(0, |items| items.iter().map(|s| s.size).sum());
         for item in &items {
             let fraction = if total == 0 {
                 0.0
@@ -393,21 +427,7 @@ impl Explorer {
             } else {
                 self.snapshot_difference(item.size, old_size.and_then(Result::ok))
             };
-            let label = format!(
-                "{} - {} ({})",
-                item.name,
-                size_label,
-                self.snapshot_percentage(
-                    fraction as f64 * 100.0,
-                    old_size.and_then(Result::ok).map(|size| {
-                        if baseline_total == 0 {
-                            0.0
-                        } else {
-                            size as f64 * 100.0 / baseline_total as f64
-                        }
-                    })
-                )
-            );
+            let label = format!("{} - {} ({:.1}%)", item.name, size_label, fraction * 100.0);
             if ui
                 .add(
                     egui::Button::new(label)

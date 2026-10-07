@@ -35,7 +35,7 @@ struct RowKey {
     region: Option<usize>,
     kind: String,
     unresolved: bool,
-    comparison_group: usize,
+    show_address_changes: bool,
     build_root: Option<std::path::PathBuf>,
 }
 
@@ -45,6 +45,54 @@ type CachedRows = RefCell<Option<(RowKey, Rc<Vec<Row>>)>>;
 pub(super) struct TableCache {
     rows: [CachedRows; View::ALL.len()],
     prepared: [Option<Rc<PreparedTable>>; View::ALL.len()],
+    sizing: [Option<ColumnSizing>; View::ALL.len()],
+}
+
+struct ColumnSizing {
+    source: Rc<Vec<Row>>,
+    headers: Vec<String>,
+    fonts: [egui::FontId; 3],
+    padding: egui::Vec2,
+    pixels_per_point: f32,
+    desired: Vec<f32>,
+    applied_width: Option<f32>,
+}
+
+// Grow all columns fairly until their content fits or the viewport is full.
+// Keep usable minimum widths when horizontal scrolling is necessary.
+fn fit_columns(desired: &[f32], available: f32) -> Vec<f32> {
+    let mut widths: Vec<_> = (0..desired.len())
+        .map(|i| {
+            if i == 0 {
+                120.0
+            } else if i == desired.len() - 1 {
+                100.0
+            } else {
+                65.0
+            }
+        })
+        .collect();
+    let mut remaining = (available - widths.iter().sum::<f32>()).max(0.0);
+    loop {
+        let growing: Vec<_> = (0..widths.len())
+            .filter(|&i| desired[i] - widths[i] > 0.5)
+            .collect();
+        if growing.is_empty() || remaining <= 0.5 {
+            break;
+        }
+        let share = remaining / growing.len() as f32;
+        let mut used = 0.0;
+        for i in growing {
+            let extra = (desired[i] - widths[i]).min(share);
+            widths[i] += extra;
+            used += extra;
+        }
+        remaining -= used;
+    }
+    if let Some(last) = widths.last_mut() {
+        *last += remaining;
+    }
+    widths
 }
 
 struct PreparedTable {
@@ -141,7 +189,7 @@ impl Explorer {
             region: self.selected_region,
             kind: self.kind_filter.clone(),
             unresolved: self.stack_show_unresolved,
-            comparison_group: self.comparison_group,
+            show_address_changes: self.show_address_changes[self.view as usize],
             build_root: self.build.as_ref().map(|b| b.root.clone()),
         };
         let mut cache = self.table_cache.rows[self.view as usize].borrow_mut();
@@ -213,6 +261,99 @@ impl Explorer {
         prepared
     }
 
+    fn column_widths(
+        &mut self,
+        ui: &egui::Ui,
+        headers: &[(&str, &str)],
+        source: Rc<Vec<Row>>,
+        available: f32,
+    ) -> (Vec<f32>, bool) {
+        let fonts = [
+            egui::TextStyle::Body.resolve(ui.style()),
+            egui::TextStyle::Monospace.resolve(ui.style()),
+            egui::TextStyle::Button.resolve(ui.style()),
+        ];
+        let padding = ui.spacing().button_padding;
+        let pixels_per_point = ui.ctx().pixels_per_point();
+        let slot = &mut self.table_cache.sizing[self.view as usize];
+        let valid = slot.as_ref().is_some_and(|s| {
+            Rc::ptr_eq(&s.source, &source)
+                && s.fonts == fonts
+                && s.padding == padding
+                && s.pixels_per_point == pixels_per_point
+                && s.headers.len() == headers.len()
+                && s.headers.iter().zip(headers).all(|(a, (b, _))| a == b)
+        });
+        if !valid {
+            let desired = ui.fonts(|f| {
+                let mono_advance =
+                    (f.glyph_width(&fonts[1], 'M') * pixels_per_point).round() / pixels_per_point;
+                headers
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (title, _))| {
+                        // Reserve the sort arrow on every header so sorting is stable.
+                        let header = f
+                            .layout_no_wrap((*title).into(), fonts[2].clone(), egui::Color32::WHITE)
+                            .size()
+                            .x
+                            + padding.x * 2.0
+                            + 16.0;
+                        let mut maximum = header;
+                        let mut measured = std::collections::HashSet::new();
+                        for row in source.iter() {
+                            let Some(cell) = row.cells.get(i) else {
+                                continue;
+                            };
+                            let mono = row.values[i].is_some()
+                                || i == 0
+                                || (self.view == View::Stack && i == 3);
+                            if measured.insert((mono, cell.as_str())) {
+                                // ASCII monospace cells dominate large symbol tables.
+                                // Measure their glyph advances without laying out thousands
+                                // of invisible rows. Other text uses the renderer's layout.
+                                let width =
+                                    if mono && cell.is_ascii() && !cell.contains(['\t', '\r']) {
+                                        cell.split('\n')
+                                            .map(|line| line.len() as f32 * mono_advance)
+                                            .fold(0.0_f32, f32::max)
+                                    } else {
+                                        let font = &fonts[usize::from(mono)];
+                                        f.layout_no_wrap(
+                                            cell.clone(),
+                                            font.clone(),
+                                            egui::Color32::WHITE,
+                                        )
+                                        .size()
+                                        .x
+                                    };
+                                maximum = maximum.max(width + 8.0);
+                            }
+                        }
+                        maximum.ceil()
+                    })
+                    .collect()
+            });
+            *slot = Some(ColumnSizing {
+                source,
+                headers: headers.iter().map(|(title, _)| (*title).into()).collect(),
+                fonts,
+                padding,
+                pixels_per_point,
+                desired,
+                applied_width: None,
+            });
+        }
+        let sizing = slot.as_mut().unwrap();
+        let reset = sizing
+            .applied_width
+            .is_none_or(|old| (old - available).abs() > 0.5);
+        if reset {
+            sizing.applied_width = Some(available);
+        }
+        (fit_columns(&sizing.desired, available), reset)
+    }
+
     fn table(
         &mut self,
         ui: &mut egui::Ui,
@@ -225,7 +366,9 @@ impl Explorer {
         let bar_maxima = &prepared.bar_maxima;
         self.visible_rows = rows.len();
         if rows.is_empty() {
-            ui.weak(if self.search.is_empty() {
+            ui.weak(if self.diffs_active() && self.search.is_empty() {
+                "No differences for the current selection."
+            } else if self.search.is_empty() {
                 "No entries for the current selection."
             } else {
                 "No entries match the filter. Clear it to see available entries."
@@ -267,12 +410,24 @@ impl Explorer {
         }
         let mut clicked = None;
         let height = ui.available_height();
+        let viewport_width = ui.available_width();
+        let spacing = (headers.len() - 1) as f32 * ui.spacing().item_spacing.x;
+        let scrollbar = ui.spacing().scroll.allocated_width();
+        let (column_widths, reset_widths) = self.column_widths(
+            ui,
+            headers,
+            prepared.source.clone(),
+            viewport_width - spacing - scrollbar,
+        );
+        let minimum_width = fit_columns(&vec![0.0; headers.len()], 0.0)
+            .iter()
+            .sum::<f32>()
+            + spacing
+            + scrollbar;
         egui::ScrollArea::horizontal()
             .id_salt("table_horizontal")
             .show(ui, |ui| {
-                ui.set_min_width(
-                    (250.0 + (headers.len() - 2) as f32 * 96.0 + 100.0).max(ui.available_width()),
-                );
+                ui.set_min_width(minimum_width.max(viewport_width));
                 ui.set_min_height(height);
                 let table_clip = ui.clip_rect();
                 let mut expanded_detail = None;
@@ -284,14 +439,18 @@ impl Explorer {
                 if let Some(index) = scroll_to {
                     table = table.scroll_to_row(index, None);
                 }
-                for (index, _) in headers.iter().enumerate() {
-                    table = table.column(if index == headers.len() - 1 {
-                        Column::remainder().at_least(100.0).clip(true)
-                    } else if index == 0 {
-                        Column::initial(250.0).at_least(120.0).clip(true)
+                if reset_widths {
+                    table.reset();
+                }
+                for (index, &width) in column_widths.iter().enumerate() {
+                    let minimum = if index == 0 {
+                        120.0
+                    } else if index == headers.len() - 1 {
+                        100.0
                     } else {
-                        Column::initial(96.0).at_least(65.0).clip(true)
-                    });
+                        65.0
+                    };
+                    table = table.column(Column::initial(width).at_least(minimum).clip(true));
                 }
                 table
                     .header(26.0, |mut header| {
@@ -518,6 +677,7 @@ impl Explorer {
         let rows = self.cached_rows(a as *const Analysis as usize, || {
             a.files
                 .iter()
+                .filter(|f| self.diff_visible("file", &f.path))
                 .map(|f| {
                     let mut row = Row::new(
                         vec![
@@ -585,6 +745,7 @@ impl Explorer {
             a.symbols
                 .iter()
                 .enumerate()
+                .filter(|(_, s)| self.diff_visible("symbol", &symbol_key(s)))
                 .filter(|(_, s)| self.kind_filter == "All" || s.kind == self.kind_filter)
                 .filter(|(_, s)| {
                     self.selected_file.as_ref().is_none_or(|file| {
@@ -625,6 +786,7 @@ impl Explorer {
                         ],
                         String::new(),
                     )
+                    .with_search(&s.name)
                     .with_source_paths(paths.clone())
                     .with_lazy_tip({
                         let source = source.clone();
@@ -686,7 +848,7 @@ impl Explorer {
     pub(super) fn sections(&mut self, ui: &mut egui::Ui, a: &Analysis) {
         let display = self.baseline_display_analysis();
         let a = display.as_deref().unwrap_or(a);
-        let rows = self.cached_rows(a as *const Analysis as usize, || { a.sections.iter().map(|s| Row::new(vec![s.name.clone(), self.snapshot_bytes("section", &s.name, "size", s.size), self.snapshot_bytes("section", &s.name, "usage.flash", s.usage.flash), self.snapshot_bytes("section", &s.name, "usage.ram", s.usage.ram), self.snapshot_address("section", &s.name, "address", s.address), s.load_address.map(|v| self.snapshot_address("section", &s.name, "load_address", v)).unwrap_or_else(|| load_address(None, s.load_size)), classification(s.classification).into()], &[(1,s.size.into()),(2,s.usage.flash.into()),(3,s.usage.ram.into()),(4,s.address.into()),(5,s.load_address.unwrap_or(0).into())],
+        let rows = self.cached_rows(a as *const Analysis as usize, || { a.sections.iter().filter(|s| self.diff_visible("section", &s.name)).map(|s| Row::new(vec![s.name.clone(), self.snapshot_bytes("section", &s.name, "size", s.size), self.snapshot_bytes("section", &s.name, "usage.flash", s.usage.flash), self.snapshot_bytes("section", &s.name, "usage.ram", s.usage.ram), self.snapshot_address("section", &s.name, "address", s.address), s.load_address.map(|v| self.snapshot_address("section", &s.name, "load_address", v)).unwrap_or_else(|| load_address(None, s.load_size)), classification(s.classification).into()], &[(1,s.size.into()),(2,s.usage.flash.into()),(3,s.usage.ram.into()),(4,s.address.into()),(5,s.load_address.unwrap_or(0).into())],
             format!("Load size: {} / runtime size: {}\nAlignment: {} / flags: {:#x}\nAllocated: {} / writable: {} / executable: {}\n{}", self.snapshot_bytes("section", &s.name, "load_size", s.load_size),self.snapshot_bytes("section", &s.name, "runtime_size", s.runtime_size),self.snapshot_bytes("section", &s.name, "alignment", s.alignment),s.flags,s.allocated,s.writable,s.executable,s.evidence)).with_bars(&[1, 2, 3])).collect() });
         self.table(
             ui,
@@ -754,6 +916,9 @@ impl Explorer {
                 .max_height(180.0)
                 .show(ui, |ui| {
                     for (index, region) in a.options.regions.iter().enumerate() {
+                        if !self.diff_visible("region", &region.name) {
+                            continue;
+                        }
                         let usage = &self.region_cache[index];
                         let label = format!(
                             "{} ({:?})  {}–{}  |  {} used / {} free / {} total  ({})",
@@ -793,6 +958,9 @@ impl Explorer {
                     usage
                         .symbols
                         .iter()
+                        .filter(|entry| {
+                            self.diff_visible("symbol", &symbol_key(&a.symbols[entry.symbol_index]))
+                        })
                         .map(|entry| {
                             let s = &a.symbols[entry.symbol_index];
                             Row::new(
@@ -870,6 +1038,12 @@ impl Explorer {
         let rows = self.cached_rows(a as *const Analysis as usize, || {
             a.memory_map
                 .iter()
+                .filter(|r| {
+                    self.diff_visible(
+                        "range",
+                        &serde_json::to_string(&(&r.name, &r.space)).unwrap(),
+                    )
+                })
                 .map(|r| {
                     Row::new(
                         vec![
@@ -1007,6 +1181,7 @@ impl Explorer {
             report
                 .entries
                 .iter()
+                .filter(|e| self.diff_visible("stack", &stack_key(e)))
                 .filter(|e| {
                     self.snapshot_removed("stack", &stack_key(e))
                         || no_matches
@@ -1061,118 +1236,6 @@ impl Explorer {
                 .collect()
         });
         self.table(ui, &[("Function","Compiler function label"),("Local frame","Compiler reported bytes, not a call-chain estimate. Gray bars compare each frame with the largest visible frame (100%)."),("Qualifier","static: fixed frame; dynamic,bounded: compiler bound; dynamic: total may be unbounded"),("Source","Location reported by the compiler")], rows);
-    }
-    pub(super) fn compare_view(&mut self, ui: &mut egui::Ui) {
-        let Some(c) = &self.comparison else {
-            self.visible_rows = 0;
-            ui.weak("Select a snapshot baseline to compare against the current firmware.");
-            if ui.button("Select baseline...").clicked() {
-                self.open_snapshot_manager();
-            }
-            return;
-        };
-        ui.horizontal_wrapped(|ui| {
-            if let Some(name) = self.snapshot_label() {
-                ui.label(format!("Baseline: {name}"));
-                ui.separator();
-            }
-            ui.label(format!("Flash {:+} B", c.flash_delta))
-                .on_hover_text(format!("{} to {}", bytes(c.old.flash), bytes(c.new.flash)));
-            ui.separator();
-            ui.label(format!("RAM {:+} B", c.ram_delta))
-                .on_hover_text(format!("{} to {}", bytes(c.old.ram), bytes(c.new.ram)));
-            ui.separator();
-            ui.weak("Current minus baseline").on_hover_text(format!(
-                "Baseline: {}\nCurrent: {}",
-                display_path(&c.old_path),
-                display_path(&c.new_path)
-            ));
-        });
-        let display = self.baseline_display_analysis();
-        let paths = display
-            .as_deref()
-            .or(self.analysis.as_deref())
-            .map(|a| self.source_paths(a));
-        let changes = match self.comparison_group {
-            1 => &c.symbols,
-            2 => &c.sections,
-            _ => &c.files,
-        };
-        let rows = self.cached_rows(c as *const _ as usize, || {
-            changes
-                .iter()
-                .map(|c| {
-                    Row::new(
-                        vec![
-                            if self.comparison_group == 0 {
-                                paths.as_ref().map_or_else(
-                                    || {
-                                        super::display::short_path(
-                                            &c.identity,
-                                            changes.iter().map(|c| c.identity.as_str()),
-                                        )
-                                    },
-                                    |p| p.short(&c.identity),
-                                )
-                            } else if self.comparison_group == 1 {
-                                c.identity.split_once(" | ").map_or_else(
-                                    || c.identity.clone(),
-                                    |(owner, rest)| {
-                                        format!(
-                                            "{} | {rest}",
-                                            paths.as_ref().map_or_else(
-                                                || super::display::short_path(owner, []),
-                                                |p| p.short(owner)
-                                            )
-                                        )
-                                    },
-                                )
-                            } else {
-                                c.identity.clone()
-                            },
-                            format!("{:+} B", c.flash_delta),
-                            format!("{:+} B", c.ram_delta),
-                            c.status.clone(),
-                        ],
-                        &[(1, c.flash_delta), (2, c.ram_delta)],
-                        format!(
-                            "Flash: {} to {}\nRAM: {} to {}",
-                            bytes(c.old.flash),
-                            bytes(c.new.flash),
-                            bytes(c.old.ram),
-                            bytes(c.new.ram)
-                        ),
-                    )
-                    .with_search(&c.identity)
-                    .with_path(
-                        0,
-                        if self.comparison_group == 0 {
-                            paths
-                                .as_ref()
-                                .map_or_else(|| c.identity.clone(), |p| p.full(&c.identity))
-                        } else {
-                            c.identity.clone()
-                        },
-                    )
-                })
-                .collect()
-        });
-        if ui.button("Change baseline...").clicked() {
-            self.open_snapshot_manager();
-        }
-        self.table(
-            ui,
-            &[
-                (
-                    "Identity",
-                    "File or symbol identity; select to inspect the change",
-                ),
-                ("Flash delta", "Positive values mean growth"),
-                ("RAM delta", "Positive values mean growth"),
-                ("Status", "Added, removed or changed"),
-            ],
-            rows,
-        );
     }
 }
 /// Keep the end of a file path visible as its column is resized.
@@ -1305,6 +1368,9 @@ fn tree(
     } else {
         format!("{parent}/{}", node.name)
     };
+    if !app.diff_visible("tree", &path) {
+        return;
+    }
     let label = format!(
         "{}  {} / {}",
         display_path(&node.name),
@@ -1355,6 +1421,157 @@ fn tree(
 #[cfg(test)]
 mod cache_tests {
     use super::*;
+
+    #[test]
+    fn growth_link_search_finds_mangled_symbols_without_formatting_details() {
+        let mut analysis = firmware_analysis_core::analyze_bytes(
+            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            "fixture.elf",
+            &Default::default(),
+        )
+        .unwrap();
+        let mut symbol = analysis.symbols[0].clone();
+        symbol.name = "_ZN6driver4pollEv".into();
+        symbol.demangled_name = "driver::poll()".into();
+        analysis.symbols = vec![symbol];
+        let analysis = std::sync::Arc::new(analysis);
+        let mut app = Explorer {
+            analysis: Some(analysis.clone()),
+            view: View::Symbols,
+            search: "_ZN6driver4pollEv".into(),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| app.symbols(ui, &analysis));
+        });
+        assert_eq!(app.visible_rows, 1);
+        let cache = app.table_cache.rows[View::Symbols as usize].borrow();
+        let rows = &cache.as_ref().unwrap().1;
+        assert!(rows[0].tip.get().is_none(), "Search must keep details lazy");
+    }
+
+    #[test]
+    fn fitting_uses_spare_width_without_forcing_wide_content_to_scroll() {
+        let desired = [420.0, 210.0, 160.0, 280.0];
+        let wide = fit_columns(&desired, 1400.0);
+        assert!(wide
+            .iter()
+            .zip(desired)
+            .all(|(actual, needed)| *actual >= needed));
+        assert!((wide.iter().sum::<f32>() - 1400.0).abs() < 0.01);
+        let balanced = [130.0, 70.0, 80.0, 450.0];
+        let fitted = fit_columns(&balanced, 800.0);
+        assert!(fitted
+            .iter()
+            .zip(balanced)
+            .all(|(actual, needed)| *actual >= needed));
+        let compact = fit_columns(&desired, 700.0);
+        assert!((compact.iter().sum::<f32>() - 700.0).abs() < 0.01);
+        assert!(compact
+            .iter()
+            .zip(desired)
+            .any(|(actual, needed)| *actual < needed));
+        assert_eq!(fit_columns(&desired, 300.0), [120.0, 65.0, 65.0, 100.0]);
+    }
+
+    #[test]
+    fn wide_tables_show_full_names_and_snapshot_deltas_without_resizing() {
+        let cells: Vec<String> = [
+            "namespace::module::a_reasonably_long_function_name()",
+            "128.00 KiB (+64.00 KiB; removed)",
+            "64.00 KiB (+32.00 KiB)",
+            "src/drivers/a_long_source_file_name.c",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        let source = Rc::new(vec![Row::new(
+            cells.clone(),
+            &[(1, 131072), (2, 65536)],
+            String::new(),
+        )]);
+        let mut app = Explorer {
+            view: View::Symbols,
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1800.0, 500.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    app.table(
+                        ui,
+                        &[("Symbol", ""), ("Flash", ""), ("RAM", ""), ("Source", "")],
+                        source.clone(),
+                    );
+                });
+            },
+        );
+        for cell in &cells {
+            let text = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == cell => Some(text),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("Missing cell {cell}"));
+            assert!(!text.galley.elided, "Autofit clipped {cell}");
+        }
+    }
+
+    #[test]
+    fn sizing_measures_offscreen_rows_and_keeps_widths_during_search_and_sort() {
+        let mut source_rows = (0..200)
+            .map(|_| Row::new(vec!["short".into(), "1 B".into()], &[(1, 1)], String::new()))
+            .collect::<Vec<_>>();
+        source_rows.push(Row::new(
+            vec![
+                "a_very_long_name_that_only_appears_below_the_visible_rows".into(),
+                "1.00 MiB (+512.00 KiB)".into(),
+            ],
+            &[(1, 1048576)],
+            String::new(),
+        ));
+        let source = Rc::new(source_rows);
+        let mut app = Explorer::default();
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let headers = [("Name", ""), ("Size", "")];
+                let (first, reset) = app.column_widths(ui, &headers, source.clone(), 1200.0);
+                assert!(reset);
+                assert!(first[0] > 250.0);
+                let measurements = app.table_cache.sizing[app.view as usize]
+                    .as_ref()
+                    .unwrap()
+                    .desired
+                    .as_ptr();
+                app.search = "short".into();
+                app.descending = !app.descending;
+                let (same, reset) = app.column_widths(ui, &headers, source.clone(), 1200.0);
+                assert!(!reset, "Preserve manual adjustments between sizing changes");
+                assert_eq!(first, same);
+                assert_eq!(
+                    measurements,
+                    app.table_cache.sizing[app.view as usize]
+                        .as_ref()
+                        .unwrap()
+                        .desired
+                        .as_ptr()
+                );
+                let (_, reset) = app.column_widths(ui, &headers, source.clone(), 1500.0);
+                assert!(reset, "Refit when the window gains space");
+            });
+        });
+    }
 
     #[test]
     fn switching_tabs_retains_rows_and_prepared_order() {
@@ -1422,7 +1639,7 @@ mod cache_tests {
     }
 
     #[test]
-    fn file_and_comparison_search_keep_recorded_paths_after_resolution() {
+    fn file_search_keeps_recorded_paths_after_resolution() {
         let mut a = firmware_analysis_core::analyze_bytes(
             include_bytes!("../../../fixtures/build/cortex-m.elf"),
             "fixture.elf",
@@ -1450,27 +1667,22 @@ mod cache_tests {
             ..Default::default()
         };
         let ctx = egui::Context::default();
-        for view in [View::Files, View::Compare] {
-            app.change_view(view);
-            let _ = ctx.run(Default::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| match view {
-                    View::Files => app.files(ui, &a),
-                    _ => app.compare_view(ui),
-                });
-            });
-            let rows = app.table_cache.rows[view as usize]
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .1
-                .clone();
-            assert_eq!(rows[0].cells[0], "src/main.c");
-            assert_eq!(rows[0].cell_tips[&0], "/project/src/main.c");
-            // Growth-summary navigation searches by the recorded identity.
-            for query in [recorded, "/project/src/main.c"] {
-                app.search = query.into();
-                assert_eq!(app.prepare_table(rows.clone(), 4).indices, [0]);
-            }
+        app.change_view(View::Files);
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| app.files(ui, &a));
+        });
+        let rows = app.table_cache.rows[View::Files as usize]
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .1
+            .clone();
+        assert_eq!(rows[0].cells[0], "src/main.c");
+        assert_eq!(rows[0].cell_tips[&0], "/project/src/main.c");
+        // Growth-summary navigation searches by the recorded identity.
+        for query in [recorded, "/project/src/main.c"] {
+            app.search = query.into();
+            assert_eq!(app.prepare_table(rows.clone(), 5).indices, [0]);
         }
     }
 
@@ -1543,13 +1755,12 @@ mod cache_tests {
     fn modes_selections_sources_and_report_revision_invalidate_rows() {
         let mut app = Explorer::default();
         let mut previous = app.cached_rows(1, rows);
-        let changes: [fn(&mut Explorer); 8] = [
+        let changes: [fn(&mut Explorer); 7] = [
             |a| a.view = View::Symbols,
             |a| a.kind_filter = "Function".into(),
             |a| a.selected_file = Some("src/main.c".into()),
             |a| a.selected_region = Some(1),
             |a| a.stack_show_unresolved = true,
-            |a| a.comparison_group = 1,
             |a| a.report_revision += 1,
             |a| a.view = View::Sections,
         ];

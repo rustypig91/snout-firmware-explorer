@@ -37,7 +37,7 @@ pub(super) struct GraphView {
     layout_revision: u64,
     requested_layout: Option<LayoutInput>,
     layout_job: Option<std::sync::mpsc::Receiver<(u64, CachedLayout)>>,
-    filter: Option<(String, Option<String>)>,
+    filter: Option<(String, Option<String>, bool)>,
 }
 impl Default for GraphView {
     fn default() -> Self {
@@ -277,7 +277,10 @@ impl Explorer {
             for note in &graph.notes { ui.label(note); }
             ui.label("Sizes include uniquely attributed ELF symbol bytes only. Padding, unowned symbols and units removed by optimization are not assigned to source units. Object-only nodes have unknown size.");
         });
-        let nodes = visible_nodes(graph, &self.graph_view, &self.search, &paths);
+        let nodes: Vec<_> = visible_nodes(graph, &self.graph_view, &self.search, &paths)
+            .into_iter()
+            .filter(|node| self.diff_visible("dependency", &node.id))
+            .collect();
         let filter = (
             self.search.clone(),
             if self.graph_view.focused {
@@ -285,6 +288,7 @@ impl Explorer {
             } else {
                 None
             },
+            self.diffs_active(),
         );
         let filter_changed = self.graph_view.filter.as_ref() != Some(&filter);
         self.graph_view.filter = Some(filter);

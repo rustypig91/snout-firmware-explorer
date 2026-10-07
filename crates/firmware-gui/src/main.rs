@@ -46,10 +46,9 @@ enum View {
     MemoryMap,
     Dependencies,
     Stack,
-    Compare,
 }
 impl View {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 7] = [
         Self::Overview,
         Self::Files,
         Self::Symbols,
@@ -57,7 +56,6 @@ impl View {
         Self::MemoryMap,
         Self::Dependencies,
         Self::Stack,
-        Self::Compare,
     ];
     fn label(self) -> &'static str {
         match self {
@@ -68,7 +66,6 @@ impl View {
             Self::MemoryMap => "Memory map",
             Self::Dependencies => "Dependencies",
             Self::Stack => "Stack",
-            Self::Compare => "Compare",
         }
     }
     fn tooltip(self) -> &'static str {
@@ -80,7 +77,6 @@ impl View {
             Self::MemoryMap => "Memory regions, used and free space, and the symbols within them.",
             Self::Dependencies => "Connections between compilation units and objects based on linker symbol references.",
             Self::Stack => "Local function stack frames from compiler reports; total call-chain usage is unknown.",
-            Self::Compare => "Changes in section, file, and symbol memory usage against a saved snapshot.",
         }
     }
 }
@@ -178,6 +174,7 @@ struct Explorer {
     snapshot_dialog_error: Option<String>,
     snapshot_message: Option<String>,
     snapshot_job: Option<snapshots::SaveJob>,
+    snapshot_select_after_save: bool,
     browser_cache: Option<artifact_browser::BrowserCache>,
     report_revision: u64,
     table_cache: views::TableCache,
@@ -192,12 +189,13 @@ struct Explorer {
     layout_override: Option<AnalysisOptions>,
     comparison: Option<Comparison>,
     baseline_display: Option<baseline_display::BaselineDisplay>,
+    show_address_changes: [bool; 7],
     stack: Option<StackReport>,
     stack_show_unresolved: bool,
     options: AnalysisOptions,
     receiver: Option<mpsc::Receiver<JobResult>>,
     view: View,
-    tab_options: [TabOptions; 8],
+    tab_options: [TabOptions; 7],
     search: String,
     selected_file: Option<String>,
     selected_region: Option<usize>,
@@ -213,7 +211,6 @@ struct Explorer {
     show_about: bool,
     visible_rows: usize,
     kind_filter: String,
-    comparison_group: usize,
     overview_metric: overview::Metric,
     contributor_ram: bool,
     region_cache: Vec<firmware_analysis_core::regions::RegionUsage>,
@@ -236,6 +233,7 @@ impl Default for Explorer {
             snapshot_dialog_error: None,
             snapshot_message: None,
             snapshot_job: None,
+            snapshot_select_after_save: false,
             browser_cache: None,
             report_revision: 0,
             table_cache: Default::default(),
@@ -250,6 +248,7 @@ impl Default for Explorer {
             layout_override: None,
             comparison: None,
             baseline_display: None,
+            show_address_changes: [false; 7],
             stack: None,
             stack_show_unresolved: false,
             options: AnalysisOptions::default(),
@@ -271,7 +270,6 @@ impl Default for Explorer {
             show_about: false,
             visible_rows: 0,
             kind_filter: "All".into(),
-            comparison_group: 0,
             overview_metric: overview::Metric::Flash,
             contributor_ram: false,
             region_cache: Vec::new(),
