@@ -784,6 +784,7 @@ impl Explorer {
                         ],
                         String::new(),
                     )
+                    .with_search(&s.name)
                     .with_source_paths(paths.clone())
                     .with_lazy_tip({
                         let source = source.clone();
@@ -1418,6 +1419,35 @@ fn tree(
 #[cfg(test)]
 mod cache_tests {
     use super::*;
+
+    #[test]
+    fn growth_link_search_finds_mangled_symbols_without_formatting_details() {
+        let mut analysis = firmware_analysis_core::analyze_bytes(
+            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            "fixture.elf",
+            &Default::default(),
+        )
+        .unwrap();
+        let mut symbol = analysis.symbols[0].clone();
+        symbol.name = "_ZN6driver4pollEv".into();
+        symbol.demangled_name = "driver::poll()".into();
+        analysis.symbols = vec![symbol];
+        let analysis = std::sync::Arc::new(analysis);
+        let mut app = Explorer {
+            analysis: Some(analysis.clone()),
+            view: View::Symbols,
+            search: "_ZN6driver4pollEv".into(),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| app.symbols(ui, &analysis));
+        });
+        assert_eq!(app.visible_rows, 1);
+        let cache = app.table_cache.rows[View::Symbols as usize].borrow();
+        let rows = &cache.as_ref().unwrap().1;
+        assert!(rows[0].tip.get().is_none(), "Search must keep details lazy");
+    }
 
     #[test]
     fn fitting_uses_spare_width_without_forcing_wide_content_to_scroll() {
