@@ -102,15 +102,18 @@ impl SourcePaths {
             .iter()
             .map(|path| path.replace('\\', "/"))
             .collect();
-        for file in &a.files {
-            if normalized_known.contains(&file.path.replace('\\', "/")) {
-                full.insert(file.path.clone(), absolute_path(&file.path, root));
+        // Dependencies and comparisons also use slash-normalized aliases of
+        // DWARF paths. Resolve every recorded alias with the same evidence.
+        for path in &paths {
+            if normalized_known.contains(&path.replace('\\', "/")) {
+                full.insert((*path).to_owned(), absolute_path(path, root));
             }
         }
         if let Some(stack) = stack {
-            let mut suffixes = std::collections::HashMap::<String, Option<&str>>::new();
+            let mut suffixes = std::collections::HashMap::<String, Option<String>>::new();
             for source in &sources {
                 let normalized = source.replace('\\', "/");
+                let canonical = &full[*source];
                 for suffix in std::iter::once(normalized.as_str()).chain(
                     normalized
                         .match_indices('/')
@@ -119,11 +122,11 @@ impl SourcePaths {
                     suffixes
                         .entry(suffix.into())
                         .and_modify(|existing| {
-                            if *existing != Some(*source) {
+                            if existing.as_ref() != Some(canonical) {
                                 *existing = None;
                             }
                         })
-                        .or_insert(Some(*source));
+                        .or_insert_with(|| Some(canonical.clone()));
                 }
             }
             for entry in &stack.entries {
@@ -131,8 +134,7 @@ impl SourcePaths {
                 let suffix = entry.source_file.replace('\\', "/");
                 let source = suffixes
                     .get(&suffix)
-                    .copied()
-                    .flatten()
+                    .and_then(|source| source.as_deref())
                     .unwrap_or(&entry.source_file);
                 full.insert(entry.source_file.clone(), absolute_path(source, root));
             }
@@ -412,6 +414,84 @@ mod tests {
             "[unattributed]"
         );
         assert_eq!(absolute_path("src/main.c", None), "src/main.c");
+    }
+
+    #[test]
+    fn normalized_dependency_units_share_dwarf_labels_and_tooltips() {
+        let mut a = firmware_analysis_core::analyze_bytes(
+            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            "fixture.elf",
+            &Default::default(),
+        )
+        .unwrap();
+        let mut symbol = a.symbols[0].clone();
+        symbol.source_file = Some("include/header.h".into());
+        symbol.dwarf_compilation_unit = Some(r"src\unit.c".into());
+        symbol.compilation_unit = None;
+        a.symbols = vec![symbol];
+        a.files.clear();
+        a.dependencies.nodes = vec![firmware_analysis_core::dependencies::DependencyNode {
+            id: "dwarf:src/unit.c".into(),
+            label: "src/unit.c".into(),
+            evidence: "DWARF compilation unit".into(),
+            usage: None,
+            objects: vec![],
+        }];
+        let paths = super::SourcePaths::new(&a, None, Some(std::path::Path::new("/build")));
+        assert_eq!(paths.full("src/unit.c"), "/build/src/unit.c");
+        assert_eq!(paths.short(r"src\unit.c"), "src/unit.c");
+        assert_eq!(paths.short("src/unit.c"), "src/unit.c");
+    }
+
+    #[test]
+    fn equivalent_dwarf_source_spellings_do_not_make_stack_aliases_ambiguous() {
+        let mut a = firmware_analysis_core::analyze_bytes(
+            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            "fixture.elf",
+            &Default::default(),
+        )
+        .unwrap();
+        let mut symbol = a.symbols[0].clone();
+        symbol.source_file = Some("/project/src/main.c".into());
+        symbol.dwarf_compilation_unit = None;
+        symbol.compilation_unit = None;
+        let mut alias = symbol.clone();
+        alias.source_file = Some(r"\project\src\main.c".into());
+        let mut relative = symbol.clone();
+        relative.source_file = Some("../src/main.c".into());
+        a.symbols = vec![symbol, alias, relative];
+        a.files.clear();
+        a.dependencies.nodes.clear();
+        let (entries, _) = firmware_analysis_core::stack::parse_stack_usage(
+            "src/main.c:12:1:probe\t8\tstatic\n",
+            "probe.su",
+        );
+        let stack = firmware_analysis_core::stack::StackReport {
+            schema_version: 1,
+            entries,
+            warnings: vec![],
+            call_graph: Default::default(),
+        };
+        let paths = super::SourcePaths::new(
+            &a,
+            Some(&stack),
+            Some(std::path::Path::new("/project/build")),
+        );
+        assert_eq!(paths.full("src/main.c"), "/project/src/main.c");
+        assert_eq!(
+            paths.short("src/main.c"),
+            paths.short("/project/src/main.c")
+        );
+
+        // Distinct sources with the same suffix still require the build-folder
+        // fallback rather than choosing one of the DWARF locations.
+        a.symbols[2].source_file = Some("/other/src/main.c".into());
+        let paths = super::SourcePaths::new(
+            &a,
+            Some(&stack),
+            Some(std::path::Path::new("/project/build")),
+        );
+        assert_eq!(paths.full("src/main.c"), "/project/build/src/main.c");
     }
 
     #[test]
