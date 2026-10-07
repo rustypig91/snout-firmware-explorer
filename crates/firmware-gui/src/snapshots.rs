@@ -446,6 +446,34 @@ impl Explorer {
             .find(|s| s.firmware == firmware && &s.name == name)
     }
     pub(super) fn sync_snapshot_comparison(&mut self) {
+        // Baseline-only sections and regions have temporary display indexes.
+        // A different baseline can reuse them for unrelated entries.
+        if self.overview_section.is_some_and(|index| {
+            self.analysis
+                .as_ref()
+                .is_none_or(|a| !a.sections.iter().any(|s| s.index == index))
+        }) {
+            self.overview_section = None;
+            self.overview_unit = None;
+        }
+        let region_count = self
+            .analysis
+            .as_ref()
+            .map_or(0, |a| a.options.regions.len());
+        if self
+            .selected_region
+            .is_some_and(|index| index >= region_count)
+        {
+            self.selected_region = None;
+        }
+        for options in &mut self.tab_options {
+            if options
+                .selected_region
+                .is_some_and(|index| index >= region_count)
+            {
+                options.selected_region = None;
+            }
+        }
         self.comparison = self
             .snapshot_analysis()
             .zip(self.analysis.as_deref())
@@ -2703,6 +2731,66 @@ mod tests {
         assert!(app.baseline_display.is_none());
         let texts = render(&mut app, View::Symbols);
         assert!(!texts.iter().any(|t| t.contains("; removed)")), "{texts:?}");
+    }
+
+    #[test]
+    fn rebuilding_baseline_clears_display_only_navigation() {
+        use super::super::{pie::UnitKey, View};
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        let current = app.analysis.clone().unwrap();
+        let mut old = (*current).clone();
+        let mut section = old.sections.iter().find(|s| s.allocated).unwrap().clone();
+        section.index = old.sections.iter().map(|s| s.index).max().unwrap() + 1;
+        section.name = ".baseline_only".into();
+        old.sections.push(section);
+        old.options
+            .regions
+            .push(firmware_analysis_core::MemoryRegion {
+                name: "baseline_only".into(),
+                start: 0,
+                size: 4096,
+                kind: firmware_analysis_core::MemoryKind::Ram,
+            });
+        app.analysis = Some(Arc::new(old));
+        app.take_snapshot("baseline").unwrap();
+        app.analysis = Some(current.clone());
+        app.select_snapshot(Some("baseline".into())).unwrap();
+        let display = app.baseline_display_analysis().unwrap();
+        let section = display
+            .sections
+            .iter()
+            .find(|s| s.name == ".baseline_only")
+            .unwrap()
+            .index;
+        let region = display
+            .options
+            .regions
+            .iter()
+            .position(|r| r.name == "baseline_only")
+            .unwrap();
+        app.overview_section = Some(section);
+        app.overview_unit = Some(UnitKey::Other);
+        app.selected_region = Some(region);
+        app.tab_options[View::MemoryMap as usize].selected_region = Some(region);
+        // Even rebuilding the same baseline must not carry temporary indexes
+        // into a newly constructed display report.
+        app.sync_snapshot_comparison();
+        assert_eq!(app.overview_section, None);
+        assert_eq!(app.overview_unit, None);
+        assert_eq!(app.selected_region, None);
+        assert_eq!(
+            app.tab_options[View::MemoryMap as usize].selected_region,
+            None
+        );
+
+        // Current section selections remain valid when comparison ends.
+        let section = current.sections.iter().find(|s| s.allocated).unwrap().index;
+        app.overview_section = Some(section);
+        app.select_snapshot(None).unwrap();
+        assert_eq!(app.overview_section, Some(section));
     }
 
     #[test]
