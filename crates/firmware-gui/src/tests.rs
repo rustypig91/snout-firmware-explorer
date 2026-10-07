@@ -2255,11 +2255,305 @@ fn selected_report_folder_remains_recursive_and_discovers_new_reports_on_refresh
 }
 
 #[test]
+fn sidebar_large_firmware_list_only_builds_visible_rows() {
+    use firmware_analysis_core::build::{Artifact, ArtifactKind, BuildFolder};
+    let root = std::env::temp_dir().join("snout-firmware-list/build");
+    let mut app = Explorer {
+        build: Some(Arc::new(BuildFolder {
+            root: root.clone(),
+            artifacts: (0..2000)
+                .map(|i| Artifact {
+                    path: root.join(format!("firmware_{i:04}.elf")),
+                    kind: ArtifactKind::Firmware,
+                })
+                .collect(),
+            warnings: vec![],
+        })),
+        ..Default::default()
+    };
+    let ctx = egui::Context::default();
+    ctx.style_mut(|style| style.animation_time = 0.0);
+    let frame = |app: &mut Explorer, scroll| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 500.0),
+                )),
+                events: if scroll {
+                    vec![
+                        egui::Event::PointerMoved(egui::pos2(100.0, 250.0)),
+                        egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(0.0, -100_000.0),
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ]
+                } else {
+                    vec![]
+                },
+                ..Default::default()
+            },
+            |ctx| app.build_browser(ctx),
+        )
+    };
+    frame(&mut app, false);
+    // Each constructed collapsing header stores state, even if its paint is clipped.
+    assert!(
+        ctx.memory(|memory| memory.data.len()) < 200,
+        "offscreen firmware widgets should not be constructed"
+    );
+    // A background job must not disable virtualization for every firmware row.
+    let (_sender, receiver) = mpsc::channel();
+    app.receiver = Some(receiver);
+    frame(&mut app, false);
+    assert!(
+        ctx.memory(|memory| memory.data.len()) < 200,
+        "offscreen collapsed firmware widgets should not be constructed while loading"
+    );
+    // Recover the first header's persistent ID through the same scoped UI.
+    // An expanded row must still be found after it scrolls out of view.
+    let mut first_header = None;
+    let _ = ctx.run(Default::default(), |ctx| {
+        egui::SidePanel::left("build_artifacts").show(ctx, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.push_id(root.join("firmware_0000.elf"), |ui| {
+                    first_header = Some(ui.make_persistent_id("firmware_files"));
+                });
+            });
+        });
+    });
+    let first_header = first_header.unwrap();
+    let mut state = egui::collapsing_header::CollapsingState::load(&ctx, first_header)
+        .expect("the first firmware header should have stored its state");
+    state.set_open(true);
+    state.store(&ctx);
+    frame(&mut app, false);
+    let mut output = frame(&mut app, true);
+    for _ in 0..10 {
+        output = frame(&mut app, true);
+    }
+    assert!(
+        output.shapes.iter().any(|shape| matches!(
+            &shape.shape,
+            egui::Shape::Text(t) if t.galley.text() == "firmware_1999.elf"
+        )),
+        "the last firmware must remain reachable by scrolling"
+    );
+    assert!(
+        egui::collapsing_header::CollapsingState::load(&ctx, first_header)
+            .unwrap()
+            .is_open()
+    );
+    app.receiver = None;
+    frame(&mut app, false);
+    assert!(
+        !egui::collapsing_header::CollapsingState::load(&ctx, first_header)
+            .unwrap()
+            .is_open(),
+        "offscreen inactive firmware must close when the background job finishes"
+    );
+}
+
+#[test]
+fn sidebar_expands_firmware_loaded_outside_the_sidebar() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let elf = root.join("app.elf");
+    std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+    let other_elf = root.join("second.elf");
+    std::fs::copy(&elf, &other_elf).unwrap();
+    let mut app = Explorer::default();
+    app.scan_build(root);
+    finish_job(&mut app);
+    let ctx = egui::Context::default();
+    ctx.style_mut(|style| style.animation_time = 0.0);
+    let frame = |app: &mut Explorer, events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 800.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.build_browser(ctx),
+        )
+    };
+    // The folder is drawn before startup restoration or an external open completes.
+    frame(&mut app, vec![]);
+    app.open(elf.clone());
+    finish_job(&mut app);
+    let output = frame(&mut app, vec![]);
+    // The first frame after a load must use the same widget IDs as later frames.
+    // A user can immediately select another firmware after loading completes.
+    let label = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(t) if t.galley.text() == "second.elf" => {
+                Some(t.pos + t.galley.size() * 0.5)
+            }
+            _ => None,
+        })
+        .unwrap();
+    for pressed in [true, false] {
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(label),
+                egui::Event::PointerButton {
+                    pos: label,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    assert!(
+        app.receiver.is_some(),
+        "firmware label must respond immediately after loading"
+    );
+    finish_job(&mut app);
+    assert_eq!(
+        app.analysis.as_ref().unwrap().path,
+        other_elf.display().to_string()
+    );
+    app.open(elf.clone());
+    finish_job(&mut app);
+    frame(&mut app, vec![]);
+    let output = frame(&mut app, vec![]);
+    assert!(
+        output.shapes.iter().any(|shape| matches!(
+            &shape.shape,
+            egui::Shape::Text(t) if t.galley.text() == "Map file (0)"
+        )),
+        "loaded firmware should expose its supporting-file controls"
+    );
+
+    // Refreshing the same firmware must preserve a deliberate collapse.
+    let arrow = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(t) if t.galley.text() == "app.elf" => {
+                Some(t.pos + egui::vec2(-12.0, t.galley.size().y * 0.5))
+            }
+            _ => None,
+        })
+        .unwrap();
+    for pressed in [true, false] {
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(arrow),
+                egui::Event::PointerButton {
+                    pos: arrow,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    app.open(elf.clone());
+    finish_job(&mut app);
+    frame(&mut app, vec![]);
+    let output = frame(&mut app, vec![]);
+    assert!(!output.shapes.iter().any(|shape| matches!(
+        &shape.shape,
+        egui::Shape::Text(t) if t.galley.text() == "Map file (0)"
+    )));
+
+    // Loading while a search hides the collapsed row must expand it when revealed.
+    app.open(other_elf);
+    finish_job(&mut app);
+    frame(&mut app, vec![]);
+    app.artifact_search = "no-match".into();
+    frame(&mut app, vec![]);
+    app.open(elf.clone());
+    finish_job(&mut app);
+    frame(&mut app, vec![]);
+    app.artifact_search.clear();
+    frame(&mut app, vec![]);
+    let output = frame(&mut app, vec![]);
+    assert!(
+        output.shapes.iter().any(|shape| matches!(
+            &shape.shape,
+            egui::Shape::Text(t) if t.galley.text() == "Map file (0)"
+        )),
+        "firmware loaded while filtered out should expand when the search is cleared"
+    );
+}
+
+#[test]
+fn sidebar_previews_supporting_files_without_firmware() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::write(root.join("only.map"), "map preview contents").unwrap();
+    std::fs::write(root.join("only.su"), "unit.c:1:1:func\t16\tstatic\n").unwrap();
+    let mut app = Explorer::default();
+    app.scan_build(root.clone());
+    finish_job(&mut app);
+    let ctx = egui::Context::default();
+    ctx.style_mut(|style| style.animation_time = 0.0);
+    let frame = |app: &mut Explorer, events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 800.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.build_browser(ctx),
+        )
+    };
+    for name in ["only.map", "only.su"] {
+        app.artifact_search = name.to_uppercase();
+        frame(&mut app, vec![]);
+        let output = frame(&mut app, vec![]);
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(t) if t.galley.text() == name => {
+                    Some(t.pos + t.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("Missing supporting file {name}"));
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        finish_job(&mut app);
+        assert_eq!(app.preview.as_ref().unwrap().0, root.join(name));
+        assert!(app.analysis.is_none());
+    }
+}
+
+#[test]
 fn sidebar_checkboxes_and_map_radios_apply_choices_to_current_elf() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     let elf = root.join("app.elf");
     std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+    let other_elf = root.join("second.elf");
+    std::fs::copy(&elf, &other_elf).unwrap();
     for name in ["app.map", "other.map"] {
         std::fs::write(
             root.join(name),
@@ -2274,6 +2568,7 @@ fn sidebar_checkboxes_and_map_radios_apply_choices_to_current_elf() {
     app.open(elf.clone());
     finish_job(&mut app);
     let ctx = egui::Context::default();
+    ctx.style_mut(|style| style.animation_time = 0.0);
     fn frame(
         ctx: &egui::Context,
         app: &mut Explorer,
@@ -2323,6 +2618,12 @@ fn sidebar_checkboxes_and_map_radios_apply_choices_to_current_elf() {
             })
             .unwrap_or_else(|| panic!("Missing sidebar label {name}"))
     };
+    // Firmware rows are top-level, and supporting files are indented beneath them.
+    let firmware = text_pos(&output, "app.elf");
+    let map = text_pos(&output, "app.map");
+    let report = text_pos(&output, "frame.su");
+    assert!(map.y > firmware.y && report.y > map.y);
+    assert!(map.x > firmware.x && report.x > firmware.x);
     click(&ctx, &mut app, text_pos(&output, "frame.su"));
     finish_job(&mut app);
     assert_eq!(app.saved_stack_reports(&elf), Some(vec![]));
@@ -2355,6 +2656,67 @@ fn sidebar_checkboxes_and_map_radios_apply_choices_to_current_elf() {
         app.saved_stack_reports(&elf),
         Some(vec![root.join("frame.su")])
     );
+    app.artifact_search = "frame.su".into();
+    let output = frame(&ctx, &mut app, vec![]);
+    text_pos(&output, "app.elf");
+    text_pos(&output, "second.elf");
+    text_pos(&output, "frame.su");
+    app.artifact_search.clear();
+    // Switching via a top-level row exposes choices for the new ELF only.
+    let output = frame(&ctx, &mut app, vec![]);
+    click(&ctx, &mut app, text_pos(&output, "second.elf"));
+    finish_job(&mut app);
+    frame(&ctx, &mut app, vec![]);
+    let output = frame(&ctx, &mut app, vec![]);
+    assert_eq!(
+        app.analysis.as_ref().unwrap().path,
+        other_elf.display().to_string()
+    );
+    click(&ctx, &mut app, text_pos(&output, "frame.su"));
+    finish_job(&mut app);
+    assert_eq!(app.saved_stack_reports(&other_elf), Some(vec![]));
+    assert_eq!(
+        app.saved_stack_reports(&elf),
+        Some(vec![root.join("frame.su")])
+    );
+    assert_eq!(
+        app.build_settings[&root].layouts[&elf].source,
+        root.join("other.map").display().to_string()
+    );
+    // Expanding an inactive firmware with its arrow also loads its saved choices.
+    let output = frame(&ctx, &mut app, vec![]);
+    let arrow = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(t) if t.galley.text() == "app.elf" => {
+                Some(t.pos + egui::vec2(-12.0, t.galley.size().y * 0.5))
+            }
+            _ => None,
+        })
+        .unwrap();
+    click(&ctx, &mut app, arrow);
+    finish_job(&mut app);
+    frame(&ctx, &mut app, vec![]);
+    let output = frame(&ctx, &mut app, vec![]);
+    text_pos(&output, "frame.su");
+    assert_eq!(
+        app.analysis.as_ref().unwrap().path,
+        elf.display().to_string()
+    );
+    assert!(app.map_in_use(&root.join("other.map")));
+    assert_eq!(
+        app.saved_stack_reports(&elf),
+        Some(vec![root.join("frame.su")])
+    );
+    // Previewing a map and returning via the firmware row preserve these choices.
+    click(&ctx, &mut app, text_pos(&output, "app.map"));
+    finish_job(&mut app);
+    assert_eq!(app.preview.as_ref().unwrap().0, root.join("app.map"));
+    let output = frame(&ctx, &mut app, vec![]);
+    click(&ctx, &mut app, text_pos(&output, "app.elf"));
+    assert!(app.preview.is_none());
+    assert!(app.map_in_use(&root.join("other.map")));
 }
 
 #[test]

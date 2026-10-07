@@ -456,6 +456,11 @@ impl Explorer {
         let mut selected = None;
         let mut selected_map = None;
         let previous = self.browser_cache.take();
+        let firmware_changed = previous
+            .as_ref()
+            .and_then(|cache| cache.analysis.as_ref())
+            .map(|analysis| &analysis.path)
+            != self.analysis.as_ref().map(|analysis| &analysis.path);
         let closed = previous
             .as_ref()
             .map(|c| c.closed.clone())
@@ -504,92 +509,166 @@ impl Explorer {
                     if build.artifacts.is_empty() {
                         ui.label("No compatible files found in this folder or its subfolders.");
                     }
-                    for (group, kind) in [
-                        ArtifactKind::Firmware,
-                        ArtifactKind::Map,
-                        ArtifactKind::StackUsage,
-                    ].into_iter().enumerate() {
-                        let count = cache.artifacts[group].len();
-                        if count == 0 {
-                            continue;
+                    // Record newly loaded firmware's expansion even when the search
+                    // hides its row. The cache consumes the change on this frame.
+                    if firmware_changed {
+                        if let Some(analysis) = &self.analysis {
+                            // Match the row's persistent ID without creating a
+                            // one-frame UI scope that shifts subsequent widget IDs.
+                            let id = ui.id()
+                                .with(egui::Id::new(std::path::Path::new(&analysis.path)))
+                                .with("firmware_files");
+                            let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+                                ui.ctx(), id, true);
+                            state.set_open(true);
+                            state.store(ui.ctx());
                         }
-                        if kind == ArtifactKind::StackUsage {
-                            egui::CollapsingHeader::new(format!("{} ({})", kind.label(), count))
-                                .default_open(true)
-                                .show(ui, |ui| {
-                                    ui.add_enabled_ui(self.analysis.is_some() && self.receiver.is_none(), |ui| {
-                                        report_change = cache.report_ui(ui);
-                                    });
-                                });
-                            continue;
-                        }
-                        egui::CollapsingHeader::new(format!(
-                            "{} ({})",
-                            kind.label(),
-                            count
-                        ))
-                        .default_open(
-                            kind == ArtifactKind::Firmware
-                                || (kind == ArtifactKind::Map
-                                    && cache.artifacts[group].iter().any(|&i| self.map_in_use(&build.artifacts[i].path))),
-                        )
-                        .show(ui, |ui| {
-                            let height = ui.spacing().interact_size.y.max(ui.text_style_height(&egui::TextStyle::Body));
-                            egui::ScrollArea::vertical().id_salt(("artifact_rows",group))
-                                .max_height(ui.available_height().max(120.0))
-                                .show_rows(ui, height, count, |ui, range| {
-                            for row in range {
-                                let index = cache.artifacts[group][row];
-                                let artifact = &build.artifacts[index];
-                                let active = artifact.kind == ArtifactKind::Firmware
-                                    && self.analysis.as_ref().is_some_and(|a| {
-                                        std::path::Path::new(&a.path) == artifact.path
-                                    })
-                                    || self
-                                        .preview
-                                        .as_ref()
-                                        .map(|(p, _)| p == &artifact.path)
-                                        .unwrap_or_else(|| {
-                                            self.analysis.as_ref().is_some_and(|a| {
-                                                std::path::Path::new(&a.path) == artifact.path
-                                            })
-                                        });
-                                let label = &cache.labels[index];
-                                let in_use = artifact.kind == ArtifactKind::Map
-                                    && self.map_in_use(&artifact.path);
-                                if artifact.kind == ArtifactKind::Map {
-                                    ui.horizontal(|ui| {
-                                        if ui.add_enabled(self.analysis.is_some() && self.receiver.is_none(),
-                                            egui::RadioButton::new(in_use, ""))
-                                            .on_hover_text("Use memory regions from this map for the current ELF")
-                                            .clicked() && !in_use
-                                        {
-                                            selected_map = Some(artifact.path.clone());
-                                        }
-                                        if ui.add_enabled(self.receiver.is_none(),
-                                            egui::Button::new(display_path(label)).frame(false).selected(active).truncate())
-                                            .on_hover_text("Preview map").clicked()
-                                        {
-                                            selected = Some(artifact.clone());
-                                        }
-                                    });
-                                    continue;
-                                }
-                                let label = egui::RichText::new(display_path(label));
-                                if ui
-                                    .add_enabled(
-                                        self.receiver.is_none(),
-                                        egui::Button::new(label)
-                                            .frame(false)
-                                            .selected(active)
-                                            .truncate(),
-                                    )
-                                    .on_hover_text(display_path(&artifact.path.to_string_lossy()))
-                                    .clicked()
-                                {
-                                    selected = Some(artifact.clone());
-                                }
+                    }
+                    let supporting_match = !self.artifact_search.is_empty()
+                        && (!cache.artifacts[1].is_empty() || !cache.artifacts[2].is_empty());
+                    let has_firmware = build.artifacts.iter().any(|a| a.kind == ArtifactKind::Firmware);
+                    let firmware_indices: Vec<_> = if supporting_match {
+                        build.artifacts.iter().enumerate()
+                            .filter(|(_, artifact)| artifact.kind == ArtifactKind::Firmware)
+                            .map(|(index, _)| index).collect()
+                    } else {
+                        cache.artifacts[0].clone()
+                    };
+                    if firmware_indices.is_empty() && !build.artifacts.is_empty() {
+                        ui.label(if has_firmware {
+                            "No firmware matches this search."
+                        } else {
+                            "No firmware binaries found. Open a build folder containing an ELF to select its map and stack usage files."
+                        });
+                    }
+                    // Supporting files can still be inspected in folders without an ELF.
+                    if !has_firmware {
+                        for (group, kind) in [(1, ArtifactKind::Map), (2, ArtifactKind::StackUsage)] {
+                            if cache.artifacts[group].is_empty() {
+                                continue;
                             }
+                            egui::CollapsingHeader::new(format!("{} ({})", kind.label(), cache.artifacts[group].len()))
+                                .default_open(true).show(ui, |ui| {
+                                    let height = ui.spacing().interact_size.y.max(ui.text_style_height(&egui::TextStyle::Body));
+                                    egui::ScrollArea::vertical().id_salt(("supporting_previews", group))
+                                        .max_height(180.0).show_rows(ui, height, cache.artifacts[group].len(), |ui, range| {
+                                            for row in range {
+                                                let index = cache.artifacts[group][row];
+                                                let artifact = &build.artifacts[index];
+                                                let previewing = self.preview.as_ref().is_some_and(|(p, _)| p == &artifact.path);
+                                                if ui.add_enabled(self.receiver.is_none(),
+                                                    egui::Button::new(display_path(&cache.labels[index]))
+                                                        .frame(false).selected(previewing).truncate())
+                                                    .on_hover_text(display_path(&artifact.path.to_string_lossy())).clicked() {
+                                                    selected = Some(artifact.clone());
+                                                }
+                                            }
+                                        });
+                                });
+                        }
+                    }
+                    for index in firmware_indices {
+                        let artifact = &build.artifacts[index];
+                        let active = self.analysis.as_ref().is_some_and(|a|
+                            std::path::Path::new(&a.path) == artifact.path);
+                        // Reserve collapsed offscreen rows even during background jobs.
+                        // Previously opened rows still need their body/animation height.
+                        let height = ui.spacing().interact_size.y
+                            .max(ui.text_style_height(&egui::TextStyle::Button))
+                            .max(ui.spacing().icon_width);
+                        let row_rect = egui::Rect::from_min_size(ui.next_widget_position(),
+                            egui::vec2(ui.available_width(), height));
+                        if !active && !ui.is_rect_visible(row_rect) {
+                            // push_id hashes its salt into an Id before deriving the
+                            // child UI's ID. Match that scope when looking up state.
+                            let id = ui.id().with(egui::Id::new(&artifact.path)).with("firmware_files");
+                            let expanded = egui::collapsing_header::CollapsingState::load(ui.ctx(), id)
+                                .is_some_and(|mut state| {
+                                    if self.receiver.is_none() && state.is_open() {
+                                        state.set_open(false);
+                                        state.store(ui.ctx());
+                                    }
+                                    state.openness(ui.ctx()) > 0.0
+                                });
+                            if !expanded {
+                                ui.allocate_space(row_rect.size());
+                                continue;
+                            }
+                        }
+                        ui.push_id(&artifact.path, |ui| {
+                            let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+                                ui.ctx(), ui.make_persistent_id("firmware_files"), active);
+                            // Only the loaded firmware exposes editable supporting files.
+                            if !active && self.receiver.is_none() {
+                                state.set_open(false);
+                            }
+                            let was_open = state.is_open();
+                            let mut clicked = false;
+                            let mut header = state.show_header(ui, |ui| {
+                                let response = ui.add_enabled(self.receiver.is_none(),
+                                    egui::Button::new(display_path(&cache.labels[index]))
+                                        .frame(false).selected(active).truncate())
+                                    .on_hover_text(display_path(&artifact.path.to_string_lossy()));
+                                if response.clicked() {
+                                    clicked = true;
+                                    if active {
+                                        self.preview = None;
+                                    } else {
+                                        selected = Some(artifact.clone());
+                                    }
+                                }
+                            });
+                            if clicked {
+                                header.set_open(true);
+                            }
+                            if header.is_open() && !was_open && !active && self.receiver.is_none() {
+                                selected = Some(artifact.clone());
+                            }
+                            header.body(|ui| {
+                                if !active {
+                                    ui.small("Loading firmware…");
+                                    return;
+                                }
+                                egui::CollapsingHeader::new(format!("Map file ({})", cache.artifacts[1].len()))
+                                    .id_salt("maps").default_open(true).show(ui, |ui| {
+                                        if cache.artifacts[1].is_empty() {
+                                            ui.small("No map files found.");
+                                        }
+                                        let height = ui.spacing().interact_size.y;
+                                        egui::ScrollArea::vertical().id_salt("map_rows")
+                                            .max_height(180.0).show_rows(ui, height, cache.artifacts[1].len(), |ui, range| {
+                                                for row in range {
+                                                    let map_index = cache.artifacts[1][row];
+                                                    let map = &build.artifacts[map_index];
+                                                    let in_use = self.map_in_use(&map.path);
+                                                    ui.horizontal(|ui| {
+                                                        if ui.add_enabled(self.receiver.is_none(), egui::RadioButton::new(in_use, ""))
+                                                            .on_hover_text("Use memory regions from this map for this firmware")
+                                                            .clicked() && !in_use {
+                                                            selected_map = Some(map.path.clone());
+                                                        }
+                                                        let previewing = self.preview.as_ref().is_some_and(|(p, _)| p == &map.path);
+                                                        if ui.add_enabled(self.receiver.is_none(),
+                                                            egui::Button::new(display_path(&cache.labels[map_index]))
+                                                                .frame(false).selected(previewing).truncate())
+                                                            .on_hover_text(format!("Preview map\n{}", display_path(&map.path.to_string_lossy())))
+                                                            .clicked() {
+                                                            selected = Some(map.clone());
+                                                        }
+                                                    });
+                                                }
+                                            });
+                                    });
+                                egui::CollapsingHeader::new(format!("Stack usage files ({})", cache.artifacts[2].len()))
+                                    .id_salt("reports").default_open(true).show(ui, |ui| {
+                                        if cache.artifacts[2].is_empty() {
+                                            ui.small("No stack usage files found.");
+                                        } else {
+                                            ui.add_enabled_ui(self.receiver.is_none(), |ui| {
+                                                report_change = cache.report_ui(ui);
+                                            });
+                                        }
+                                    });
                             });
                         });
                     }
