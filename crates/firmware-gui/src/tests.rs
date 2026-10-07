@@ -30,7 +30,7 @@ fn interface_text_respects_minimum_size_except_zoomable_graph_labels() {
         .values()
         .all(|font| font.size >= shell::MIN_TEXT_SIZE));
     assert_eq!(ctx.style().text_styles[&egui::TextStyle::Small].size, 12.0);
-    assert_eq!(ctx.style().text_styles[&egui::TextStyle::Body].size, 13.0);
+    assert_eq!(ctx.style().text_styles[&egui::TextStyle::Body].size, 14.0);
     let analysis = firmware_analysis_core::analyze_bytes(
         include_bytes!("../../../fixtures/build/cortex-m.elf"),
         "test.elf",
@@ -230,108 +230,6 @@ fn symbol_navigation_clears_filters_even_when_already_in_symbols() {
     assert!(app.search.is_empty());
     assert_eq!(app.kind_filter, "All");
     assert!(app.details.is_none());
-}
-
-#[test]
-fn overview_explains_reservations_and_links_growth_to_section_comparison() {
-    let old = analyze_path(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/cortex-m.elf"),
-        &Default::default(),
-    )
-    .unwrap();
-    let new = analyze_path(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/cortex-m-grown.elf"),
-        &Default::default(),
-    )
-    .unwrap();
-    let mut app = Explorer {
-        analysis: Some(Arc::new(new.clone())),
-        comparison: Some(compare(&old, &new)),
-        ..Default::default()
-    };
-    let ctx = egui::Context::default();
-    shell::configure_style(&ctx);
-    fn frame(
-        ctx: &egui::Context,
-        app: &mut Explorer,
-        events: Vec<egui::Event>,
-    ) -> egui::FullOutput {
-        ctx.run(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(1280.0, 1600.0),
-                )),
-                events,
-                ..Default::default()
-            },
-            |ctx| app.show(ctx),
-        )
-    }
-    fn click_text(ctx: &egui::Context, app: &mut Explorer, text: &str) {
-        let output = frame(ctx, app, vec![]);
-        let pos = output
-            .shapes
-            .iter()
-            .find_map(|s| match &s.shape {
-                egui::Shape::Text(t) if t.galley.text() == text => {
-                    Some(t.pos + t.galley.size() * 0.5)
-                }
-                _ => None,
-            })
-            .unwrap_or_else(|| panic!("Missing text: {text}"));
-        for pressed in [true, false] {
-            frame(
-                ctx,
-                app,
-                vec![
-                    egui::Event::PointerMoved(pos),
-                    egui::Event::PointerButton {
-                        pos,
-                        button: egui::PointerButton::Primary,
-                        pressed,
-                        modifiers: egui::Modifiers::NONE,
-                    },
-                ],
-            );
-        }
-    }
-    frame(&ctx, &mut app, vec![]);
-    let output = frame(&ctx, &mut app, vec![]);
-    let has_text = |text: &str| {
-        output
-            .shapes
-            .iter()
-            .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == text))
-    };
-    assert!(has_text("Flash: 1.45 KiB used | Capacity unknown"));
-    assert!(has_text("RAM: 388 B used | Capacity unknown"));
-    assert!(!has_text("Flash payload"));
-    assert!(!has_text("Static RAM"));
-    assert!(has_text("RAM code: 28 B"));
-    assert!(output.shapes.iter().any(
-        |s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text().ends_with("src/main.c"))
-    ));
-    click_text(&ctx, &mut app, "Explain 128 B unattributed RAM");
-    frame(&ctx, &mut app, vec![]);
-    click_text(
-        &ctx,
-        &mut app,
-        "128 B in .reserved · reserved without a source owner",
-    );
-    assert!(app.overview_metric == overview::Metric::Ram);
-    assert_eq!(
-        app.overview_section,
-        new.sections
-            .iter()
-            .find(|s| s.name == ".reserved")
-            .map(|s| s.index)
-    );
-    click_text(&ctx, &mut app, "RAM +32 B | .bss");
-    assert!(app.view == View::Sections);
-    assert_eq!(app.search, ".bss");
-    frame(&ctx, &mut app, vec![]);
-    assert_eq!(app.visible_rows, 1);
 }
 
 #[test]
@@ -766,7 +664,7 @@ fn folder_workflow_selects_firmware_and_loads_stack_automatically() {
     assert!(output
         .shapes
         .iter()
-        .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == "Menu")));
+        .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == "Settings")));
     app.scan_build(build.root.join("cortex-m.elf"));
     finish_job(&mut app);
     assert!(app.error.as_ref().unwrap().contains("folder"));
@@ -925,6 +823,8 @@ fn all_data_views_render_headlessly() {
                         View::Dependencies => app.dependency_view(ui, &analysis),
                         View::Stack => app.stack_view(ui),
                         View::Memory => app.memory_view(ui, &Arc::new(analysis.clone())),
+                        View::BuildFiles => app.build_files(ui),
+                        View::Baselines => app.baselines_view(ui),
                     });
                 },
             );
@@ -1245,7 +1145,7 @@ fn build_folder_scan_finds_adjacent_and_nested_reports() {
         .any(|e| e.function == "Reset_Handler" && e.local_bytes == 32));
 }
 #[test]
-fn configured_region_symbols_render_and_search() {
+fn configured_regions_render_bars_and_search_without_symbols() {
     let options = firmware_analysis_core::map::parse_map_regions(include_str!(
         "../../../fixtures/build/cortex-m.map"
     ))
@@ -1262,7 +1162,7 @@ fn configured_region_symbols_render_and_search() {
         ..Default::default()
     };
     for region in 0..options.regions.len() {
-        app.selected_region = Some(region);
+        app.selected_region = Some(region); // Legacy selection must not open a symbol browser.
         for search in ["", "no-such-region-symbol"] {
             app.search = search.into();
             let output = ctx.run(
@@ -1279,63 +1179,36 @@ fn configured_region_symbols_render_and_search() {
             );
             assert!(!output.shapes.is_empty());
             if search.is_empty() {
-                assert!(app.visible_rows > 0);
+                assert_eq!(app.visible_rows, options.regions.len());
+                let texts: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(t) => Some(t.galley.text()),
+                        _ => None,
+                    })
+                    .collect();
+                for region in &options.regions {
+                    assert!(texts.iter().any(|text| text.contains(&region.name)));
+                }
+                assert!(!texts
+                    .iter()
+                    .any(|text| text.contains("Symbols in") || *text == "Symbol"));
+                assert_eq!(
+                    output
+                        .shapes
+                        .iter()
+                        .filter(|shape| matches!(&shape.shape,
+                            egui::Shape::Rect(r) if r.fill == egui::Color32::from_rgb(45, 60, 79)
+                        ))
+                        .count(),
+                    options.regions.len()
+                );
             } else {
                 assert_eq!(app.visible_rows, 0);
             }
         }
     }
-}
-
-#[test]
-fn overview_mouse_back_returns_from_section_to_root() {
-    let analysis = analyze_path(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/cortex-m.elf"),
-        &AnalysisOptions::default(),
-    )
-    .unwrap();
-    let section = analysis
-        .sections
-        .iter()
-        .find(|s| s.allocated && s.size > 0)
-        .unwrap()
-        .index;
-    let mut app = Explorer {
-        analysis: Some(Arc::new(analysis)),
-        overview_section: Some(section),
-        overview_unit: Some(pie::UnitKey::Other),
-        ..Default::default()
-    };
-    let ctx = egui::Context::default();
-    let input = egui::RawInput {
-        screen_rect: Some(egui::Rect::from_min_size(
-            egui::Pos2::ZERO,
-            egui::vec2(1280.0, 820.0),
-        )),
-        ..Default::default()
-    };
-    let output = ctx.run(input.clone(), |ctx| app.show(ctx));
-    assert!(!output.shapes.is_empty());
-    assert_eq!(app.overview_section, Some(section));
-    let mut back = input;
-    back.events.push(egui::Event::PointerButton {
-        pos: egui::pos2(600.0, 400.0),
-        button: egui::PointerButton::Extra1,
-        pressed: true,
-        modifiers: egui::Modifiers::NONE,
-    });
-    let _ = ctx.run(back.clone(), |ctx| app.show(ctx));
-    assert_eq!(app.overview_section, Some(section));
-    assert_eq!(app.overview_unit, None);
-    if let egui::Event::PointerButton { pressed, .. } = &mut back.events[0] {
-        *pressed = false;
-    }
-    let _ = ctx.run(back.clone(), |ctx| app.show(ctx));
-    if let egui::Event::PointerButton { pressed, .. } = &mut back.events[0] {
-        *pressed = true;
-    }
-    let _ = ctx.run(back, |ctx| app.show(ctx));
-    assert_eq!(app.overview_section, None);
 }
 
 #[test]
@@ -1906,7 +1779,12 @@ fn supporting_file_preview_is_confined_to_overview_and_preserves_elf() {
                 |ctx| app.show(ctx),
             );
             let preview_visible = output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text().contains("supporting-file-preview-marker")));
-            assert_eq!(preview_visible, view == View::Overview, "{}", view.label());
+            assert_eq!(
+                preview_visible,
+                matches!(view, View::Overview | View::BuildFiles),
+                "{}",
+                view.label()
+            );
             assert!(Arc::ptr_eq(&analysis, app.analysis.as_ref().unwrap()));
         }
     }
@@ -3139,98 +3017,6 @@ fn llvm_map_preview_and_manual_import_preserve_analysis_and_capacity() {
 }
 
 #[test]
-fn overview_collapses_tls_details_until_expanded() {
-    let mut app = Explorer::default();
-    let mut a = firmware_analysis_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
-        "TLS fixture",
-        &Default::default(),
-    )
-    .unwrap();
-    a.tls = Some(firmware_analysis_core::TlsReport {
-        source: "PT_TLS".into(),
-        initialized_size: 4,
-        zero_initialized_size: 8,
-        template_size: 12,
-        alignment: 8,
-        total_runtime_ram: None,
-        symbols: vec![firmware_analysis_core::TlsSymbol {
-            name: "local_counter".into(),
-            offset: 0,
-            size: 4,
-            section: ".tdata".into(),
-        }],
-    });
-    app.analysis = Some(a.into());
-    let ctx = egui::Context::default();
-    let output = ctx.run(
-        egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(1280.0, 900.0),
-            )),
-            ..Default::default()
-        },
-        |ctx| app.show(ctx),
-    );
-    let text = output
-        .shapes
-        .iter()
-        .filter_map(|shape| match &shape.shape {
-            egui::Shape::Text(text) => Some(text.galley.text()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(text.contains("Thread-local storage detected — click to view details"));
-    assert!(!text.contains("Template per thread:"));
-    assert!(!text.contains("Total TLS RAM is unknown"));
-    let header_pos = output
-        .shapes
-        .iter()
-        .find_map(|shape| match &shape.shape {
-            egui::Shape::Text(text)
-                if text.galley.text().contains("Thread-local storage detected") =>
-            {
-                Some(text.pos + text.galley.size() * 0.5)
-            }
-            _ => None,
-        })
-        .unwrap();
-    let mut expanded = String::new();
-    for pressed in [true, false, false] {
-        let output = ctx.run(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(1280.0, 900.0),
-                )),
-                events: vec![
-                    egui::Event::PointerMoved(header_pos),
-                    egui::Event::PointerButton {
-                        pos: header_pos,
-                        button: egui::PointerButton::Primary,
-                        pressed,
-                        modifiers: egui::Modifiers::NONE,
-                    },
-                ],
-                ..Default::default()
-            },
-            |ctx| app.show(ctx),
-        );
-        for shape in &output.shapes {
-            if let egui::Shape::Text(text) = &shape.shape {
-                expanded.push_str(text.galley.text());
-                expanded.push('\n');
-            }
-        }
-    }
-    assert!(expanded.contains("Template per thread: 12 B"));
-    assert!(expanded.contains("Total TLS RAM is unknown"));
-    assert!(expanded.contains("1 TLS variables"));
-}
-
-#[test]
 fn tab_controls_are_independent_and_remembered_for_the_session() {
     let mut app = Explorer::default();
     for (index, view) in View::ALL.into_iter().enumerate() {
@@ -3433,12 +3219,12 @@ fn recent_build_folders_sanitize_saved_history() {
 }
 
 #[test]
-fn recent_folder_submenu_opens_left_and_remains_clickable() {
+fn recent_folder_submenu_opens_right_and_remains_clickable() {
     check_recent_folder_submenu(1280.0, "build");
 }
 
 #[test]
-fn long_recent_folder_submenu_stays_left_and_clickable_in_small_windows() {
+fn long_recent_folder_submenu_stays_right_and_clickable_in_small_windows() {
     check_recent_folder_submenu(640.0, &"long-build-folder-".repeat(12));
 }
 
@@ -3468,17 +3254,33 @@ fn check_recent_folder_submenu(width: f32, folder_name: &str) {
         output
             .shapes
             .iter()
+            .rev()
             .filter_map(|shape| match &shape.shape {
                 egui::Shape::Text(text_shape) if text_shape.galley.text() == text => Some(
                     egui::Rect::from_min_size(text_shape.pos, text_shape.galley.size()),
                 ),
                 _ => None,
             })
-            .max_by(|a, b| a.left().total_cmp(&b.left()))
+            .next()
             .unwrap_or_else(|| panic!("Missing {text}"))
     };
     frame(&mut app, vec![]);
-    let menu = text_rect(&frame(&mut app, vec![]), "Menu").center();
+    let output = frame(&mut app, vec![]);
+    let settings_text = text_rect(&output, "Settings");
+    let gear = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Circle(circle) if circle.radius == 5.5 => Some(circle.center),
+            _ => None,
+        })
+        .expect("Settings gear must render");
+    assert!(
+        settings_text.left() >= gear.x + 8.0 + 8.0,
+        "Gear and label must have a clear gap"
+    );
+    assert!((settings_text.center().y - gear.y).abs() < 1.0);
+    let menu = settings_text.center();
     for pressed in [true, false] {
         frame(
             &mut app,
@@ -3494,6 +3296,24 @@ fn check_recent_folder_submenu(width: f32, folder_name: &str) {
         );
     }
     let output = frame(&mut app, vec![]);
+    for label in [
+        "Open build folder...",
+        "Open recent build folder ▶",
+        "Refresh",
+        "Reset settings for this build folder",
+        "Open configuration folder",
+        "Check for updates",
+        "Check for updates on startup",
+        "Analysis notes",
+        "Support developer",
+        "About",
+    ] {
+        let rect = text_rect(&output, label);
+        assert!(
+            rect.bottom() < gear.y - 17.0 && rect.left() >= 0.0 && rect.right() <= width,
+            "Settings action must fit above its sidebar button: {label}: {rect:?}"
+        );
+    }
     let refresh = text_rect(&output, "Refresh");
     let f5 = text_rect(&output, "F5");
     assert!(f5.left() > refresh.right());
@@ -3501,15 +3321,15 @@ fn check_recent_folder_submenu(width: f32, folder_name: &str) {
     let open_hint = text_rect(&output, "Ctrl+O");
     assert!((open_hint.right() - f5.right()).abs() < 1.0);
     assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Rescan folder")));
-    let recent = text_rect(&output, "◀ Open recent build folder");
+    let recent = text_rect(&output, "Open recent build folder ▶");
     frame(&mut app, vec![egui::Event::PointerMoved(recent.center())]);
     frame(&mut app, vec![]);
     let output = frame(&mut app, vec![]);
     let child = text_rect(&output, &display::display_path(&folder.to_string_lossy()));
     let parent = text_rect(&output, "Open build folder...");
     assert!(
-        child.right() < parent.left(),
-        "Submenu must be left of parent: {child:?}, {parent:?}"
+        child.left() > parent.right(),
+        "Submenu must be right of parent: {child:?}, {parent:?}"
     );
     frame(
         &mut app,
@@ -3612,4 +3432,974 @@ fn check_recent_folder_submenu(width: f32, folder_name: &str) {
         }],
     );
     assert!(app.show_about);
+}
+
+#[test]
+fn dashboard_cards_fit_and_navigation_remains_visible_at_both_widths() {
+    let analysis = firmware_analysis_core::analyze_bytes(
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        "fixture.elf",
+        &Default::default(),
+    )
+    .unwrap();
+    for (width, height) in [(900.0, 600.0), (1280.0, 820.0), (1536.0, 1024.0)] {
+        let ctx = egui::Context::default();
+        shell::configure_style(&ctx);
+        let mut app = Explorer {
+            analysis: Some(Arc::new(analysis.clone())),
+            ..Default::default()
+        };
+        let mut output = egui::FullOutput::default();
+        for _ in 0..3 {
+            output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, height),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| app.show(ctx),
+            );
+        }
+        for label in View::ALL
+            .iter()
+            .map(|view| view.label())
+            .chain(["Settings", "Build files"])
+        {
+            assert!(
+                output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::Shape::Text(text) if text.galley.text() == label
+                        && shape.clip_rect.contains(text.pos + text.galley.size() * 0.5)
+                )),
+                "Control must remain visible at {width}: {label}"
+            );
+        }
+        let position = |label: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => Some(text.pos),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let settings = position("Settings");
+        assert!(settings.x < 165.0 && settings.y > height - 85.0);
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.text() == "Menu")));
+        for label in [
+            "ELF".to_owned(),
+            analysis.metadata.architecture.clone(),
+            format!("{}-bit", analysis.metadata.bitness),
+        ] {
+            let metadata = position(&label);
+            assert!(
+                metadata.y < 140.0,
+                "Firmware metadata belongs in the header: {label}"
+            );
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.text() == label
+                    && shape.clip_rect.contains(egui::Rect::from_min_size(text.pos, text.galley.size()).right_bottom())
+            )), "Header metadata must be visible at {width}: {label}");
+        }
+        let overview = position("Overview");
+        let build_files = position("Build files");
+        let files = position("Files");
+        assert!((build_files.x - overview.x).abs() < 0.1);
+        assert!(overview.y < build_files.y && build_files.y < files.y);
+        assert_eq!(
+            output
+                .shapes
+                .iter()
+                .filter(|shape| matches!(&shape.shape,
+                    egui::Shape::Text(text) if text.galley.text() == "Build files"
+                ))
+                .count(),
+            1,
+            "Build files belongs only in the sidebar"
+        );
+        let cards: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) if rect.fill == egui::Color32::from_rgb(16, 25, 35) => {
+                    Some((rect, shape.clip_rect))
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            cards.len() == 6,
+            "Visible summary cards must render at {width}"
+        );
+        for title in [
+            "Binary information",
+            "Memory usage",
+            "Section type distribution",
+            "Top functions by size",
+            "Top files by size",
+        ] {
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.text() == title
+                    && shape.clip_rect.contains_rect(egui::Rect::from_min_size(text.pos, text.galley.size()))
+            )), "Dashboard title must be fully visible at {width}x{height}: {title}");
+        }
+        let top_y = cards[0].0.rect.top();
+        assert_eq!(
+            cards
+                .iter()
+                .filter(|(card, _)| (card.rect.top() - top_y).abs() < 1.0)
+                .count(),
+            4
+        );
+        for label in ["Flash", "RAM"] {
+            let center = position(label);
+            assert!(
+                cards[..4]
+                    .iter()
+                    .any(|(card, _)| card.rect.contains(center)),
+                "{label} chart must stay in the top row at {width}"
+            );
+        }
+        for (card, clip) in cards {
+            assert!(
+                clip.expand(1.0).contains_rect(card.rect),
+                "Card must fit entirely at {width}: {:?}, clip {clip:?}",
+                card.rect
+            );
+        }
+    }
+}
+
+#[test]
+fn distribution_legend_opens_sections_without_resetting_overview_filters() {
+    let analysis = firmware_analysis_core::analyze_bytes(
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        "fixture.elf",
+        &Default::default(),
+    )
+    .unwrap();
+    let mut app = Explorer {
+        search: "saved filter".into(),
+        overview_metric: overview::Metric::Ram,
+        ..Default::default()
+    };
+    let ctx = egui::Context::default();
+    let frame = |app: &mut Explorer, events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(600.0, 300.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    app.section_distribution(ui, &analysis, overview::Metric::Flash)
+                });
+            },
+        )
+    };
+    frame(&mut app, vec![]);
+    let output = frame(&mut app, vec![]);
+    let (pos, name) = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text().starts_with('.') => Some((
+                text.pos + text.galley.size() * 0.5,
+                text.galley
+                    .text()
+                    .split_whitespace()
+                    .next()
+                    .unwrap()
+                    .to_owned(),
+            )),
+            _ => None,
+        })
+        .unwrap();
+    for pressed in [true, false] {
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    assert!(app.view == View::Sections);
+    assert_eq!(app.search, name);
+    app.change_view(View::Overview);
+    assert_eq!(app.search, "saved filter");
+}
+
+#[test]
+fn header_switches_elf_and_build_files_selects_support_without_leaving_the_tab() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    for name in ["app.elf", "second.elf"] {
+        std::fs::write(
+            root.join(name),
+            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        )
+        .unwrap();
+    }
+    for name in ["app.map", "other.map"] {
+        std::fs::write(
+            root.join(name),
+            include_bytes!("../../../fixtures/build/cortex-m.map"),
+        )
+        .unwrap();
+    }
+    std::fs::write(root.join("frame.su"), "diag.c:22:36:diagnose\t56\tstatic\n").unwrap();
+    let mut app = Explorer::default();
+    app.scan_build(root.clone());
+    finish_job(&mut app);
+    app.open(root.join("app.elf"));
+    finish_job(&mut app);
+    let ctx = egui::Context::default();
+    shell::configure_style(&ctx);
+    fn frame(
+        ctx: &egui::Context,
+        app: &mut Explorer,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 820.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.show(ctx),
+        )
+    }
+    fn text_pos(output: &egui::FullOutput, label: &str) -> egui::Pos2 {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("Missing control: {label}"))
+    }
+    fn click(ctx: &egui::Context, app: &mut Explorer, pos: egui::Pos2) {
+        for pressed in [true, false] {
+            frame(
+                ctx,
+                app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+    }
+    frame(&ctx, &mut app, vec![]);
+    let output = frame(&ctx, &mut app, vec![]);
+    click(&ctx, &mut app, text_pos(&output, "app.elf"));
+    let output = frame(&ctx, &mut app, vec![]);
+    click(&ctx, &mut app, text_pos(&output, "second.elf"));
+    assert!(app.receiver.is_some());
+    finish_job(&mut app);
+    assert_eq!(
+        std::path::Path::new(&app.analysis.as_ref().unwrap().path),
+        root.join("second.elf")
+    );
+    let output = frame(&ctx, &mut app, vec![]);
+    click(&ctx, &mut app, text_pos(&output, "Build files"));
+    assert!(app.view == View::BuildFiles);
+    let output = frame(&ctx, &mut app, vec![]);
+    let report = text_pos(&output, "frame.su");
+    let before = app
+        .current_stack_selection()
+        .contains(&root.join("frame.su"));
+    click(&ctx, &mut app, report);
+    finish_job(&mut app);
+    assert!(app.view == View::BuildFiles);
+    assert_eq!(
+        app.current_stack_selection()
+            .contains(&root.join("frame.su")),
+        !before
+    );
+    let output = frame(&ctx, &mut app, vec![]);
+    let map = text_pos(&output, "other.map");
+    let radio = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Circle(circle)
+                if circle.center.x < map.x && (circle.center.y - map.y).abs() < 2.0 =>
+            {
+                Some(circle.center)
+            }
+            _ => None,
+        })
+        .unwrap();
+    click(&ctx, &mut app, radio);
+    finish_job(&mut app);
+    assert!(app.map_in_use(&root.join("other.map")));
+    assert!(app.view == View::BuildFiles);
+    let output = frame(&ctx, &mut app, vec![]);
+    click(&ctx, &mut app, text_pos(&output, "other.map"));
+    finish_job(&mut app);
+    assert!(app.view == View::BuildFiles);
+    assert_eq!(app.preview.as_ref().unwrap().0, root.join("other.map"));
+}
+
+#[test]
+fn overview_matches_reference_column_and_memory_bar_alignment() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build");
+    let options = firmware_analysis_core::map::parse_map_regions(
+        &std::fs::read_to_string(root.join("cortex-m.map")).unwrap(),
+    )
+    .unwrap();
+    let analysis = analyze_path(root.join("cortex-m.elf"), &options).unwrap();
+    let mut app = Explorer {
+        analysis: Some(Arc::new(analysis.clone())),
+        ..Default::default()
+    };
+    let ctx = egui::Context::default();
+    shell::configure_style(&ctx);
+    let mut output = egui::FullOutput::default();
+    for _ in 0..3 {
+        output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 820.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| app.show(ctx),
+        );
+    }
+    let text_pos = |label: &str| {
+        output
+            .shapes
+            .iter()
+            .rev()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => Some(text.pos),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("Missing reference label: {label}"))
+    };
+    let pairs = [
+        (
+            "Format",
+            format!(
+                "ELF ({}-bit, {} endian)",
+                analysis.metadata.bitness, analysis.metadata.endianness
+            ),
+        ),
+        ("Architecture", analysis.metadata.architecture.clone()),
+        (
+            "Entry point",
+            format!("0x{:08x}", analysis.metadata.entry_point),
+        ),
+        (
+            "ELF file size",
+            firmware_analysis_core::format_bytes(analysis.metadata.file_size),
+        ),
+        ("Debug info", "DWARF present".into()),
+    ];
+    let label_x = text_pos(pairs[0].0).x;
+    let value_x = text_pos(&pairs[0].1).x;
+    assert!(value_x > label_x + 70.0);
+    for (label, value) in pairs {
+        let left = text_pos(label);
+        let right = text_pos(&value);
+        assert!((left.x - label_x).abs() < 0.1 && (right.x - value_x).abs() < 0.1);
+        assert!((left.y - right.y).abs() < 0.1);
+    }
+    let bars: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Rect(rect) if rect.fill == egui::Color32::from_rgb(45, 60, 79) => {
+                Some(rect.rect)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(bars.len(), 2);
+    for (index, kind) in [
+        firmware_analysis_core::MemoryKind::Flash,
+        firmware_analysis_core::MemoryKind::Ram,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let region = analysis
+            .options
+            .regions
+            .iter()
+            .find(|region| region.kind == kind)
+            .unwrap();
+        let usage = firmware_analysis_core::regions::region_usage(&analysis, region);
+        let detail = format!(
+            "{} / {} · {:.1}% · {} free",
+            firmware_analysis_core::format_bytes(usage.used),
+            firmware_analysis_core::format_bytes(region.size),
+            usage.used as f64 * 100.0 / region.size as f64,
+            firmware_analysis_core::format_bytes(usage.free)
+        );
+        let position = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text)
+                    if text
+                        .galley
+                        .text()
+                        .starts_with(&detail[..detail.find(" ·").unwrap()]) =>
+                {
+                    Some(text.pos)
+                }
+                _ => None,
+            })
+            .expect("Region occupancy detail must be visible");
+        assert!((bars[index].height() - 14.0).abs() < 0.1);
+        assert!(position.y > bars[index].bottom());
+    }
+    assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+        egui::Shape::Text(text) if text.galley.text() == "Memory breakdown"
+    )));
+}
+
+#[test]
+fn overview_region_defaults_use_percentage_and_validate_saved_names() {
+    use firmware_analysis_core::{MemoryKind, MemoryRegion};
+    let mut a = firmware_analysis_core::analyze_bytes(
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        "fixture",
+        &Default::default(),
+    )
+    .unwrap();
+    a.options.regions = vec![
+        MemoryRegion {
+            name: "large".into(),
+            start: 0,
+            size: 1000,
+            kind: MemoryKind::Ram,
+        },
+        MemoryRegion {
+            name: "tight".into(),
+            start: 1000,
+            size: 100,
+            kind: MemoryKind::Ram,
+        },
+        MemoryRegion {
+            name: "rom".into(),
+            start: 2000,
+            size: 100,
+            kind: MemoryKind::Flash,
+        },
+        MemoryRegion {
+            name: "tie".into(),
+            start: 3000,
+            size: 200,
+            kind: MemoryKind::Ram,
+        },
+    ];
+    let mut app = Explorer {
+        region_cache: [(500, 500), (90, 10), (100, 0), (180, 20)]
+            .into_iter()
+            .map(
+                |(used, free)| firmware_analysis_core::regions::RegionUsage {
+                    used,
+                    free,
+                    symbols: vec![],
+                },
+            )
+            .collect(),
+        ..Default::default()
+    };
+    assert_eq!(app.overview_region(&a, 1, MemoryKind::Ram), Some(1));
+    assert_eq!(app.overview_region(&a, 0, MemoryKind::Flash), Some(2));
+    app.overview_regions[1] = Some("large".into());
+    assert_eq!(app.overview_region(&a, 1, MemoryKind::Ram), Some(0));
+    app.overview_regions[1] = Some("rom".into());
+    assert_eq!(app.overview_region(&a, 1, MemoryKind::Ram), Some(1));
+    app.overview_regions[1] = Some("missing".into());
+    assert_eq!(app.overview_region(&a, 1, MemoryKind::Ram), Some(1));
+    a.options.regions.clear();
+    assert_eq!(app.overview_region(&a, 1, MemoryKind::Ram), None);
+}
+
+#[test]
+fn overview_memory_keeps_totals_and_bars_visible_with_many_regions() {
+    let options = firmware_analysis_core::map::parse_map_regions(include_str!(
+        "../../../fixtures/build/cortex-m.map"
+    ))
+    .unwrap();
+    let mut analysis = firmware_analysis_core::analyze_bytes(
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        "fixture",
+        &options,
+    )
+    .unwrap();
+    let original = analysis.options.regions.clone();
+    for i in 0..30 {
+        let mut region = original[i % original.len()].clone();
+        region.name = format!("extra_{i}");
+        region.start = 0x60000000 + i as u64 * 0x100000;
+        analysis.options.regions.push(region);
+    }
+    for width in [220.0, 340.0, 500.0] {
+        let ctx = egui::Context::default();
+        shell::configure_style(&ctx);
+        let mut app = Explorer::default();
+        app.ensure_region_cache(&analysis);
+        let mut output = egui::FullOutput::default();
+        for _ in 0..2 {
+            output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 220.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| app.compact_memory(ui, &analysis));
+                },
+            );
+        }
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(t) if matches!(t.galley.text(), "Flash payload" | "Static RAM")
+        )));
+        assert_eq!(
+            output
+                .shapes
+                .iter()
+                .filter(|shape| matches!(&shape.shape,
+                    egui::Shape::Rect(r) if r.fill == egui::Color32::from_rgb(45, 60, 79)
+                ))
+                .count(),
+            2
+        );
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(t) if t.galley.text().starts_with("View all regions") && shape.clip_rect.contains_rect(egui::Rect::from_min_size(t.pos, t.galley.size()))
+        )));
+    }
+}
+
+#[test]
+fn overview_memory_dropdown_and_regions_link_work_and_unknown_capacity_has_no_bar() {
+    use firmware_analysis_core::{MemoryKind, MemoryRegion};
+    let options = firmware_analysis_core::map::parse_map_regions(include_str!(
+        "../../../fixtures/build/cortex-m.map"
+    ))
+    .unwrap();
+    let mut a = firmware_analysis_core::analyze_bytes(
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        "fixture",
+        &options,
+    )
+    .unwrap();
+    a.options.regions.push(MemoryRegion {
+        name: "spare_RAM".into(),
+        start: 0x60000000,
+        size: 4096,
+        kind: MemoryKind::Ram,
+    });
+    let mut app = Explorer::default();
+    app.ensure_region_cache(&a);
+    let ctx = egui::Context::default();
+    let frame = |app: &mut Explorer, events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(500.0, 240.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.compact_memory(ui, &a));
+            },
+        )
+    };
+    let text_position = |output: &egui::FullOutput, label: &str| {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(t) if t.galley.text() == label => {
+                    Some(t.pos + t.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("Missing {label}"))
+    };
+    let click = |app: &mut Explorer, pos| {
+        let mut output = egui::FullOutput::default();
+        for pressed in [true, false] {
+            output = frame(
+                app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        output
+    };
+    frame(&mut app, vec![]);
+    let output = frame(&mut app, vec![]);
+    let ram = app.overview_region(&a, 1, MemoryKind::Ram).unwrap();
+    let pos = text_position(&output, &a.options.regions[ram].name);
+    click(&mut app, pos);
+    let output = frame(&mut app, vec![]);
+    click(&mut app, text_position(&output, "spare_RAM"));
+    assert_eq!(app.overview_regions[1].as_deref(), Some("spare_RAM"));
+    let output = frame(&mut app, vec![]);
+    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+        egui::Shape::Text(t) if t.galley.text() == "0.0%"
+    )));
+    click(
+        &mut app,
+        text_position(
+            &output,
+            &format!("View all regions ({})", a.options.regions.len()),
+        ),
+    );
+    assert!(app.view == View::MemoryMap);
+
+    a.options.regions.clear();
+    app.ensure_region_cache(&a);
+    let output = ctx.run(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| app.compact_memory(ui, &a));
+    });
+    assert_eq!(
+        output
+            .shapes
+            .iter()
+            .filter(|shape| matches!(&shape.shape,
+                egui::Shape::Text(t) if t.galley.text() == "Capacity unknown"
+            ))
+            .count(),
+        2
+    );
+    assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+        egui::Shape::Rect(r) if r.fill == egui::Color32::from_rgb(45, 60, 79)
+    )));
+}
+
+#[test]
+fn overview_region_choices_survive_disk_restart_and_are_scoped_to_elf_and_build() {
+    use firmware_analysis_core::MemoryKind;
+    let directory = tempfile::tempdir().unwrap();
+    let parent = directory.path().canonicalize().unwrap();
+    let folder = parent.join("build");
+    std::fs::create_dir(&folder).unwrap();
+    for name in ["first", "second"] {
+        std::fs::write(
+            folder.join(format!("{name}.elf")),
+            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        )
+        .unwrap();
+        std::fs::write(
+            folder.join(format!("{name}.map")),
+            include_str!("../../../fixtures/build/cortex-m.map"),
+        )
+        .unwrap();
+    }
+    let config = parent.join("config/workspace.json");
+    let first = folder.join("first.elf");
+    let second = folder.join("second.elf");
+    let mut app = Explorer {
+        preferences_file: Some(config.clone()),
+        ..Default::default()
+    };
+    app.scan_build(folder.clone());
+    finish_job(&mut app);
+    app.open(first.clone());
+    finish_job(&mut app);
+    let a = app.analysis.clone().unwrap();
+    let flash = a
+        .options
+        .regions
+        .iter()
+        .find(|r| r.kind == MemoryKind::Flash)
+        .unwrap()
+        .name
+        .clone();
+    let ram = a
+        .options
+        .regions
+        .iter()
+        .find(|r| r.kind == MemoryKind::Ram)
+        .unwrap()
+        .name
+        .clone();
+    app.select_overview_region(&a, 0, flash.clone());
+    app.select_overview_region(&a, 1, ram.clone());
+    let choices = [Some(flash.clone()), Some(ram.clone())];
+    let disk: serde_json::Value = serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+    assert_eq!(
+        disk["build_settings"][folder.to_str().unwrap()]["overview_regions"]
+            [first.to_str().unwrap()],
+        serde_json::json!(choices)
+    );
+    app.open(second);
+    finish_job(&mut app);
+    assert_eq!(app.overview_regions, [None, None]);
+    let a = app.analysis.clone().unwrap();
+    app.select_overview_region(&a, 0, flash);
+    app.open(first.clone());
+    finish_job(&mut app);
+    assert_eq!(app.overview_regions, choices);
+    app.refresh();
+    finish_job(&mut app);
+    assert_eq!(app.overview_regions, choices);
+    // The exact same ELF path can be scanned through a different build root.
+    app.scan_build(parent);
+    finish_job(&mut app);
+    app.open(first);
+    finish_job(&mut app);
+    assert_eq!(app.overview_regions, [None, None]);
+    let a = app.analysis.clone().unwrap();
+    app.select_overview_region(&a, 1, ram);
+    app.scan_build(folder);
+    finish_job(&mut app);
+    finish_job(&mut app);
+    assert_eq!(app.overview_regions, choices);
+    let mut restarted = Explorer {
+        preferences_file: Some(config),
+        ..Default::default()
+    };
+    restarted.restore_preferences(true);
+    finish_job(&mut restarted);
+    finish_job(&mut restarted);
+    assert!(restarted.error.is_none(), "{:?}", restarted.error);
+    assert_eq!(restarted.overview_regions, choices);
+    assert_eq!(
+        restarted.analysis.as_ref().unwrap().path,
+        app.analysis.as_ref().unwrap().path
+    );
+}
+
+#[test]
+fn preferences_without_overview_regions_load_without_migration() {
+    let directory = tempfile::tempdir().unwrap();
+    let folder = directory.path().canonicalize().unwrap();
+    let elf = folder.join("firmware.elf");
+    std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+    let value = serde_json::json!({"version": 1, "folder": folder,
+        "build_settings": {folder.to_string_lossy(): {"firmware": elf, "layouts": {}}}
+    });
+    let mut app = Explorer::default();
+    app.apply_preferences(&value);
+    finish_job(&mut app);
+    finish_job(&mut app);
+    assert!(app.analysis.is_some());
+    assert!(app.error.is_none());
+    assert_eq!(app.overview_regions, [None, None]);
+    assert!(app.build_settings.contains_key(&folder));
+}
+
+#[test]
+fn distribution_colors_are_distinct_match_legend_and_ignore_section_names() {
+    let mut a = firmware_analysis_core::analyze_bytes(
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        "fixture",
+        &Default::default(),
+    )
+    .unwrap();
+    let template = a.sections[0].clone();
+    a.sections = [
+        "text",
+        "rodata",
+        "datas",
+        "device_area",
+        "shell_subcommands",
+        "custom",
+        "extra",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, name)| {
+        let mut section = template.clone();
+        section.name = name.into();
+        section.usage.flash = (7 - i) as u64 * 1000;
+        section
+    })
+    .collect();
+    let render_colors = |a: &firmware_analysis_core::Analysis| {
+        let ctx = egui::Context::default();
+        let mut app = Explorer::default();
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(600.0, 250.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    app.section_distribution(ui, a, overview::Metric::Flash)
+                });
+            },
+        );
+        let slices: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Mesh(mesh) => mesh
+                    .vertices
+                    .iter()
+                    .find(|v| v.color != egui::Color32::TRANSPARENT)
+                    .map(|v| v.color),
+                _ => None,
+            })
+            .collect();
+        let markers: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Circle(circle) if circle.radius == 5.0 => Some(circle.fill),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(slices.len(), 6);
+        assert_eq!(slices, markers);
+        for (i, color) in slices.iter().enumerate() {
+            assert!(
+                !slices[..i].contains(color),
+                "Every visible slice must have its own color"
+            );
+        }
+        slices
+    };
+    let colors = render_colors(&a);
+    for section in &mut a.sections {
+        section.name.insert(0, '.');
+    }
+    assert_eq!(render_colors(&a), colors);
+}
+
+#[test]
+fn section_distributions_use_separate_flash_and_static_ram_sizes() {
+    let mut analysis = firmware_analysis_core::analyze_bytes(
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        "fixture",
+        &Default::default(),
+    )
+    .unwrap();
+    let template = analysis.sections[0].clone();
+    analysis.sections = [(".data", 900, 100), (".text", 100, 0), (".bss", 0, 300)]
+        .into_iter()
+        .map(|(name, flash, ram)| {
+            let mut section = template.clone();
+            section.name = name.into();
+            section.usage = firmware_analysis_core::Usage { flash, ram };
+            section
+        })
+        .collect();
+    for (metric, expected, excluded) in [
+        (
+            overview::Metric::Flash,
+            [".data", ".text", "90.0%", "10.0%"],
+            ".bss",
+        ),
+        (
+            overview::Metric::Ram,
+            [".bss", ".data", "75.0%", "25.0%"],
+            ".text",
+        ),
+    ] {
+        let ctx = egui::Context::default();
+        let mut app = Explorer::default();
+        let render = |app: &mut Explorer, analysis: &firmware_analysis_core::Analysis| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(300.0, 210.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default()
+                        .show(ctx, |ui| app.section_distribution(ui, analysis, metric));
+                },
+            )
+        };
+        let output = render(&mut app, &analysis);
+        let texts: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text()),
+                _ => None,
+            })
+            .collect();
+        for label in expected.into_iter().chain([metric.label()]) {
+            assert!(
+                texts.contains(&label),
+                "Missing {label} in {} chart",
+                metric.label()
+            );
+        }
+        assert!(!texts.contains(&excluded));
+        let label = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == metric.label() => Some(text),
+                _ => None,
+            })
+            .unwrap();
+        let bounds = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Mesh(mesh) => Some(mesh.calc_bounds()),
+                _ => None,
+            })
+            .reduce(|a, b| a.union(b))
+            .unwrap();
+        assert!((label.pos + label.galley.size() * 0.5 - bounds.center()).length() < 1.0);
+        let mut empty = analysis.clone();
+        for section in &mut empty.sections {
+            match metric {
+                overview::Metric::Ram => section.usage.ram = 0,
+                _ => section.usage.flash = 0,
+            }
+        }
+        let output = render(&mut app, &empty);
+        assert!(!output
+            .shapes
+            .iter()
+            .any(|shape| matches!(shape.shape, egui::Shape::Mesh(_))));
+    }
 }

@@ -9,7 +9,7 @@ use std::{
     rc::Rc,
 };
 
-pub const ACCENT: egui::Color32 = egui::Color32::from_rgb(113, 185, 219);
+pub const ACCENT: egui::Color32 = egui::Color32::from_rgb(82, 224, 164);
 pub(super) const TEXT_SELECTION: egui::Color32 = egui::Color32::from_rgb(48, 105, 163);
 pub(super) const MEMORY_BAR: egui::Color32 = egui::Color32::from_rgba_premultiplied(23, 23, 23, 45);
 pub(super) const FLASH_HELP: &str = "Allocated bytes stored in the load image. Initialized RAM data also needs initial values in Flash. Gaps and programmer-specific overhead are excluded.";
@@ -902,137 +902,51 @@ impl Explorer {
         if a.options.regions.is_empty() {
             ui.label("Region capacity and free space are unknown. Use Load memory regions above to import a linker map.");
         } else {
-            if self
-                .selected_region
-                .is_some_and(|i| i >= a.options.regions.len())
-            {
-                self.selected_region = None;
-            }
-            ui.small("Select a region to inspect its symbols. Free space excludes static ELF occupancy only; runtime heap and stack demand may use it.");
-            let previous = self.selected_region;
-            ui.selectable_value(&mut self.selected_region, None, "All address ranges");
+            ui.small("Physical occupancy includes section padding and reservations. Free space may be needed by runtime heap and stack.");
+            self.visible_rows = 0;
             egui::ScrollArea::vertical()
                 .id_salt("region_summary")
-                .max_height(180.0)
                 .show(ui, |ui| {
                     for (index, region) in a.options.regions.iter().enumerate() {
-                        if !self.diff_visible("region", &region.name) {
+                        if !self.diff_visible("region", &region.name)
+                            || !region
+                                .name
+                                .to_lowercase()
+                                .contains(&self.search.to_lowercase())
+                        {
                             continue;
                         }
+                        self.visible_rows += 1;
                         let usage = &self.region_cache[index];
-                        let label = format!(
-                            "{} ({:?})  {}–{}  |  {} used / {} free / {} total  ({})",
-                            region.name,
-                            region.kind,
+                        ui.label(
+                            egui::RichText::new(format!("{} ({:?})", region.name, region.kind))
+                                .strong(),
+                        );
+                        ui.small(format!(
+                            "{}–{}",
                             self.snapshot_address("region", &region.name, "start", region.start),
                             self.snapshot_address(
                                 "region",
                                 &region.name,
                                 "end",
                                 region.start.saturating_add(region.size)
-                            ),
+                            )
+                        ));
+                        super::overview::occupancy_bar(ui, usage.used, region.size, region.kind);
+                        ui.label(format!(
+                            "{} used / {} total · {} · {} free",
                             self.snapshot_bytes("region", &region.name, "used", usage.used),
-                            self.snapshot_bytes("region", &region.name, "free", usage.free),
                             self.snapshot_bytes("region", &region.name, "size", region.size),
-                            self.snapshot_region_percentage(&region.name, usage.used, region.size)
-                        );
-                        ui.selectable_value(&mut self.selected_region, Some(index), label);
+                            self.snapshot_region_percentage(&region.name, usage.used, region.size),
+                            self.snapshot_bytes("region", &region.name, "free", usage.free)
+                        ));
+                        ui.separator();
+                    }
+                    if self.visible_rows == 0 {
+                        ui.weak("No matching regions.");
                     }
                 });
-            if previous != self.selected_region {
-                self.details = None;
-                self.search.clear();
-                self.sort_column = 1;
-                self.descending = false;
-            }
-            if let Some(index) = self.selected_region {
-                let region = &a.options.regions[index];
-                let usage = &self.region_cache[index];
-                ui.label(format!("Symbols in {}", region.name));
-                ui.small("Usage includes section padding and reservations. Aliases and zero-sized labels are listed; symbol sizes do not sum to region usage. Boundary-crossing ranges count only bytes inside the region.");
-                if usage.symbols.is_empty() {
-                    ui.label("No symbols available in this region. Stripped firmware can still occupy space.");
-                }
-                let paths = self.source_paths(a);
-                let rows = self.cached_rows(a as *const Analysis as usize, || {
-                    usage
-                        .symbols
-                        .iter()
-                        .filter(|entry| {
-                            self.diff_visible("symbol", &symbol_key(&a.symbols[entry.symbol_index]))
-                        })
-                        .map(|entry| {
-                            let s = &a.symbols[entry.symbol_index];
-                            Row::new(
-                                vec![
-                                    s.demangled_name.clone(),
-                                    self.snapshot_placement_address(
-                                        s,
-                                        &region.name,
-                                        entry.placement,
-                                        entry.address,
-                                    ),
-                                    self.snapshot_bytes("symbol", &symbol_key(s), "size", s.size),
-                                    s.section.clone(),
-                                    entry.placement.into(),
-                                    s.source_file
-                                        .as_ref()
-                                        .or(s.compilation_unit.as_ref())
-                                        .map(|path| paths.short(path))
-                                        .unwrap_or_else(|| "[unattributed]".into()),
-                                ],
-                                &[(1, entry.address.into()), (2, s.size.into())],
-                                format!(
-                                    "Linker name: {}\nRuntime address: {}\nELF size: {}\n{}",
-                                    s.name,
-                                    self.snapshot_address(
-                                        "symbol",
-                                        &symbol_key(s),
-                                        "normalized_address",
-                                        s.normalized_address
-                                    ),
-                                    self.snapshot_bytes("symbol", &symbol_key(s), "size", s.size),
-                                    s.attribution
-                                ),
-                            )
-                            .with_search(
-                                s.source_file
-                                    .as_deref()
-                                    .or(s.compilation_unit.as_deref())
-                                    .unwrap_or("[unattributed]"),
-                            )
-                            .with_path(
-                                5,
-                                paths.full(
-                                    s.source_file
-                                        .as_deref()
-                                        .or(s.compilation_unit.as_deref())
-                                        .unwrap_or("[unattributed]"),
-                                ),
-                            )
-                        })
-                        .collect()
-                });
-                self.table(
-                    ui,
-                    &[
-                        ("Symbol", "Symbols intersecting the selected region"),
-                        (
-                            "Address",
-                            "Placement address in this region; Thumb bit normalized",
-                        ),
-                        ("ELF size", "Full declared symbol size; aliases may overlap"),
-                        ("Section", "Containing ELF section"),
-                        ("Placement", "Runtime storage or initial load image"),
-                        (
-                            "Source",
-                            "Source file or compilation-unit label when available",
-                        ),
-                    ],
-                    rows,
-                );
-                return;
-            }
+            return;
         }
         ui.small("Load and runtime are separate address spaces").on_hover_text("Do not add load and runtime ranges together; the same storage can appear in both views.");
         let rows = self.cached_rows(a as *const Analysis as usize, || {
