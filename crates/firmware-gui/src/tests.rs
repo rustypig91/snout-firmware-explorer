@@ -2255,6 +2255,64 @@ fn selected_report_folder_remains_recursive_and_discovers_new_reports_on_refresh
 }
 
 #[test]
+fn sidebar_previews_supporting_files_without_firmware() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::write(root.join("only.map"), "map preview contents").unwrap();
+    std::fs::write(root.join("only.su"), "unit.c:1:1:func\t16\tstatic\n").unwrap();
+    let mut app = Explorer::default();
+    app.scan_build(root.clone());
+    finish_job(&mut app);
+    let ctx = egui::Context::default();
+    ctx.style_mut(|style| style.animation_time = 0.0);
+    let frame = |app: &mut Explorer, events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 800.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.build_browser(ctx),
+        )
+    };
+    for name in ["only.map", "only.su"] {
+        app.artifact_search = name.to_uppercase();
+        frame(&mut app, vec![]);
+        let output = frame(&mut app, vec![]);
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(t) if t.galley.text() == name => {
+                    Some(t.pos + t.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("Missing supporting file {name}"));
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        finish_job(&mut app);
+        assert_eq!(app.preview.as_ref().unwrap().0, root.join(name));
+        assert!(app.analysis.is_none());
+    }
+}
+
+#[test]
 fn sidebar_checkboxes_and_map_radios_apply_choices_to_current_elf() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
@@ -2391,6 +2449,40 @@ fn sidebar_checkboxes_and_map_radios_apply_choices_to_current_elf() {
         app.build_settings[&root].layouts[&elf].source,
         root.join("other.map").display().to_string()
     );
+    // Expanding an inactive firmware with its arrow also loads its saved choices.
+    let output = frame(&ctx, &mut app, vec![]);
+    let arrow = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(t) if t.galley.text() == "app.elf" => {
+                Some(t.pos + egui::vec2(-12.0, t.galley.size().y * 0.5))
+            }
+            _ => None,
+        })
+        .unwrap();
+    click(&ctx, &mut app, arrow);
+    finish_job(&mut app);
+    frame(&ctx, &mut app, vec![]);
+    let output = frame(&ctx, &mut app, vec![]);
+    text_pos(&output, "frame.su");
+    assert_eq!(
+        app.analysis.as_ref().unwrap().path,
+        elf.display().to_string()
+    );
+    assert!(app.map_in_use(&root.join("other.map")));
+    assert_eq!(
+        app.saved_stack_reports(&elf),
+        Some(vec![root.join("frame.su")])
+    );
+    // Previewing a map and returning via the firmware row preserve these choices.
+    click(&ctx, &mut app, text_pos(&output, "app.map"));
+    finish_job(&mut app);
+    assert_eq!(app.preview.as_ref().unwrap().0, root.join("app.map"));
+    let output = frame(&ctx, &mut app, vec![]);
+    click(&ctx, &mut app, text_pos(&output, "app.elf"));
+    assert!(app.preview.is_none());
+    assert!(app.map_in_use(&root.join("other.map")));
 }
 
 #[test]

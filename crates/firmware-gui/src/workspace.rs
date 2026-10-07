@@ -506,16 +506,46 @@ impl Explorer {
                     }
                     let supporting_match = !self.artifact_search.is_empty()
                         && (!cache.artifacts[1].is_empty() || !cache.artifacts[2].is_empty());
-                    let firmware_indices: Vec<_> = build.artifacts.iter().enumerate()
-                        .filter(|(index, artifact)| artifact.kind == ArtifactKind::Firmware
-                            && (supporting_match || cache.artifacts[0].contains(index)))
-                        .map(|(index, _)| index).collect();
+                    let has_firmware = build.artifacts.iter().any(|a| a.kind == ArtifactKind::Firmware);
+                    let firmware_indices: Vec<_> = if supporting_match {
+                        build.artifacts.iter().enumerate()
+                            .filter(|(_, artifact)| artifact.kind == ArtifactKind::Firmware)
+                            .map(|(index, _)| index).collect()
+                    } else {
+                        cache.artifacts[0].clone()
+                    };
                     if firmware_indices.is_empty() && !build.artifacts.is_empty() {
-                        ui.label(if build.artifacts.iter().any(|a| a.kind == ArtifactKind::Firmware) {
+                        ui.label(if has_firmware {
                             "No firmware matches this search."
                         } else {
                             "No firmware binaries found. Open a build folder containing an ELF to select its map and stack usage files."
                         });
+                    }
+                    // Supporting files can still be inspected in folders without an ELF.
+                    if !has_firmware {
+                        for (group, kind) in [(1, ArtifactKind::Map), (2, ArtifactKind::StackUsage)] {
+                            if cache.artifacts[group].is_empty() {
+                                continue;
+                            }
+                            egui::CollapsingHeader::new(format!("{} ({})", kind.label(), cache.artifacts[group].len()))
+                                .default_open(true).show(ui, |ui| {
+                                    let height = ui.spacing().interact_size.y.max(ui.text_style_height(&egui::TextStyle::Body));
+                                    egui::ScrollArea::vertical().id_salt(("supporting_previews", group))
+                                        .max_height(180.0).show_rows(ui, height, cache.artifacts[group].len(), |ui, range| {
+                                            for row in range {
+                                                let index = cache.artifacts[group][row];
+                                                let artifact = &build.artifacts[index];
+                                                let previewing = self.preview.as_ref().is_some_and(|(p, _)| p == &artifact.path);
+                                                if ui.add_enabled(self.receiver.is_none(),
+                                                    egui::Button::new(display_path(&cache.labels[index]))
+                                                        .frame(false).selected(previewing).truncate())
+                                                    .on_hover_text(display_path(&artifact.path.to_string_lossy())).clicked() {
+                                                    selected = Some(artifact.clone());
+                                                }
+                                            }
+                                        });
+                                });
+                        }
                     }
                     for index in firmware_indices {
                         let artifact = &build.artifacts[index];
