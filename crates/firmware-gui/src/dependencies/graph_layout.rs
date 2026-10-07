@@ -50,19 +50,14 @@ pub(super) struct CachedLayout {
     pub geometry: GraphLayout,
 }
 
-/// Normalize area across the visible byte range, from the label-sized floor
-/// to 25 times that area. Equal values retain equal, label-sized cards.
-pub(super) fn card_size(
-    minimum: egui::Vec2,
-    bytes: u64,
-    smallest: u64,
-    largest: u64,
-) -> egui::Vec2 {
-    let range = largest.saturating_sub(smallest);
-    if range == 0 {
-        return minimum;
-    }
-    let relative = bytes.saturating_sub(smallest).min(range) as f64 / range as f64;
+/// Zero bytes uses the label-sized floor; the largest visible contribution
+/// uses 25 times that area. Normalize against zero even when all sizes are equal.
+pub(super) fn card_size(minimum: egui::Vec2, bytes: u64, largest: u64) -> egui::Vec2 {
+    let relative = if largest == 0 {
+        0.0
+    } else {
+        bytes.min(largest) as f64 / largest as f64
+    };
     minimum * (1.0 + 24.0 * relative).sqrt() as f32
 }
 
@@ -157,7 +152,7 @@ pub(super) fn compute(input: &LayoutInput) -> GraphLayout {
     result
 }
 
-/// Bounded traversal and column placement for large connected graphs. Routes
+/// Bounded traversal and wrapped rank placement for large connected graphs. Routes
 /// leave each column through its gutters and run outside the cards, so no
 /// per-edge all-pairs obstacle search is needed.
 fn compute_large(input: &LayoutInput) -> GraphLayout {
@@ -222,42 +217,68 @@ fn compute_large(input: &LayoutInput) -> GraphLayout {
             point
         }
     };
+    // A broad rank (many sources referencing the same few dependencies) must
+    // not become an unbounded row after transposing to top-to-bottom. Wrap each
+    // rank into bands with a cross-axis budget based on total card area.
+    let area: f32 = input
+        .nodes
+        .iter()
+        .map(|node| node.size.x * node.size.y)
+        .sum();
+    let cross_limit = (area * if vertical { 1.5 } else { 0.75 }).sqrt().max(300.0);
     let mut cards = BTreeMap::new();
     let mut headings = Vec::new();
     let mut gutters = BTreeMap::new();
+    let mut band_ids = BTreeMap::new();
+    let mut band = 0usize;
     let mut x = 0.0;
     for (lane, members) in lanes {
-        let width = members
-            .iter()
-            .map(|&i| {
-                if vertical {
-                    input.nodes[i].size.y
-                } else {
-                    input.nodes[i].size.x
-                }
-            })
-            .fold(0.0, f32::max);
-        if input.grouped {
-            headings.push((lane, transform(egui::pos2(x + width / 2.0, -24.0))));
-        }
-        let mut y = 0.0;
+        let mut chunks: Vec<Vec<usize>> = vec![vec![]];
+        let mut length = 0.0;
         for i in members {
-            let node = &input.nodes[i];
-            let size = if vertical {
-                egui::vec2(node.size.y, node.size.x)
-            } else {
-                node.size
-            };
-            let min = egui::pos2(x + (width - size.x) / 2.0, y);
-            let max = min + size;
-            cards.insert(
-                node.id.clone(),
-                egui::Rect::from_min_max(transform(min), transform(max)),
-            );
-            gutters.insert(node.id.as_str(), (x - 24.0, x + width + 24.0));
-            y += size.y + 36.0;
+            let size = input.nodes[i].size;
+            let cross = if vertical { size.x } else { size.y };
+            if length > 0.0 && length + cross > cross_limit {
+                chunks.push(vec![]);
+                length = 0.0;
+            }
+            chunks.last_mut().unwrap().push(i);
+            length += cross + 36.0;
         }
-        x += width + 96.0;
+        for (chunk_index, members) in chunks.into_iter().enumerate() {
+            let width = members
+                .iter()
+                .map(|&i| {
+                    if vertical {
+                        input.nodes[i].size.y
+                    } else {
+                        input.nodes[i].size.x
+                    }
+                })
+                .fold(0.0, f32::max);
+            if input.grouped && chunk_index == 0 {
+                headings.push((lane.clone(), transform(egui::pos2(x + width / 2.0, -24.0))));
+            }
+            let mut y = 0.0;
+            for i in members {
+                let node = &input.nodes[i];
+                let size = if vertical {
+                    egui::vec2(node.size.y, node.size.x)
+                } else {
+                    node.size
+                };
+                let min = egui::pos2(x + (width - size.x) / 2.0, y);
+                cards.insert(
+                    node.id.clone(),
+                    egui::Rect::from_min_max(transform(min), transform(min + size)),
+                );
+                gutters.insert(node.id.as_str(), (x - 24.0, x + width + 24.0));
+                band_ids.insert(node.id.as_str(), band);
+                y += size.y + 36.0;
+            }
+            x += width + 96.0;
+            band += 1;
+        }
     }
     let mut bounds = cards.values().fold(egui::Rect::NOTHING, |b, r| b.union(*r));
     let bottom = if vertical {
@@ -272,26 +293,56 @@ fn compute_large(input: &LayoutInput) -> GraphLayout {
         .map(|(i, (from, to))| {
             let a = cards[from];
             let b = cards[to];
-            let (start, end) = if vertical {
-                (a.center_bottom(), b.center_top())
+            // Work in left-to-right coordinates, transposing back only once.
+            let a = egui::Rect::from_min_max(transform(a.min), transform(a.max));
+            let b = egui::Rect::from_min_max(transform(b.min), transform(b.max));
+            let source_band = band_ids[from.as_str()];
+            let target_band = band_ids[to.as_str()];
+            let forward = source_band <= target_band;
+            let start = if forward {
+                a.right_center()
             } else {
-                (a.right_center(), b.left_center())
+                a.left_center()
             };
-            let start = transform(start);
-            let end = transform(end);
-            let track = 48.0 + (i % 24) as f32 * 4.0;
-            let outside = if from < to { -track } else { bottom + track };
-            let points = vec![
-                start,
-                egui::pos2(gutters[from.as_str()].1, start.y),
-                egui::pos2(gutters[from.as_str()].1, outside),
-                egui::pos2(gutters[to.as_str()].0, outside),
-                egui::pos2(gutters[to.as_str()].0, end.y),
-                end,
-            ]
-            .into_iter()
-            .map(transform)
-            .collect::<Vec<_>>();
+            let end = if source_band == target_band || !forward {
+                b.right_center()
+            } else {
+                b.left_center()
+            };
+            let source_gutter = if forward {
+                gutters[from.as_str()].1
+            } else {
+                gutters[from.as_str()].0
+            };
+            let target_gutter = if source_band == target_band || !forward {
+                gutters[to.as_str()].1
+            } else {
+                gutters[to.as_str()].0
+            };
+            let route = if source_band.abs_diff(target_band) <= 1 {
+                // Same/adjacent bands can connect entirely through their shared
+                // gutter instead of taking every edge around the whole graph.
+                let bridge =
+                    (source_gutter + target_gutter) / 2.0 + if from < to { -6.0 } else { 6.0 };
+                vec![
+                    start,
+                    egui::pos2(bridge, start.y),
+                    egui::pos2(bridge, end.y),
+                    end,
+                ]
+            } else {
+                let track = 48.0 + (i % 24) as f32 * 4.0;
+                let outside = if forward { -track } else { bottom + track };
+                vec![
+                    start,
+                    egui::pos2(source_gutter, start.y),
+                    egui::pos2(source_gutter, outside),
+                    egui::pos2(target_gutter, outside),
+                    egui::pos2(target_gutter, end.y),
+                    end,
+                ]
+            };
+            let points = route.into_iter().map(transform).collect::<Vec<_>>();
             for point in &points {
                 bounds.extend_with(*point);
             }
@@ -671,7 +722,7 @@ mod tests {
                     .map(|p| p.0)
                     .unwrap_or("[no directory]")
                     .into(),
-                size: card_size(egui::vec2(100.0, 42.0), index as u64 * 100, 0, 300),
+                size: card_size(egui::vec2(100.0, 42.0), index as u64 * 100, 300),
             })
             .collect(),
             edges: [
@@ -968,23 +1019,23 @@ mod tests {
         let minimum = egui::vec2(100.0, 42.0);
         let mut previous = minimum;
         for bytes in [0, 1, 100, 10_000, 1_000_000, u64::MAX] {
-            let size = card_size(minimum, bytes, 0, u64::MAX);
+            let size = card_size(minimum, bytes, u64::MAX);
             assert!(size.x >= previous.x && size.y >= previous.y);
             assert!(size.x <= minimum.x * 5.0 && size.y <= minimum.y * 5.0);
             previous = size;
         }
-        assert_eq!(card_size(minimum, 0, 0, 0), minimum);
-        assert_eq!(card_size(minimum, 52, 52, 52), minimum);
-        // Approximately 27.14 KiB versus 52 B: endpoints must stand apart,
-        // and a halfway byte value must have halfway area, not dimensions.
-        let largest = card_size(minimum, 27_792, 52, 27_792);
-        let smallest = card_size(minimum, 52, 52, 27_792);
-        let midpoint = card_size(minimum, 13_922, 52, 27_792);
+        assert_eq!(card_size(minimum, 0, 0), minimum);
+        assert_eq!(card_size(minimum, 52, 52), minimum * 5.0);
+        // Approximately 27.14 KiB versus 52 B: the small nonzero node must
+        // exceed the floor; half the largest byte count gets halfway area.
+        let largest = card_size(minimum, 27_792, 27_792);
+        let smallest = card_size(minimum, 52, 27_792);
+        let midpoint = card_size(minimum, 13_896, 27_792);
         let area = |size: egui::Vec2| size.x * size.y;
-        assert_eq!(smallest, minimum);
-        assert!((area(largest) / area(smallest) - 25.0).abs() < 0.001);
-        assert!((area(midpoint) / area(smallest) - 13.0).abs() < 0.001);
-        assert_eq!(card_size(minimum, 0, 52, 27_792), minimum);
+        assert!(smallest.x > minimum.x);
+        assert!((area(largest) / area(minimum) - 25.0).abs() < 0.001);
+        assert!((area(midpoint) / area(minimum) - 13.0).abs() < 0.001);
+        assert_eq!(card_size(minimum, 0, 27_792), minimum);
     }
 }
 
@@ -1139,5 +1190,56 @@ fn large_grouped_graph_places_many_separate_cycles_deterministically() {
     assert_eq!(geometry.cards, repeated.cards);
     for (edge, repeated) in geometry.edges.iter().zip(&repeated.edges) {
         assert_eq!(edge.points, repeated.points);
+    }
+}
+
+#[test]
+fn broad_dependency_ranks_wrap_instead_of_collapsing_into_a_strip() {
+    // Hundreds of source units with no incoming references share rank zero.
+    // This was the pathological case: a single enormous row at fit-to-view.
+    let mut input = LayoutInput {
+        nodes: (0..301)
+            .map(|i| NodeSpec {
+                id: format!("unit{i:03}"),
+                directory: "src".into(),
+                size: card_size(egui::vec2(180.0, 48.0), 10 + (i % 11) as u64 * 100, 1010),
+            })
+            .collect(),
+        edges: (0..300)
+            .map(|i| (format!("unit{i:03}"), "unit300".into()))
+            .collect(),
+        grouped: false,
+        ram: false,
+        vertical: false,
+    };
+    for vertical in [false, true] {
+        input.vertical = vertical;
+        let geometry = compute(&input);
+        let aspect = geometry.bounds.width() / geometry.bounds.height();
+        assert!(
+            (0.25..4.0).contains(&aspect),
+            "graph became a strip: {aspect}"
+        );
+        assert_eq!(geometry.cards.len(), 301);
+        assert_eq!(geometry.edges.len(), 300);
+        let rank_coordinates: BTreeSet<_> = input.nodes[..300]
+            .iter()
+            .map(|node| {
+                let center = geometry.cards[&node.id].center();
+                (if vertical { center.y } else { center.x }) as i64
+            })
+            .collect();
+        assert!(rank_coordinates.len() > 1, "broad rank must wrap");
+        for (i, card) in geometry.cards.values().enumerate() {
+            assert!(geometry.bounds.contains_rect(*card));
+            for other in geometry.cards.values().skip(i + 1) {
+                assert!(!card.intersects(*other));
+            }
+        }
+        for edge in &geometry.edges {
+            assert!(route_is_clear(&edge.points, &geometry.cards));
+            assert!(geometry.cards[&edge.from].contains(edge.points[0]));
+            assert!(geometry.cards[&edge.to].contains(*edge.points.last().unwrap()));
+        }
     }
 }
