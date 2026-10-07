@@ -197,10 +197,21 @@ fn baseline_slices(
     metric: super::overview::Metric,
 ) -> Result<Vec<Slice>, ()> {
     let section = if let Some(index) = section {
-        let Some(current) = current.sections.iter().find(|s| s.index == index) else {
+        let Some(selected) = current.sections.iter().find(|s| s.index == index) else {
             return Ok(Vec::new());
         };
-        let mut matches = baseline.sections.iter().filter(|s| s.name == current.name);
+        // A name must identify exactly one section in both builds. Otherwise
+        // each current duplicate would compare against the same baseline bytes.
+        if current
+            .sections
+            .iter()
+            .filter(|s| s.name == selected.name)
+            .count()
+            != 1
+        {
+            return Err(());
+        }
+        let mut matches = baseline.sections.iter().filter(|s| s.name == selected.name);
         let Some(old) = matches.next() else {
             return Ok(Vec::new());
         };
@@ -291,8 +302,7 @@ impl Explorer {
         // still current, while baseline-only rows take no current chart space.
         let current_section = self
             .overview_section
-            .and_then(|index| a.sections.iter().find(|s| s.index == index))
-            .and_then(|section| current.sections.iter().find(|s| s.name == section.name));
+            .and_then(|index| current.sections.iter().find(|s| s.index == index));
         let current_items: std::collections::HashSet<_> =
             if baseline.is_none() || self.overview_section.is_none() || current_section.is_none() {
                 Default::default()
@@ -519,6 +529,20 @@ mod tests {
                 super::super::overview::Metric::Flash,
             )
             .is_err());
+        }
+        // The inverse is equally ambiguous: two current sections cannot both
+        // claim the contents of one baseline section, even with different indexes.
+        for duplicate in baseline.sections.iter().filter(|s| s.name == section.name) {
+            for unit in [None, Some(UnitKey::Other)] {
+                assert!(baseline_slices(
+                    &baseline,
+                    &current,
+                    Some(duplicate.index),
+                    unit.as_ref(),
+                    super::super::overview::Metric::Flash,
+                )
+                .is_err());
+            }
         }
         baseline.sections.retain(|s| s.name != section.name);
         assert!(baseline_slices(
