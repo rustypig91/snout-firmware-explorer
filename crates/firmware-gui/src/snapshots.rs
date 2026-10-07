@@ -3182,6 +3182,67 @@ mod tests {
     }
 
     #[test]
+    fn overview_keeps_drilldown_to_symbol_changes_with_unchanged_section_totals() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        app.take_snapshot("baseline").unwrap();
+        app.select_snapshot(Some("baseline".into())).unwrap();
+        let mut current = (**app.analysis.as_ref().unwrap()).clone();
+        let symbol = current
+            .symbols
+            .iter_mut()
+            .find(|s| s.usage.flash > 0)
+            .unwrap();
+        let section = symbol.section_index;
+        // A replacement of the same size leaves every section total unchanged.
+        symbol.name = "same_size_replacement".into();
+        symbol.demangled_name = symbol.name.clone();
+        app.analysis = Some(Arc::new(current));
+        app.sync_snapshot_comparison();
+        app.overview_metric = super::super::overview::Metric::Flash;
+        let ctx = egui::Context::default();
+        let render = |app: &mut Explorer| {
+            let a = app.analysis.clone().unwrap();
+            let _ = ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.overview_pie(ui, &a));
+            });
+        };
+        render(&mut app);
+        assert_eq!(
+            app.visible_rows, 1,
+            "Keep the section containing the replacement"
+        );
+        app.overview_section = Some(section);
+        render(&mut app);
+        assert_eq!(
+            app.visible_rows, 1,
+            "Keep the unit even though its total is unchanged"
+        );
+        let symbol = app
+            .analysis
+            .as_ref()
+            .unwrap()
+            .symbols
+            .iter()
+            .find(|s| s.name == "same_size_replacement")
+            .unwrap();
+        app.overview_unit = Some(if let Some(path) = &symbol.dwarf_compilation_unit {
+            super::super::pie::UnitKey::Dwarf(path.clone())
+        } else if let Some(path) = &symbol.compilation_unit {
+            super::super::pie::UnitKey::Elf(path.clone())
+        } else {
+            super::super::pie::UnitKey::Other
+        });
+        render(&mut app);
+        assert_eq!(
+            app.visible_rows, 2,
+            "Show both the added and removed symbols"
+        );
+    }
+
+    #[test]
     fn only_diffs_keeps_address_changes_and_added_and_removed_symbols() {
         use super::super::View;
         let directory = tempfile::tempdir().unwrap();

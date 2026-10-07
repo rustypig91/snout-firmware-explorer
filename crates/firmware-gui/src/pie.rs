@@ -343,15 +343,27 @@ impl Explorer {
         }
         let total: u64 = items.iter().map(|s| s.size).sum();
         if self.diffs_active() {
+            // Keep the navigation path to changed symbols even when section
+            // and unit totals are unchanged. Include baseline-only symbols
+            // from the display analysis, whose section indexes are remapped.
+            let mut changed_sections = std::collections::HashSet::new();
+            let mut changed_units = std::collections::HashSet::new();
+            for symbol in &a.symbols {
+                if self.diff_visible("symbol", &super::snapshots::symbol_key(symbol)) {
+                    changed_sections.insert(symbol.section_index);
+                    if Some(symbol.section_index) == self.overview_section {
+                        changed_units.insert(unit_key(symbol));
+                    }
+                }
+            }
             items.retain(|item| match &item.identity {
-                SliceIdentity::Section(name) => self.diff_visible("section", name),
+                SliceIdentity::Section(name) => {
+                    self.diff_visible("section", name)
+                        || matches!(item.target, Some(Target::Section(index)) if changed_sections.contains(&index))
+                }
                 SliceIdentity::Symbol(id) => self.diff_visible("symbol", id),
                 SliceIdentity::Unit(unit) => {
-                    a.symbols.iter().any(|s| {
-                        Some(s.section_index) == self.overview_section
-                            && unit_key(s) == *unit
-                            && self.diff_visible("symbol", &super::snapshots::symbol_key(s))
-                    }) || ambiguous_section
+                    changed_units.contains(unit) || ambiguous_section
                         || baseline_sizes.as_ref().is_some_and(|sizes| {
                             sizes.get(&item.identity).copied() != Some(Ok(item.size))
                         })
