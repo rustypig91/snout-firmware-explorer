@@ -219,7 +219,26 @@ pub(super) fn absolute_path(path: &str, root: Option<&std::path::Path>) -> Strin
     if path.is_empty() || path.starts_with('[') || path == "Unknown" || path == "Unknown source" {
         return path.into();
     }
-    let path = display_path(path).replace('\\', "/");
+    // Windows canonicalize adds a verbatim prefix to build roots. Normalize
+    // both inputs before joining, including reports opened on a different OS.
+    fn normalized(path: &str) -> String {
+        let path = path.replace('\\', "/");
+        if let Some(unc) = path.strip_prefix("//?/UNC/") {
+            return format!("//{unc}");
+        }
+        if let Some(drive) = path.strip_prefix("//?/") {
+            let bytes = drive.as_bytes();
+            if bytes.len() >= 3
+                && bytes[0].is_ascii_alphabetic()
+                && bytes[1] == b':'
+                && bytes[2] == b'/'
+            {
+                return drive.into();
+            }
+        }
+        path
+    }
+    let path = normalized(path);
     let absolute = path.starts_with('/')
         || (path.as_bytes().get(1) == Some(&b':') && path.as_bytes().get(2) == Some(&b'/'));
     let joined = if absolute {
@@ -227,9 +246,7 @@ pub(super) fn absolute_path(path: &str, root: Option<&std::path::Path>) -> Strin
     } else if let Some(root) = root {
         format!(
             "{}/{}",
-            root.to_string_lossy()
-                .replace('\\', "/")
-                .trim_end_matches('/'),
+            normalized(&root.to_string_lossy()).trim_end_matches('/'),
             path
         )
     } else {
@@ -414,6 +431,32 @@ mod tests {
             "[unattributed]"
         );
         assert_eq!(absolute_path("src/main.c", None), "src/main.c");
+    }
+
+    #[test]
+    fn absolute_tooltips_normalize_windows_verbatim_sources_and_build_roots() {
+        use super::absolute_path;
+        use std::path::Path;
+        for root in [r"C:\project\build", r"\\?\C:\project\build"] {
+            assert_eq!(
+                absolute_path(r"..\src\main.c", Some(Path::new(root))),
+                "C:/project/src/main.c"
+            );
+        }
+        for root in [r"\\server\share\build", r"\\?\UNC\server\share\build"] {
+            assert_eq!(
+                absolute_path(r"..\..\src\main.c", Some(Path::new(root))),
+                "//server/share/src/main.c"
+            );
+        }
+        assert_eq!(
+            absolute_path(r"\\?\C:\project\src\main.c", None),
+            "C:/project/src/main.c"
+        );
+        assert_eq!(
+            absolute_path(r"\\?\UNC\server\share\src\main.c", None),
+            "//server/share/src/main.c"
+        );
     }
 
     #[test]
