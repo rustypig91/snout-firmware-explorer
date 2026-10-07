@@ -256,6 +256,13 @@ fn compute_large(input: &LayoutInput) -> GraphLayout {
                     }
                 })
                 .fold(0.0, f32::max);
+            // Repeated directory headings need the same horizontal clearance
+            // as cards, otherwise long names overlap across wrapped bands.
+            let width = if input.grouped {
+                width.max(lane.chars().count() as f32 * 8.0)
+            } else {
+                width
+            };
             if input.grouped {
                 // Every wrapped band needs its own label to preserve directory
                 // ownership when a group spans several columns.
@@ -1291,4 +1298,43 @@ fn wrapped_directory_bands_each_keep_their_heading() {
         );
     }
     assert_eq!(geometry.headings.len(), src_bands.len() + 1);
+}
+
+#[test]
+fn wrapped_directory_headings_do_not_overlap() {
+    let directory = "project/generated/platform/very_long_directory_name";
+    let input = LayoutInput {
+        nodes: (0..301)
+            .map(|i| NodeSpec {
+                id: format!("unit{i:03}"),
+                directory: directory.into(),
+                size: egui::vec2(120.0, 50.0),
+            })
+            .collect(),
+        edges: vec![],
+        grouped: true,
+        ram: false,
+        vertical: false,
+    };
+    let geometry = compute(&input);
+    assert!(geometry.headings.len() > 1);
+    let headings: Vec<_> = geometry
+        .headings
+        .iter()
+        .map(|(label, center)| {
+            egui::Rect::from_center_size(
+                *center,
+                egui::vec2(label.chars().count() as f32 * 8.0, 24.0),
+            )
+        })
+        .collect();
+    for (i, heading) in headings.iter().enumerate() {
+        assert!(geometry.bounds.contains_rect(*heading));
+        for other in &headings[i + 1..] {
+            assert!(
+                !heading.intersects(*other),
+                "wrapped directory headings overlap"
+            );
+        }
+    }
 }
