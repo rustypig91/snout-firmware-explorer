@@ -2311,7 +2311,24 @@ fn sidebar_large_firmware_list_only_builds_visible_rows() {
         ctx.memory(|memory| memory.data.len()) < 200,
         "offscreen collapsed firmware widgets should not be constructed while loading"
     );
-    app.receiver = None;
+    // Recover the first header's persistent ID through the same scoped UI.
+    // An expanded row must still be found after it scrolls out of view.
+    let mut first_header = None;
+    let _ = ctx.run(Default::default(), |ctx| {
+        egui::SidePanel::left("build_artifacts").show(ctx, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.push_id(root.join("firmware_0000.elf"), |ui| {
+                    first_header = Some(ui.make_persistent_id("firmware_files"));
+                });
+            });
+        });
+    });
+    let first_header = first_header.unwrap();
+    let mut state = egui::collapsing_header::CollapsingState::load(&ctx, first_header)
+        .expect("the first firmware header should have stored its state");
+    state.set_open(true);
+    state.store(&ctx);
+    frame(&mut app, false);
     let mut output = frame(&mut app, true);
     for _ in 0..10 {
         output = frame(&mut app, true);
@@ -2322,6 +2339,19 @@ fn sidebar_large_firmware_list_only_builds_visible_rows() {
             egui::Shape::Text(t) if t.galley.text() == "firmware_1999.elf"
         )),
         "the last firmware must remain reachable by scrolling"
+    );
+    assert!(
+        egui::collapsing_header::CollapsingState::load(&ctx, first_header)
+            .unwrap()
+            .is_open()
+    );
+    app.receiver = None;
+    frame(&mut app, false);
+    assert!(
+        !egui::collapsing_header::CollapsingState::load(&ctx, first_header)
+            .unwrap()
+            .is_open(),
+        "offscreen inactive firmware must close when the background job finishes"
     );
 }
 

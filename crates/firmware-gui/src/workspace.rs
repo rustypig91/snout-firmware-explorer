@@ -576,7 +576,9 @@ impl Explorer {
                         let row_rect = egui::Rect::from_min_size(ui.next_widget_position(),
                             egui::vec2(ui.available_width(), height));
                         if !active && !ui.is_rect_visible(row_rect) {
-                            let id = ui.id().with(&artifact.path).with("firmware_files");
+                            // push_id hashes its salt into an Id before deriving the
+                            // child UI's ID. Match that scope when looking up state.
+                            let id = ui.id().with(egui::Id::new(&artifact.path)).with("firmware_files");
                             let expanded = egui::collapsing_header::CollapsingState::load(ui.ctx(), id)
                                 .is_some_and(|mut state| {
                                     if self.receiver.is_none() && state.is_open() {
