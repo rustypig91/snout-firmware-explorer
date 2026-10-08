@@ -1,1 +1,113 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256"><rect width="256" height="256" rx="48" fill="#18212b"/><rect x="48" y="60" width="160" height="136" rx="56" fill="#ec929d"/><ellipse cx="95" cy="128" rx="18" ry="28" fill="#18212b"/><ellipse cx="161" cy="128" rx="18" ry="28" fill="#18212b"/></svg>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   viewBox="0 0 251.68567 180.34642"
+   role="img"
+   aria-label="Minimal green pig logo"
+   version="1.1"
+   id="svg7"
+   sodipodi:docname="snout.svg"
+   inkscape:version="1.4.4 (dcaf3e7d9e, 2026-05-05)"
+   width="251.68567"
+   height="180.34642"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs7" />
+  <sodipodi:namedview
+     id="namedview7"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="2.2179951"
+     inkscape:cx="82.732373"
+     inkscape:cy="94.905528"
+     inkscape:window-width="1853"
+     inkscape:window-height="1011"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg7" />
+  <g
+     stroke="#36f3a0"
+     stroke-width="7"
+     stroke-linecap="round"
+     stroke-linejoin="round"
+     id="g3"
+     transform="matrix(1.0256405,0,0,1.0256405,-4.5208032,-42.269287)">
+    <!-- Two fully enclosed, tapered pig ears, not antenna strokes -->
+    <path
+       d="M 83.20453,74.923922 C 70.034506,55.168887 63.449494,43.096364 53.571977,45.291368 42.596956,47.486373 32.719439,66.143907 10.769399,72.728918 c -6.5850118,2.195004 1.097502,12.072522 7.682514,20.852534 6.585011,8.780018 6.585011,20.852538 14.267526,21.950038 18.657533,1.0975 37.315067,-24.145038 50.485091,-40.607568 z"
+       fill="#123F36"
+       id="path1"
+       style="fill:#123f36;fill-opacity:0;stroke-width:7.68252" />
+    <path
+       d="m 171.0047,74.923922 c 13.17002,-19.755035 19.75503,-31.827558 29.63254,-29.632554 10.97502,2.195005 20.85255,20.852539 42.80259,27.43755 6.58501,2.195004 -1.09751,12.072522 -7.68252,20.852534 -6.58501,8.780018 -6.58501,20.852538 -14.26752,21.950038 -18.65754,1.0975 -37.31507,-24.145038 -50.48509,-40.607568 z"
+       fill="#123F36"
+       id="path2"
+       style="fill:#123f36;fill-opacity:0;stroke-width:7.68252" />
+    <!-- Head silhouette -->
+    <path
+       d="m 46.287187,111.9998 c -4.390008,12.07253 -5.885235,18.89671 -5.885235,35.35924 0,41.70508 23.047542,63.65512 63.655128,65.85013 h 46.09507 c 40.60758,-2.19501 63.65512,-24.14505 63.65512,-65.85013 0,-16.46253 -1.84512,-23.28671 -6.23513,-35.35924 M 80.699273,78.041485 C 112.16101,61.944788 141.26098,60.982594 172.7227,77.07929"
+       fill="none"
+       id="path3"
+       sodipodi:nodetypes="csccsccc"
+       style="stroke-width:7.68252" />
+    <!-- Snout -->
+    <rect
+       x="77.717018"
+       y="133.09152"
+       width="98.775177"
+       height="57.070103"
+       rx="27.43755"
+       fill="none"
+       id="rect3"
+       style="stroke-width:7.68252" />
+  </g>
+  <g
+     fill="#36f3a0"
+     id="g6"
+     transform="matrix(1.1256425,0,0,1.1256425,-18.239407,-50.973106)">
+    <circle
+       cx="94"
+       cy="116"
+       r="9"
+       id="circle3" />
+    <circle
+       cx="162"
+       cy="116"
+       r="9"
+       id="circle4" />
+    <circle
+       cx="110"
+       cy="155"
+       r="7"
+       id="circle5" />
+    <circle
+       cx="146"
+       cy="155"
+       r="7"
+       id="circle6" />
+  </g>
+  <!-- Folds give each ear a broad, recognizable interior -->
+  <g
+     fill="none"
+     stroke="#36f3a0"
+     stroke-width="3"
+     stroke-linecap="round"
+     opacity="0.8"
+     id="g7"
+     transform="matrix(1.1256425,0,0,1.1256425,-18.239407,-50.973106)">
+    <path
+       d="M 43,101 Q 57,94 66,70"
+       id="path6" />
+    <path
+       d="M 213,101 Q 199,94 190,70"
+       id="path7" />
+  </g>
+</svg>
