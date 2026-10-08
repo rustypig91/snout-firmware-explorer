@@ -503,23 +503,13 @@ fn gnu_wrapped_output_names_and_input_sections_are_distinguished() {
 
 #[test]
 fn lld_section_content_can_select_dependency_map_without_capacities() {
-    use goblin::elf::{section_header::SHF_ALLOC, Elf};
     let dir = Temp::new();
-    let bytes = include_bytes!("../../../fixtures/build/cortex-m.elf");
-    fs::write(dir.0.join("app.elf"), bytes).unwrap();
-    let elf = Elf::parse(bytes).unwrap();
-    let mut text = String::from("VMA LMA Size Align Out In Symbol\n");
-    for section in &elf.section_headers {
-        if section.sh_flags & u64::from(SHF_ALLOC) != 0 && section.sh_size != 0 {
-            text.push_str(&format!(
-                "{:x} {:x} {:x} 4 {}\n",
-                section.sh_addr,
-                section.sh_addr,
-                section.sh_size,
-                elf.shdr_strtab.get_at(section.sh_name).unwrap()
-            ));
-        }
-    }
+    fs::write(
+        dir.0.join("app.elf"),
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+    )
+    .unwrap();
+    let mut text = matching_section_map(firmware_analysis_core::map::MapFormat::LlvmLld);
     text.push_str(
         "Cross Reference Table\nSymbol File\nReset_Handler main.o\ndiagnose diag.o\n main.o\n",
     );
@@ -563,10 +553,16 @@ fn matching_section_map(format: firmware_analysis_core::map::MapFormat) -> Strin
         .filter(|section| section.address != 0 && section.size != 0)
     {
         match format {
-            MapFormat::GnuLd => text.push_str(&format!(
-                "{} 0x{:x} 0x{:x}\n",
-                section.name, section.address, section.size
-            )),
+            MapFormat::GnuLd => {
+                text.push_str(&format!(
+                    "{} 0x{:x} 0x{:x}",
+                    section.name, section.address, section.size
+                ));
+                if let Some(load) = section.load_address {
+                    text.push_str(&format!(" load address 0x{load:x}"));
+                }
+                text.push('\n');
+            }
             MapFormat::TexasCgt => {
                 let origin = section.load_address.unwrap_or(section.address);
                 // Exercise wrapped names and ignore nested inputs.
@@ -699,4 +695,31 @@ fn ti_common_sections_preserve_run_addresses_and_custom_names() {
     assert_eq!(rows[1].name, "abc");
     assert_eq!(rows[2].address, 0x20000020);
     assert_eq!(rows[2].load_address, Some(0x08000138));
+}
+
+#[test]
+fn conflicting_load_addresses_reject_maps_with_matching_runtime_sections() {
+    use firmware_analysis_core::map::MapFormat;
+    for format in [MapFormat::GnuLd, MapFormat::TexasCgt, MapFormat::LlvmLld] {
+        let dir = Temp::new();
+        let elf = dir.0.join("app.elf");
+        fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+        let map = dir.0.join("app.map");
+        let text = matching_section_map(format);
+        fs::write(&map, &text).unwrap();
+        let build = scan_folder(&dir.0).unwrap();
+        assert_eq!(build.matching_map(&elf), Some(map.as_path()), "{format:?}");
+        let stale = match format {
+            MapFormat::GnuLd => text.replace("load address 0x8000598", "load address 0x8001598"),
+            MapFormat::TexasCgt => text.replace("0 08000598", "0 08001598"),
+            MapFormat::LlvmLld => text.replace("20000000 8000598", "20000000 8001598"),
+            _ => unreachable!(),
+        };
+        assert_ne!(text, stale, "{format:?}");
+        fs::write(&map, stale).unwrap();
+        assert!(build.matching_map(&elf).is_none(), "{format:?}");
+        let report = analyze_build_firmware(&build, &elf, None).unwrap();
+        assert!(report.options.regions.is_empty());
+        assert!(report.dependencies.map_path.is_none());
+    }
 }

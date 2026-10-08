@@ -28,6 +28,44 @@ fn contains(start: u64, size: u64, address: u64, len: u64) -> bool {
             .is_some_and(|(a, b)| a <= b)
 }
 
+/// Use the same validated segment evidence for accounting and map matching.
+pub(crate) fn section_load_address(
+    elf: &Elf<'_>,
+    section: &SectionHeader,
+    name: &str,
+) -> Result<Option<u64>, Error> {
+    if section.sh_flags & u64::from(SHF_ALLOC) == 0
+        || section.sh_type == SHT_NOBITS
+        || section.sh_size == 0
+    {
+        return Ok(None);
+    }
+    let mut load_address = None;
+    for segment in elf.program_headers.iter().filter(|p| p.p_type == PT_LOAD) {
+        if contains(
+            segment.p_vaddr,
+            segment.p_memsz,
+            section.sh_addr,
+            section.sh_size,
+        ) && contains(
+            segment.p_offset,
+            segment.p_filesz,
+            section.sh_offset,
+            section.sh_size,
+        ) && section.sh_addr - segment.p_vaddr == section.sh_offset - segment.p_offset
+        {
+            let address = checked_end(segment.p_paddr, section.sh_offset - segment.p_offset)?;
+            if load_address.is_some_and(|old| old != address) {
+                return Err(Error::Unsupported(format!(
+                    "Ambiguous load addresses for {name}"
+                )));
+            }
+            load_address = Some(address);
+        }
+    }
+    Ok(load_address)
+}
+
 fn region_kind(options: &AnalysisOptions, address: u64, size: u64) -> Option<MemoryKind> {
     options
         .regions
@@ -145,25 +183,9 @@ pub fn analyze_bytes(
         } else {
             0
         };
-        let mut load_address = None;
-        if load_size != 0 {
-            for ph in elf.program_headers.iter().filter(|p| p.p_type == PT_LOAD) {
-                if contains(ph.p_vaddr, ph.p_memsz, sh.sh_addr, sh.sh_size)
-                    && contains(ph.p_offset, ph.p_filesz, sh.sh_offset, sh.sh_size)
-                    && sh.sh_addr - ph.p_vaddr == sh.sh_offset - ph.p_offset
-                {
-                    let address = checked_end(ph.p_paddr, sh.sh_offset - ph.p_offset)?;
-                    if load_address.is_some_and(|old| old != address) {
-                        return Err(Error::Unsupported(format!(
-                            "Ambiguous load addresses for {name}"
-                        )));
-                    }
-                    load_address = Some(address);
-                }
-            }
-            if load_address.is_none() {
-                warnings.push(format!("{name}: no matching PT_LOAD segment; load address is unavailable and payload classification is inferred from section flags."));
-            }
+        let load_address = section_load_address(&elf, sh, &name)?;
+        if load_size != 0 && load_address.is_none() {
+            warnings.push(format!("{name}: no matching PT_LOAD segment; load address is unavailable and payload classification is inferred from section flags."));
         }
         let run_region = region_kind(options, sh.sh_addr, runtime_size);
         let load_region = load_address.and_then(|a| region_kind(options, a, load_size));
