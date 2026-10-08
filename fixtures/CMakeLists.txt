@@ -1,6 +1,15 @@
 cmake_minimum_required(VERSION 3.20)
 project(sensor_monitor_fixture LANGUAGES C)
 
+# These reference fixtures require GNU ld's physical memory configuration and
+# GCC's file:line:column:function stack records. LLVM fixtures live in maps/.
+if(NOT CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    message(FATAL_ERROR
+        "The reference fixtures require GNU Arm GCC (arm-none-eabi-gcc). "
+        "Clang/lld output does not provide the required map capacities or stack record format."
+    )
+endif()
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -46,14 +55,10 @@ function(add_fixture_image target objects)
         -mthumb
         -nostdlib
         -Wl,--build-id=none
+        -Wl,--cref,--no-demangle
         "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/src/cortex-m.ld"
         "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/${target}.map"
     )
-    if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-        target_link_options(${target} PRIVATE -Wl,--cref,--no-demangle)
-    else()
-        target_link_options(${target} PRIVATE -fuse-ld=lld)
-    endif()
 endfunction()
 
 # Baseline and stripped images share exactly the same compiled objects.

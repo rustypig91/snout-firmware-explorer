@@ -1,3 +1,3 @@
-src/diag.c:11:diagnostics_record_fault	4	static
-src/diag.c:17:diagnostics_status	0	static
-src/diag.c:22:diagnose	56	static
+/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/diag.c:11:6:diagnostics_record_fault	16	static
+/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/diag.c:17:10:diagnostics_status	4	static
+/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/diag.c:22:36:diagnose	56	static

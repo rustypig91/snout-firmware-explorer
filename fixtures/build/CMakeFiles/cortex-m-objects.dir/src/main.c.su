@@ -1,7 +1,7 @@
-src/main.c:15:ram_function	4	static
-src/main.c:20:weak_callback	0	static
-src/main.c:29:_Z12cpp_functionj	4	static
-src/main.c:69:main	8	static
-src/main.c:34:application_init	16	static
-src/main.c:46:application_step	16	static
-src/main.c:79:Reset_Handler	8	static
+/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/main.c:15:58:ram_function	16	static
+/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/main.c:20:38:weak_callback	4	static
+/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/main.c:29:10:cpp_function	16	static
+/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/main.c:34:13:application_init	16	static
+/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/main.c:46:13:application_step	16	static
+/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/main.c:69:5:main	8	static
+/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/main.c:79:6:Reset_Handler	8	static

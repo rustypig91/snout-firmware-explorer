@@ -1,4 +1,4 @@
-"""Regenerate the committed CMake sensor-monitor build using GNU Arm GCC or Clang.
+"""Regenerate the committed CMake sensor-monitor build using GNU Arm GCC.
 
 Run from the repository root:
     python fixtures/generate.py --gcc arm-none-eabi-gcc
@@ -15,15 +15,29 @@ import subprocess
 root = Path(__file__).resolve().parent
 parser = argparse.ArgumentParser()
 parser.add_argument(
-    "--gcc", help="GNU Arm GCC executable; otherwise use clang with ARM target support"
+    "--gcc", default="arm-none-eabi-gcc", help="GNU Arm GCC executable (default: arm-none-eabi-gcc)"
 )
 args = parser.parse_args()
-compiler = args.gcc or shutil.which("clang")
+compiler = shutil.which(args.gcc)
 if not compiler:
-    raise SystemExit("Install clang + ld.lld or pass --gcc arm-none-eabi-gcc")
-compiler = str(Path(shutil.which(compiler) or compiler).resolve())
+    raise SystemExit("Install GNU Arm GCC or pass --gcc /path/to/arm-none-eabi-gcc")
+compiler = str(Path(compiler).resolve())
 
 build = root / "build"
+# Compiler changes need fresh CMake identification, while the committed object
+# and stack-report directories must remain intact until the build replaces them.
+cache = build / "CMakeCache.txt"
+if cache.exists():
+    for line in cache.read_text().splitlines():
+        if line.startswith(("CMAKE_C_COMPILER:", "FIXTURE_C_COMPILER:")):
+            previous = line.split("=", 1)[1]
+            if Path(previous).resolve() != Path(compiler):
+                cache.unlink()
+                for directory in (build / "CMakeFiles").glob("[0-9]*"):
+                    if directory.is_dir():
+                        shutil.rmtree(directory)
+            break
+
 subprocess.run(
     [
         "cmake",
@@ -35,6 +49,7 @@ subprocess.run(
         "Ninja",
         f"-DCMAKE_TOOLCHAIN_FILE={root / 'cmake' / 'arm-none-eabi.cmake'}",
         f"-DFIXTURE_C_COMPILER={compiler}",
+        f"-DCMAKE_C_COMPILER={compiler}",
     ],
     check=True,
 )

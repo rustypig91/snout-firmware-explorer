@@ -48,19 +48,19 @@ clang-format -i fixtures/src/*.c fixtures/src/*.h
 clang-format --dry-run --Werror fixtures/src/*.c fixtures/src/*.h
 ```
 
-The committed ELF files were generated with xPack GNU Arm GCC 14.2.1-1.1 for Cortex-M3, Thumb, `-O0 -g -gdwarf-4 -fstack-usage`. Warnings are enabled and treated as errors. Run from the repository root:
+The committed ELF files were generated with GNU Arm GCC 14.2.1 for Cortex-M3, Thumb, `-O0 -g -gdwarf-4 -fstack-usage`. Warnings are enabled and treated as errors. Run from the repository root:
 
 ```sh
 python fixtures/generate.py --gcc arm-none-eabi-gcc
 ```
 
-Alternatively, Clang with ARM target support and `ld.lld` can regenerate the images:
+The generator defaults to `arm-none-eabi-gcc`, so the same build can be run with:
 
 ```sh
 python fixtures/generate.py
 ```
 
-The generator configures an actual out-of-source CMake/Ninja build using [CMakeLists.txt](CMakeLists.txt) and the [ARM toolchain file](cmake/arm-none-eabi.cmake). Regeneration requires CMake 3.20 or newer, Ninja, and the selected compiler. The committed artifact snapshot has the same target layout that CMake generates:
+The generator configures an actual out-of-source CMake/Ninja build using [CMakeLists.txt](CMakeLists.txt) and the [ARM toolchain file](cmake/arm-none-eabi.cmake). Regeneration requires CMake 3.20 or newer, Ninja, and GNU Arm GCC. CMake rejects other compilers: these reference fixtures need GNU ld memory capacities and cross references, plus GCC's `file:line:column:function` stack records. LLVM lld coverage uses the separate fixtures in `maps/`. The committed artifact snapshot has the same target layout that CMake generates:
 
 ```text
 fixtures/
