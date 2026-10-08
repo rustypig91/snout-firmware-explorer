@@ -4457,3 +4457,109 @@ fn dashboard_memory_controls_fit_at_minimum_window_size() {
             && shape.clip_rect.contains_rect(egui::Rect::from_min_size(text.pos, text.galley.size()))
     )), "Region navigation must be visible");
 }
+
+#[test]
+fn firmware_dropdown_scrolling_keeps_the_last_row_at_the_bottom() {
+    use firmware_analysis_core::build::{Artifact, ArtifactKind, BuildFolder};
+    let mut app = Explorer {
+        build: Some(Arc::new(BuildFolder {
+            root: PathBuf::from("/build"),
+            artifacts: (0..1000)
+                .map(|i| Artifact {
+                    path: PathBuf::from(format!("/build/app_{i:04}.elf")),
+                    kind: ArtifactKind::Firmware,
+                })
+                .collect(),
+            warnings: vec![],
+        })),
+        ..Default::default()
+    };
+    let ctx = egui::Context::default();
+    shell::configure_style(&ctx);
+    let frame = |app: &mut Explorer, events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 600.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.firmware_selector(ui));
+            },
+        )
+    };
+    frame(&mut app, vec![]);
+    let pos = egui::pos2(100.0, 30.0);
+    for pressed in [true, false] {
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    for _ in 0..3 {
+        frame(&mut app, vec![]);
+    }
+    frame(
+        &mut app,
+        vec![
+            egui::Event::PointerMoved(egui::pos2(100.0, 130.0)),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, -100000.0),
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    let mut output = egui::FullOutput::default();
+    for _ in 0..30 {
+        output = frame(&mut app, vec![]);
+    }
+    let (row, clip) = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "app_0999.elf" => Some((
+                egui::Rect::from_min_size(text.pos, text.galley.size()),
+                shape.clip_rect,
+            )),
+            _ => None,
+        })
+        .expect("Last firmware should be visible after scrolling to the end");
+    assert!(clip.contains_rect(row));
+    assert!(
+        clip.bottom() - row.bottom() < 26.0,
+        "Unexpected blank space below final row: row {row:?}, clip {clip:?}"
+    );
+    let pos = row.center();
+    frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
+    frame(&mut app, vec![]);
+    for pressed in [true, false] {
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    assert!(
+        app.receiver.is_some(),
+        "The final firmware must remain selectable"
+    );
+}

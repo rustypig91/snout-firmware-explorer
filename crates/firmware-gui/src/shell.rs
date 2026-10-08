@@ -375,9 +375,16 @@ impl Explorer {
                         if firmware.is_empty() {
                             ui.weak("No firmware images found in this build folder.");
                         }
+                        // Frame-free firmware buttons use the text height or minimum
+                        // interaction height. Virtual rows must use the same stride.
+                        let row_height = ui
+                            .spacing()
+                            .interact_size
+                            .y
+                            .max(ui.text_style_height(&egui::TextStyle::Button));
                         egui::ScrollArea::vertical().max_height(300.0).show_rows(
                             ui,
-                            26.0,
+                            row_height,
                             firmware.len(),
                             |ui, range| {
                                 for index in range {

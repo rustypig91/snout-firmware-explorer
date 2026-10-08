@@ -969,7 +969,7 @@ impl Explorer {
                                     egui::pos2(row.left(), row.top() + 30.0),
                                     egui::Align2::LEFT_TOP,
                                     "Selected",
-                                    egui::FontId::proportional(11.0),
+                                    egui::FontId::proportional(super::shell::MIN_TEXT_SIZE),
                                     super::views::ACCENT,
                                 );
                             }
@@ -3302,6 +3302,20 @@ mod tests {
         let selected = shell_frame(&ctx, &mut app, vec![]);
         assert!(selected.shapes.iter().any(|shape| matches!(&shape.shape,
             egui::Shape::Text(text) if text.galley.text() == "Selected")));
+        for shape in &selected.shapes {
+            if let egui::Shape::Text(text) = &shape.shape {
+                assert!(
+                    text.galley
+                        .job
+                        .sections
+                        .iter()
+                        .all(|section| section.format.font_id.size
+                            >= super::super::shell::MIN_TEXT_SIZE),
+                    "Baseline text is too small: {}",
+                    text.galley.text()
+                );
+            }
+        }
 
         click_shell_text(&ctx, &mut app, "saved baseline");
         assert!(app.snapshot_label().is_none());
