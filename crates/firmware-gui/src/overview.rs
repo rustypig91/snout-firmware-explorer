@@ -160,7 +160,7 @@ impl Explorer {
                         .cmp(&metric.value(a.files[i].usage))
                         .then_with(|| a.files[i].path.cmp(&a.files[j].path))
                 });
-                files.truncate(5);
+                files.truncate(10);
                 self.top_files[slot] = files;
                 let mut symbols: Vec<_> = (0..a.symbols.len())
                     .filter(|&i| {
@@ -179,6 +179,14 @@ impl Explorer {
                         .then_with(|| a.symbols[i].name.cmp(&a.symbols[j].name))
                         .then_with(|| a.symbols[i].address.cmp(&a.symbols[j].address))
                 });
+                if slot == 0 {
+                    self.top_functions = symbols
+                        .iter()
+                        .copied()
+                        .filter(|&i| a.symbols[i].kind == "Function")
+                        .take(10)
+                        .collect();
+                }
                 symbols.truncate(5);
                 self.top_symbols[slot] = symbols;
             }
@@ -387,7 +395,19 @@ impl Explorer {
                 let total = self.snapshot_bytes("totals", "", field, total);
                 let tip = format!("{help}\n{label}: {total}");
                 let Some(mut index) = self.overview_region(a, slot, kind) else {
-                    ui.weak("Capacity unknown").on_hover_text(tip);
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    for (text, color) in [
+                        (label, MUTED),
+                        (total.as_str(), ui.visuals().text_color()),
+                        ("Capacity unknown", MUTED),
+                    ] {
+                        let (line, response) = ui.allocate_exact_size(
+                            egui::vec2(ui.available_width(), 16.0),
+                            egui::Sense::hover(),
+                        );
+                        clipped_text(ui, line.min, text, line.width(), 12.0, color);
+                        response.on_hover_text(&tip);
+                    }
                     return;
                 };
                 let selected = a.options.regions[index].name.clone();
@@ -425,31 +445,17 @@ impl Explorer {
             .clicked()
         {
             self.change_view(View::MemoryMap);
+            self.search.clear();
+            self.selected_region = None;
         }
     }
 
     fn compact_ranking(&mut self, ui: &mut egui::Ui, a: &Analysis, functions: bool) {
         let paths = self.source_paths(a);
-        let mut indices: Vec<_> = if functions {
-            (0..a.symbols.len())
-                .filter(|&i| {
-                    a.symbols[i].kind == "Function"
-                        && a.symbols[i].usage.flash > 0
-                        && self.diff_visible_in_view(
-                            "symbol",
-                            &symbol_key(&a.symbols[i]),
-                            View::Overview,
-                        )
-                })
-                .collect()
+        let indices = if functions {
+            self.top_functions.clone()
         } else {
-            (0..a.files.len())
-                .filter(|&i| {
-                    a.files[i].path != "[unattributed]"
-                        && a.files[i].usage.flash > 0
-                        && self.diff_visible_in_view("file", &a.files[i].path, View::Overview)
-                })
-                .collect()
+            self.top_files[0].clone()
         };
         let flash = |i: usize| {
             if functions {
@@ -458,7 +464,6 @@ impl Explorer {
                 a.files[i].usage.flash
             }
         };
-        indices.sort_by_key(|&i| (std::cmp::Reverse(flash(i)), i));
         let maximum = indices.first().map_or(1, |&i| flash(i)).max(1);
         ui.horizontal(|ui| {
             ui.weak(if functions {

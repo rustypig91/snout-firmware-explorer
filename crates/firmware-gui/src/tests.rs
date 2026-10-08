@@ -4084,6 +4084,7 @@ fn overview_memory_dropdown_and_regions_link_work_and_unknown_capacity_has_no_ba
     assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
         egui::Shape::Text(t) if t.galley.text() == "0.0%"
     )));
+    app.tab_options[View::MemoryMap as usize].search = "old filter".into();
     click(
         &mut app,
         text_position(
@@ -4092,6 +4093,7 @@ fn overview_memory_dropdown_and_regions_link_work_and_unknown_capacity_has_no_ba
         ),
     );
     assert!(app.view == View::MemoryMap);
+    assert!(app.search.is_empty());
 
     a.options.regions.clear();
     app.ensure_region_cache(&a);
@@ -4108,6 +4110,17 @@ fn overview_memory_dropdown_and_regions_link_work_and_unknown_capacity_has_no_ba
             .count(),
         2
     );
+    for label in [
+        "Flash payload".to_owned(),
+        "Static RAM".to_owned(),
+        firmware_analysis_core::format_bytes(a.totals.flash),
+        firmware_analysis_core::format_bytes(a.totals.ram),
+    ] {
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(t) if t.galley.text() == label
+                && shape.clip_rect.contains_rect(egui::Rect::from_min_size(t.pos, t.galley.size()))
+        )), "Missing known usage without map capacities: {label}");
+    }
     assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
         egui::Shape::Rect(r) if r.fill == egui::Color32::from_rgb(45, 60, 79)
     )));
@@ -4632,4 +4645,86 @@ fn firmware_dropdown_scrolling_keeps_the_last_row_at_the_bottom() {
         app.receiver.is_some(),
         "The final firmware must remain selectable"
     );
+}
+
+#[test]
+fn dashboard_rankings_show_ten_functions_and_refresh_after_report_replacement() {
+    let mut analysis = firmware_analysis_core::analyze_bytes(
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        "fixture.elf",
+        &Default::default(),
+    )
+    .unwrap();
+    let template = analysis
+        .symbols
+        .iter()
+        .find(|s| s.kind == "Function")
+        .unwrap()
+        .clone();
+    analysis.symbols = (0..12)
+        .map(|index| {
+            let mut symbol = template.clone();
+            symbol.name = format!("ranked_function_{index:02}");
+            symbol.demangled_name = symbol.name.clone();
+            symbol.usage.flash = 100 + index;
+            symbol
+        })
+        .collect();
+    let mut constant = template;
+    constant.name = "large_constant".into();
+    constant.demangled_name = constant.name.clone();
+    constant.kind = "Constant".into();
+    constant.usage.flash = 1_000_000;
+    analysis.symbols.push(constant);
+    let ctx = egui::Context::default();
+    shell::configure_style(&ctx);
+    let mut app = Explorer {
+        analysis: Some(Arc::new(analysis)),
+        ..Default::default()
+    };
+    let frame = |app: &mut Explorer| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1920.0, 1200.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| app.show(ctx),
+        )
+    };
+    frame(&mut app);
+    let output = frame(&mut app);
+    let names: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(t) if t.galley.text().starts_with("ranked_function_") => {
+                Some(t.galley.text().to_owned())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        names,
+        (2..12)
+            .rev()
+            .map(|i| format!("ranked_function_{i:02}"))
+            .collect::<Vec<_>>()
+    );
+    assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+        egui::Shape::Text(t) if t.galley.text() == "large_constant"
+    )));
+    let mut replacement = (**app.analysis.as_ref().unwrap()).clone();
+    replacement.symbols[0].usage.flash = 2_000_000;
+    app.analysis = Some(Arc::new(replacement));
+    let output = frame(&mut app);
+    let first = output.shapes.iter().find_map(|shape| match &shape.shape {
+        egui::Shape::Text(t) if t.galley.text().starts_with("ranked_function_") => {
+            Some(t.galley.text())
+        }
+        _ => None,
+    });
+    assert_eq!(first, Some("ranked_function_00"));
 }
