@@ -3449,6 +3449,50 @@ mod tests {
     }
 
     #[test]
+    fn dashboard_rankings_open_address_only_symbol_changes() {
+        use super::super::View;
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        let mut current = (**app.analysis.as_ref().unwrap()).clone();
+        let mut symbol = current
+            .symbols
+            .iter()
+            .find(|s| s.kind == "Function" && s.usage.flash > 0 && s.source_file.is_some())
+            .unwrap()
+            .clone();
+        symbol.name = "dashboard_moved_function".into();
+        symbol.demangled_name = symbol.name.clone();
+        let owner = symbol.source_file.clone().unwrap();
+        current.symbols = vec![symbol];
+        current.files.retain(|f| f.path == owner);
+        app.analysis = Some(Arc::new(current));
+        app.take_snapshot("baseline").unwrap();
+        app.select_snapshot(Some("baseline".into())).unwrap();
+        let mut current = (**app.analysis.as_ref().unwrap()).clone();
+        current.symbols[0].address += 16;
+        current.symbols[0].normalized_address += 16;
+        app.analysis = Some(Arc::new(current));
+        app.sync_snapshot_comparison();
+        let display = app.baseline_display_analysis().unwrap();
+        let file_label = app.source_paths(&display).short(&owner);
+        let ctx = egui::Context::default();
+        super::super::shell::configure_style(&ctx);
+        for label in ["dashboard_moved_function", file_label.as_str()] {
+            app.change_view(View::Overview);
+            app.show_address_changes[View::Symbols as usize] = false;
+            click_shell_text(&ctx, &mut app, label);
+            assert!(app.view == View::Symbols);
+            shell_frame(&ctx, &mut app, vec![]);
+            assert_eq!(
+                app.visible_rows, 1,
+                "Drilldown from {label} hides its symbol"
+            );
+        }
+    }
+
+    #[test]
     fn overview_contributors_do_not_depend_on_the_previous_tabs_address_filter() {
         use super::super::View;
         let directory = tempfile::tempdir().unwrap();

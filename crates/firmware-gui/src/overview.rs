@@ -580,6 +580,11 @@ impl Explorer {
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .clicked();
             if clicked {
+                // Overview includes address-only differences. Keep those symbols
+                // visible in the destination table when drilling into a ranking.
+                if self.diffs_active() {
+                    self.show_address_changes[View::Symbols as usize] = true;
+                }
                 if functions {
                     self.change_view(View::Symbols);
                     self.search = name;
