@@ -21,10 +21,10 @@ Install a current stable Rust toolchain. Windows builds need the Visual Studio C
 
 ```sh
 cargo build --workspace --locked
-cargo run -p firmware-gui -- fixtures/build --elf cortex-m.elf
+cargo run -p snout -- fixtures/build --elf cortex-m.elf
 ```
 
-Pass `--elf FILE` to select firmware automatically after the folder scan. Relative file paths are resolved inside the supplied build folder. You can also open an ELF directly: `firmware-gui fixtures/build/cortex-m.elf`. With no path, Snout opens the last build folder and restores the saved workspace. Opening the same build folder without an explicit ELF selection restores the last selected firmware if it is still present. An explicit ELF selection takes priority; a missing saved ELF leaves the folder open for selection.
+Pass `--elf FILE` to select firmware automatically after the folder scan. Relative file paths are resolved inside the supplied build folder. You can also open an ELF directly: `snout fixtures/build/cortex-m.elf`. With no path, Snout opens the last build folder and restores the saved workspace. Opening the same build folder without an explicit ELF selection restores the last selected firmware if it is still present. An explicit ELF selection takes priority; a missing saved ELF leaves the folder open for selection.
 
 **Menu** is anchored at the bottom-left of the sidebar and contains folder, configuration, update, analysis-note, support and About actions. Select **Open build folder**, press Ctrl+O, or drag a folder into the window. **Menu > Open recent build folder** remembers the five most recently opened folders across restarts. Recent-folder entries show complete paths on one line. The submenu sizes itself to the longest path within the space beside the parent menu; paths wider than that space can be scrolled horizontally. Reopening a folder moves it to the top without adding a duplicate. The application recursively scans for linked ELF images (including `.elf`, `.axf`, `.out` and extensionless images), linker maps (`.map`) and stack reports (`.su`). The header’s ELF dropdown lists each firmware filename above its full path in smaller muted text, matching the selected firmware in the header. Long paths in the header and dropdown are truncated at the start with an ellipsis, preserving the filename and final folders; hovering shows the complete path. Select an image to analyze it; selection is disabled during background loads. **Build files**, directly below **Overview** in the left sidebar, opens a dedicated selection tab for the current ELF. Two bordered panels separate the linker map from compiler stack reports, with a shared search field and selected/report status. Clicking a map filename or its radio button selects that map directly; clicking the active map does nothing. Stack-report filenames and folder checkboxes toggle inclusion. The selected map supplies both physical memory regions and supported symbol dependencies; choosing another map replaces both inputs. **No map selected** uses ELF inference and clears imported dependencies. Missing cross references leave ELF-derived units visible with an explanation. Legacy independently saved dependency-map choices are ignored; existing memory-map choices remain valid. Files are not opened as text inside the application. Use the sidebar to switch views. Build files retains folder-scan notes, including unreadable directories and artifacts, before and after firmware selection. Folders without firmware list supporting files but require firmware selection before they can be applied. Failed selections retain the last successful firmware report. Select **Menu > Refresh**, click the reload icon at the top right, or press F5 after rebuilding. The header reload button is replaced by the analysis spinner while loading and is disabled until a build folder is open. A background worker checks only the selected ELF’s metadata every two seconds, without reading file contents or rescanning the folder. A detected change to an available file turns the reload icon amber and adds a small dot; its tooltip explains that the analysis may be stale. The indicator remains until a successful ELF reload, including through failed refreshes, but is hidden while the file is missing or its metadata is unavailable. Checks continue during those periods so a changed file is indicated when it reappears. Checks stop when no firmware is selected. The comparison uses file size and modification/creation timestamps, plus file identity and change timestamps on Unix; changes preserving all tracked metadata may go undetected. Maps and stack reports are not monitored, and changes never trigger automatic analysis. Menu shortcut hints also show **Ctrl+O** to open a build folder and **F1** for About.
 
@@ -55,13 +55,13 @@ Cross references include functions, global data, and function addresses, and may
 
 
 ```sh
-cargo run -p firmware-cli -- analyze fixtures/build/cortex-m.elf
-cargo run -p firmware-cli -- files fixtures/build/cortex-m.elf
-cargo run -p firmware-cli -- symbols fixtures/build/cortex-m.elf
-cargo run -p firmware-cli -- diff fixtures/build/cortex-m.elf fixtures/build/cortex-m-grown.elf
-cargo run -p firmware-cli -- stack fixtures/build/cortex-m.elf --stack-usage fixtures/build/CMakeFiles/cortex-m-objects.dir/src
-cargo run -p firmware-cli -- analyze fixtures/build/cortex-m.elf --format json
-cargo run -p firmware-cli -- analyze fixtures/build/cortex-m.elf --map fixtures/build/cortex-m.map --format json
+cargo run -p snout-cli -- analyze fixtures/build/cortex-m.elf
+cargo run -p snout-cli -- files fixtures/build/cortex-m.elf
+cargo run -p snout-cli -- symbols fixtures/build/cortex-m.elf
+cargo run -p snout-cli -- diff fixtures/build/cortex-m.elf fixtures/build/cortex-m-grown.elf
+cargo run -p snout-cli -- stack fixtures/build/cortex-m.elf --stack-usage fixtures/build/CMakeFiles/cortex-m-objects.dir/src
+cargo run -p snout-cli -- analyze fixtures/build/cortex-m.elf --format json
+cargo run -p snout-cli -- analyze fixtures/build/cortex-m.elf --map fixtures/build/cortex-m.map --format json
 ```
 
 CLI `analyze`, `files`, `symbols`, and `stack` accept `--map FILE`. Maps supply physical memory regions (GNU ld/TI CGT) and dependency cross references (GNU ld/LLVM lld with `--cref`). JSON reports retain the imported map path, source/object evidence, connecting symbols, and limitations. LLVM maps provide no physical capacities; these remain unknown. JSON memory-layout files and `--config` are no longer supported.
@@ -74,20 +74,22 @@ For optimized standalone executables:
 cargo build --workspace --release --locked
 ```
 
-Executables are `target/release/firmware-gui` and `target/release/firmware-explorer` (with `.exe` on Windows). Neither requires a Rust installation on the destination machine. Desktop platform libraries still apply.
+Executables are `target/release/snout` and `target/release/snout-cli` (with `.exe` on Windows). Neither requires a Rust installation on the destination machine. Desktop platform libraries still apply.
 
 ## Releases and updates
 
 The [build workflow](../.github/workflows/build.yml) follows Pigtail's Windows/Linux release workflow. Run it manually on a branch, or label a PR `build`, `build-linux`, or `build-windows` to produce downloadable artifacts. Pushing `v<workspace-version>` publishes a GitHub release only after both Windows and Linux pass formatting, Clippy, tests, release builds, packaging, and artifact uploads. A separate release job downloads both platforms’ assets before publishing; a failed or canceled platform prevents release creation. The workflow rejects tags that do not match `Cargo.toml`.
 
-The header displays the pig artwork at 64 × 64 logical pixels, with the two-line application title vertically centered beside it. The header, About dialog, native window icon, Windows executable and Setup installer, and Linux desktop packages use the same pig artwork from `crates/firmware-gui/packaging/icons/snout.svg` (the supplied `pigbot-vector.svg`). After editing the SVG, install CairoSVG (`python3 -m pip install CairoSVG`) and run `python3 scripts/generate-icons.py` to regenerate the committed 512 px PNG and Windows ICO (16–256 px). Normal builds use the committed assets and do not require CairoSVG.
+The header displays the pig artwork at 64 × 64 logical pixels, with the two-line application title vertically centered beside it. The header, About dialog, native window icon, Windows executable and Setup installer, and Linux desktop packages use the same pig artwork from `crates/snout/packaging/icons/snout.svg` (the supplied `pigbot-vector.svg`). After editing the SVG, install CairoSVG (`python3 -m pip install CairoSVG`) and run `python3 scripts/generate-icons.py` to regenerate the committed 512 px PNG and Windows ICO (16–256 px). Normal builds use the committed assets and do not require CairoSVG.
 
 Release assets include portable archives containing the GUI and CLI, standalone GUI executables for the updater, Windows MSI and Setup installers, a Debian package, and an AppImage. Linux builds also capture `snout-screenshot.png` using the regular app with `fixtures/build/cortex-m.elf` selected. There is no demo build. The screenshot runs in an isolated Xvfb session with fresh preferences and update checks disabled.
+
+The Debian package is named `snout` and installs the GUI as `/usr/bin/snout`. Its desktop launcher runs `snout`; the AppImage uses the same executable name internally. Cargo builds and portable archives also use `snout` (`snout.exe` on Windows).
 
 Build packages locally using `bash scripts/build-release.sh` on x86_64 Debian/Ubuntu or `scripts\build-release.cmd` from a Windows developer shell. Output goes to `target/release-assets/<target>/`. The Linux script needs the desktop build packages listed above, plus `curl`, `pkg-config`, and `dpkg-dev`; packaging downloads linuxdeploy and installs cargo-deb if needed. Windows requires Rust, the C++ Build Tools and Windows SDK; the script downloads portable WiX and Inno Setup. To capture a screenshot locally, install `xvfb xauth xdotool imagemagick`, then run:
 
 ```sh
-bash scripts/capture-screenshot.sh target/release/firmware-gui target/snout-screenshot.png fixtures/build/cortex-m.elf
+bash scripts/capture-screenshot.sh target/release/snout target/snout-screenshot.png fixtures/build/cortex-m.elf
 ```
 
 Snout checks GitHub releases at startup. **Menu → Check for updates** provides a manual check. **Support developer** opens Buy Me a Coffee, and **About** shows the app version and repository link. Startup checks stay quiet on network errors, when up to date, or for a skipped version. Download and installation begin only when you press **Update**, and the download's published size and SHA-256 digest are verified before installation. Workspace preferences are saved before installing and restored after restarting. Portable binaries update in place, AppImages replace the original AppImage, and Windows Setup installations reuse their existing installation scope. Debian installations use the package manager instead. MSI installations are identified by this product’s Windows Installer UpgradeCode and the registered executable component, and offer a **Download MSI installer** button instead of in-app replacement. Run that MSI to upgrade the registered installation. Portable copies remain eligible for self-updates even when an MSI is installed elsewhere. If Windows Installer ownership cannot be checked, in-app replacement is disabled and the downloads page remains available. `--no-update-check` suppresses the startup request for one launch.
@@ -95,13 +97,13 @@ Snout checks GitHub releases at startup. **Menu → Check for updates** provides
 ## Architecture
 
 ```text
-firmware-gui (egui/eframe) ─┐
-                          ├── firmware-analysis-core
-firmware-cli (clap) ───────┘       ├── ELF adapter: goblin
-                                  ├── DWARF: gimli + addr2line
-                                  ├── accounting / attribution / tree
-                                  ├── comparison
-                                  └── compiler stack reports / call-graph model
+snout (egui/eframe) ─┐
+                    ├── snout-core
+snout-cli (clap) ────┘       ├── ELF adapter: goblin
+                            ├── DWARF: gimli + addr2line
+                            ├── accounting / attribution / tree
+                            ├── comparison
+                            └── compiler stack reports / call-graph model
 ```
 
 The desktop header shows the selected firmware, its architecture with a chip icon, and its bit width with a register-width icon. Architecture and bit width come from the ELF metadata; hovering the bit width explains its source. The Menu popup, recent-folder submenu and ELF dropdown use the application’s dark palette, rounded controls, padded rows and green interaction accents. The selected ELF row has a green filename, tinted background and green edge matching the sidebar navigation.
@@ -157,7 +159,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 ```
 
-Tests cover real GNU Arm GCC Cortex-M ELF files, DWARF function locations, local/global symbols, aliases, stripped files, initialized data, reservations, RAM code, unusual sections, comparisons, malformed input, 32/64-bit and little/big-endian synthetic ELF, CLI JSON/errors, compiler stack reports, and headless rendering of every data view. The checked-in fixtures allow tests without an ARM toolchain. Their C sources and linker script are in `fixtures/src`; regeneration instructions are in `fixtures/README.md`.
+Tests cover real GNU Arm GCC Cortex-M ELF files, DWARF function locations, local/global symbols, aliases, stripped files, initialized data, reservations, RAM code, unusual sections, comparisons, malformed input, 32/64-bit and little/big-endian synthetic ELF, CLI JSON/errors, compiler stack reports, and headless rendering of every data view. The checked-in fixtures allow tests without an ARM toolchain. Their C sources and linker script are in `fixtures/src`; regeneration instructions are in `fixtures/README.md`. Reference fixture generation requires GNU Arm GCC to preserve GNU ld map capacities/cross references and the supported stack-record format; LLVM lld has separate committed fixtures.
 
 Windows tests and builds were run locally. CI is configured for Windows and Linux; Representative Linux desktop execution and native visual/interaction review still need validation. Headless egui tests do not validate native file dialogs or graphics drivers.
 

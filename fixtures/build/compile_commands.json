@@ -1,73 +1,73 @@
 [
 {
   "directory": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/build",
-  "command": "/tmp/snout-arm-toolchain/xpack-arm-none-eabi-gcc-14.2.1-1.1/bin/arm-none-eabi-gcc -DEXTRA=0 -std=gnu11 -mcpu=cortex-m3 -mthumb -ffreestanding -fno-builtin -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -O0 -g -gdwarf-4 -fstack-usage -Wall -Wextra -Werror -o CMakeFiles/cortex-m-objects.dir/src/main.c.obj -c /home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/main.c",
+  "command": "/usr/bin/arm-none-eabi-gcc -DEXTRA=0 -std=gnu11 -mcpu=cortex-m3 -mthumb -ffreestanding -fno-builtin -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -O0 -g -gdwarf-4 -fstack-usage -Wall -Wextra -Werror -o CMakeFiles/cortex-m-objects.dir/src/main.c.obj -c /home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/main.c",
   "file": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/main.c",
   "output": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/build/CMakeFiles/cortex-m-objects.dir/src/main.c.obj"
 },
 {
   "directory": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/build",
-  "command": "/tmp/snout-arm-toolchain/xpack-arm-none-eabi-gcc-14.2.1-1.1/bin/arm-none-eabi-gcc -DEXTRA=0 -std=gnu11 -mcpu=cortex-m3 -mthumb -ffreestanding -fno-builtin -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -O0 -g -gdwarf-4 -fstack-usage -Wall -Wextra -Werror -o CMakeFiles/cortex-m-objects.dir/src/config.c.obj -c /home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/config.c",
+  "command": "/usr/bin/arm-none-eabi-gcc -DEXTRA=0 -std=gnu11 -mcpu=cortex-m3 -mthumb -ffreestanding -fno-builtin -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -O0 -g -gdwarf-4 -fstack-usage -Wall -Wextra -Werror -o CMakeFiles/cortex-m-objects.dir/src/config.c.obj -c /home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/config.c",
   "file": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/config.c",
   "output": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/build/CMakeFiles/cortex-m-objects.dir/src/config.c.obj"
 },
 {
   "directory": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/build",
-  "command": "/tmp/snout-arm-toolchain/xpack-arm-none-eabi-gcc-14.2.1-1.1/bin/arm-none-eabi-gcc -DEXTRA=0 -std=gnu11 -mcpu=cortex-m3 -mthumb -ffreestanding -fno-builtin -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -O0 -g -gdwarf-4 -fstack-usage -Wall -Wextra -Werror -o CMakeFiles/cortex-m-objects.dir/src/sensor.c.obj -c /home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/sensor.c",
+  "command": "/usr/bin/arm-none-eabi-gcc -DEXTRA=0 -std=gnu11 -mcpu=cortex-m3 -mthumb -ffreestanding -fno-builtin -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -O0 -g -gdwarf-4 -fstack-usage -Wall -Wextra -Werror -o CMakeFiles/cortex-m-objects.dir/src/sensor.c.obj -c /home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/sensor.c",
   "file": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/sensor.c",
   "output": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/build/CMakeFiles/cortex-m-objects.dir/src/sensor.c.obj"
 },
 {
   "directory": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/build",
-  "command": "/tmp/snout-arm-toolchain/xpack-arm-none-eabi-gcc-14.2.1-1.1/bin/arm-none-eabi-gcc -DEXTRA=0 -std=gnu11 -mcpu=cortex-m3 -mthumb -ffreestanding -fno-builtin -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -O0 -g -gdwarf-4 -fstack-usage -Wall -Wextra -Werror -o CMakeFiles/cortex-m-objects.dir/src/diag.c.obj -c /home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/diag.c",
+  "command": "/usr/bin/arm-none-eabi-gcc -DEXTRA=0 -std=gnu11 -mcpu=cortex-m3 -mthumb -ffreestanding -fno-builtin -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -O0 -g -gdwarf-4 -fstack-usage -Wall -Wextra -Werror -o CMakeFiles/cortex-m-objects.dir/src/diag.c.obj -c /home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/diag.c",
   "file": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/diag.c",
   "output": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/build/CMakeFiles/cortex-m-objects.dir/src/diag.c.obj"
 },
 {
   "directory": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/build",
-  "command": "/tmp/snout-arm-toolchain/xpack-arm-none-eabi-gcc-14.2.1-1.1/bin/arm-none-eabi-gcc -DEXTRA=0 -std=gnu11 -mcpu=cortex-m3 -mthumb -ffreestanding -fno-builtin -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -O0 -g -gdwarf-4 -fstack-usage -Wall -Wextra -Werror -o CMakeFiles/cortex-m-objects.dir/src/telemetry.c.obj -c /home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/telemetry.c",
+  "command": "/usr/bin/arm-none-eabi-gcc -DEXTRA=0 -std=gnu11 -mcpu=cortex-m3 -mthumb -ffreestanding -fno-builtin -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -O0 -g -gdwarf-4 -fstack-usage -Wall -Wextra -Werror -o CMakeFiles/cortex-m-objects.dir/src/telemetry.c.obj -c /home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/telemetry.c",
   "file": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/telemetry.c",
   "output": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/build/CMakeFiles/cortex-m-objects.dir/src/telemetry.c.obj"
 },
 {
   "directory": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/build",
-  "command": "/tmp/snout-arm-toolchain/xpack-arm-none-eabi-gcc-14.2.1-1.1/bin/arm-none-eabi-gcc -DEXTRA=0 -std=gnu11 -mcpu=cortex-m3 -mthumb -ffreestanding -fno-builtin -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -O0 -g -gdwarf-4 -fstack-usage -Wall -Wextra -Werror -o CMakeFiles/cortex-m-objects.dir/src/transport.c.obj -c /home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/transport.c",
+  "command": "/usr/bin/arm-none-eabi-gcc -DEXTRA=0 -std=gnu11 -mcpu=cortex-m3 -mthumb -ffreestanding -fno-builtin -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -O0 -g -gdwarf-4 -fstack-usage -Wall -Wextra -Werror -o CMakeFiles/cortex-m-objects.dir/src/transport.c.obj -c /home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/transport.c",
   "file": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/transport.c",
   "output": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/build/CMakeFiles/cortex-m-objects.dir/src/transport.c.obj"
 },
 {
   "directory": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/build",
-  "command": "/tmp/snout-arm-toolchain/xpack-arm-none-eabi-gcc-14.2.1-1.1/bin/arm-none-eabi-gcc -DEXTRA=8 -std=gnu11 -mcpu=cortex-m3 -mthumb -ffreestanding -fno-builtin -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -O0 -g -gdwarf-4 -fstack-usage -Wall -Wextra -Werror -o CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj -c /home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/main.c",
+  "command": "/usr/bin/arm-none-eabi-gcc -DEXTRA=8 -std=gnu11 -mcpu=cortex-m3 -mthumb -ffreestanding -fno-builtin -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -O0 -g -gdwarf-4 -fstack-usage -Wall -Wextra -Werror -o CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj -c /home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/main.c",
   "file": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/main.c",
   "output": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/build/CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj"
 },
 {
   "directory": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/build",
-  "command": "/tmp/snout-arm-toolchain/xpack-arm-none-eabi-gcc-14.2.1-1.1/bin/arm-none-eabi-gcc -DEXTRA=8 -std=gnu11 -mcpu=cortex-m3 -mthumb -ffreestanding -fno-builtin -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -O0 -g -gdwarf-4 -fstack-usage -Wall -Wextra -Werror -o CMakeFiles/cortex-m-grown-objects.dir/src/config.c.obj -c /home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/config.c",
+  "command": "/usr/bin/arm-none-eabi-gcc -DEXTRA=8 -std=gnu11 -mcpu=cortex-m3 -mthumb -ffreestanding -fno-builtin -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -O0 -g -gdwarf-4 -fstack-usage -Wall -Wextra -Werror -o CMakeFiles/cortex-m-grown-objects.dir/src/config.c.obj -c /home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/config.c",
   "file": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/config.c",
   "output": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/build/CMakeFiles/cortex-m-grown-objects.dir/src/config.c.obj"
 },
 {
   "directory": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/build",
-  "command": "/tmp/snout-arm-toolchain/xpack-arm-none-eabi-gcc-14.2.1-1.1/bin/arm-none-eabi-gcc -DEXTRA=8 -std=gnu11 -mcpu=cortex-m3 -mthumb -ffreestanding -fno-builtin -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -O0 -g -gdwarf-4 -fstack-usage -Wall -Wextra -Werror -o CMakeFiles/cortex-m-grown-objects.dir/src/sensor.c.obj -c /home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/sensor.c",
+  "command": "/usr/bin/arm-none-eabi-gcc -DEXTRA=8 -std=gnu11 -mcpu=cortex-m3 -mthumb -ffreestanding -fno-builtin -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -O0 -g -gdwarf-4 -fstack-usage -Wall -Wextra -Werror -o CMakeFiles/cortex-m-grown-objects.dir/src/sensor.c.obj -c /home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/sensor.c",
   "file": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/sensor.c",
   "output": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/build/CMakeFiles/cortex-m-grown-objects.dir/src/sensor.c.obj"
 },
 {
   "directory": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/build",
-  "command": "/tmp/snout-arm-toolchain/xpack-arm-none-eabi-gcc-14.2.1-1.1/bin/arm-none-eabi-gcc -DEXTRA=8 -std=gnu11 -mcpu=cortex-m3 -mthumb -ffreestanding -fno-builtin -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -O0 -g -gdwarf-4 -fstack-usage -Wall -Wextra -Werror -o CMakeFiles/cortex-m-grown-objects.dir/src/diag.c.obj -c /home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/diag.c",
+  "command": "/usr/bin/arm-none-eabi-gcc -DEXTRA=8 -std=gnu11 -mcpu=cortex-m3 -mthumb -ffreestanding -fno-builtin -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -O0 -g -gdwarf-4 -fstack-usage -Wall -Wextra -Werror -o CMakeFiles/cortex-m-grown-objects.dir/src/diag.c.obj -c /home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/diag.c",
   "file": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/diag.c",
   "output": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/build/CMakeFiles/cortex-m-grown-objects.dir/src/diag.c.obj"
 },
 {
   "directory": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/build",
-  "command": "/tmp/snout-arm-toolchain/xpack-arm-none-eabi-gcc-14.2.1-1.1/bin/arm-none-eabi-gcc -DEXTRA=8 -std=gnu11 -mcpu=cortex-m3 -mthumb -ffreestanding -fno-builtin -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -O0 -g -gdwarf-4 -fstack-usage -Wall -Wextra -Werror -o CMakeFiles/cortex-m-grown-objects.dir/src/telemetry.c.obj -c /home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/telemetry.c",
+  "command": "/usr/bin/arm-none-eabi-gcc -DEXTRA=8 -std=gnu11 -mcpu=cortex-m3 -mthumb -ffreestanding -fno-builtin -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -O0 -g -gdwarf-4 -fstack-usage -Wall -Wextra -Werror -o CMakeFiles/cortex-m-grown-objects.dir/src/telemetry.c.obj -c /home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/telemetry.c",
   "file": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/telemetry.c",
   "output": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/build/CMakeFiles/cortex-m-grown-objects.dir/src/telemetry.c.obj"
 },
 {
   "directory": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/build",
-  "command": "/tmp/snout-arm-toolchain/xpack-arm-none-eabi-gcc-14.2.1-1.1/bin/arm-none-eabi-gcc -DEXTRA=8 -std=gnu11 -mcpu=cortex-m3 -mthumb -ffreestanding -fno-builtin -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -O0 -g -gdwarf-4 -fstack-usage -Wall -Wextra -Werror -o CMakeFiles/cortex-m-grown-objects.dir/src/transport.c.obj -c /home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/transport.c",
+  "command": "/usr/bin/arm-none-eabi-gcc -DEXTRA=8 -std=gnu11 -mcpu=cortex-m3 -mthumb -ffreestanding -fno-builtin -fno-common -fno-unwind-tables -fno-asynchronous-unwind-tables -O0 -g -gdwarf-4 -fstack-usage -Wall -Wextra -Werror -o CMakeFiles/cortex-m-grown-objects.dir/src/transport.c.obj -c /home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/transport.c",
   "file": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/transport.c",
   "output": "/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/build/CMakeFiles/cortex-m-grown-objects.dir/src/transport.c.obj"
 }

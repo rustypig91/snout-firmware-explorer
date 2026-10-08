@@ -15,7 +15,7 @@ pkg-config --exists wayland-client xkbcommon || { echo 'Install libwayland-dev a
 target=x86_64-unknown-linux-gnu
 # Pin the output location even if CARGO_TARGET_DIR is set by the caller.
 export CARGO_TARGET_DIR="$PWD/target"
-version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "firmware-gui"))')"
+version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "snout"))')"
 out="$PWD/target/release-assets/$target"
 name="snout-v$version-$target"
 mkdir -p "$out"
@@ -28,10 +28,10 @@ cargo build --locked --release --workspace --target "$target"
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
 mkdir "$stage/$name"
-cp "target/$target/release/firmware-gui" "target/$target/release/firmware-explorer" README.md LICENSE "$stage/$name/"
+cp "target/$target/release/snout" "target/$target/release/snout-cli" README.md LICENSE "$stage/$name/"
 tar czf "$out/$name.tar.gz" -C "$stage" "$name"
-cp "target/$target/release/firmware-gui" "$out/$name"
-cargo deb -p firmware-gui --target "$target" --no-build --output "$out/snout_${version}-1_amd64.deb"
-bash crates/firmware-gui/packaging/linux/build-appimage.sh \
-    "$PWD/target/$target/release/firmware-gui" "$version" "$out"
+cp "target/$target/release/snout" "$out/$name"
+cargo deb -p snout --target "$target" --no-build --output "$out/snout_${version}-1_amd64.deb"
+bash crates/snout/packaging/linux/build-appimage.sh \
+    "$PWD/target/$target/release/snout" "$version" "$out"
 printf '\nRelease assets: %s\n' "$out"

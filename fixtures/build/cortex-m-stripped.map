@@ -8,7 +8,7 @@ Discarded input sections
  .debug_ranges  0x00000000       0x18 CMakeFiles/cortex-m-objects.dir/src/main.c.obj
  .debug_line    0x00000000      0x130 CMakeFiles/cortex-m-objects.dir/src/main.c.obj
  .debug_str     0x00000000      0x36d CMakeFiles/cortex-m-objects.dir/src/main.c.obj
- .comment       0x00000000       0x3a CMakeFiles/cortex-m-objects.dir/src/main.c.obj
+ .comment       0x00000000       0x27 CMakeFiles/cortex-m-objects.dir/src/main.c.obj
  .debug_frame   0x00000000      0x100 CMakeFiles/cortex-m-objects.dir/src/main.c.obj
  .debug_info    0x00000000      0x145 CMakeFiles/cortex-m-objects.dir/src/config.c.obj
  .debug_abbrev  0x00000000       0xdf CMakeFiles/cortex-m-objects.dir/src/config.c.obj
@@ -16,7 +16,7 @@ Discarded input sections
                 0x00000000       0x20 CMakeFiles/cortex-m-objects.dir/src/config.c.obj
  .debug_line    0x00000000       0xaf CMakeFiles/cortex-m-objects.dir/src/config.c.obj
  .debug_str     0x00000000      0x258 CMakeFiles/cortex-m-objects.dir/src/config.c.obj
- .comment       0x00000000       0x3a CMakeFiles/cortex-m-objects.dir/src/config.c.obj
+ .comment       0x00000000       0x27 CMakeFiles/cortex-m-objects.dir/src/config.c.obj
  .debug_frame   0x00000000       0x98 CMakeFiles/cortex-m-objects.dir/src/config.c.obj
  .debug_info    0x00000000      0x1b8 CMakeFiles/cortex-m-objects.dir/src/sensor.c.obj
  .debug_abbrev  0x00000000      0x10b CMakeFiles/cortex-m-objects.dir/src/sensor.c.obj
@@ -24,7 +24,7 @@ Discarded input sections
                 0x00000000       0x20 CMakeFiles/cortex-m-objects.dir/src/sensor.c.obj
  .debug_line    0x00000000      0x103 CMakeFiles/cortex-m-objects.dir/src/sensor.c.obj
  .debug_str     0x00000000      0x26b CMakeFiles/cortex-m-objects.dir/src/sensor.c.obj
- .comment       0x00000000       0x3a CMakeFiles/cortex-m-objects.dir/src/sensor.c.obj
+ .comment       0x00000000       0x27 CMakeFiles/cortex-m-objects.dir/src/sensor.c.obj
  .debug_frame   0x00000000       0x84 CMakeFiles/cortex-m-objects.dir/src/sensor.c.obj
  .debug_info    0x00000000      0x1bf CMakeFiles/cortex-m-objects.dir/src/diag.c.obj
  .debug_abbrev  0x00000000      0x117 CMakeFiles/cortex-m-objects.dir/src/diag.c.obj
@@ -32,7 +32,7 @@ Discarded input sections
                 0x00000000       0x20 CMakeFiles/cortex-m-objects.dir/src/diag.c.obj
  .debug_line    0x00000000       0xe1 CMakeFiles/cortex-m-objects.dir/src/diag.c.obj
  .debug_str     0x00000000      0x2b7 CMakeFiles/cortex-m-objects.dir/src/diag.c.obj
- .comment       0x00000000       0x3a CMakeFiles/cortex-m-objects.dir/src/diag.c.obj
+ .comment       0x00000000       0x27 CMakeFiles/cortex-m-objects.dir/src/diag.c.obj
  .debug_frame   0x00000000       0x7c CMakeFiles/cortex-m-objects.dir/src/diag.c.obj
  .debug_info    0x00000000      0x1fe CMakeFiles/cortex-m-objects.dir/src/telemetry.c.obj
  .debug_abbrev  0x00000000      0x130 CMakeFiles/cortex-m-objects.dir/src/telemetry.c.obj
@@ -40,7 +40,7 @@ Discarded input sections
                 0x00000000       0x20 CMakeFiles/cortex-m-objects.dir/src/telemetry.c.obj
  .debug_line    0x00000000      0x115 CMakeFiles/cortex-m-objects.dir/src/telemetry.c.obj
  .debug_str     0x00000000      0x2f5 CMakeFiles/cortex-m-objects.dir/src/telemetry.c.obj
- .comment       0x00000000       0x3a CMakeFiles/cortex-m-objects.dir/src/telemetry.c.obj
+ .comment       0x00000000       0x27 CMakeFiles/cortex-m-objects.dir/src/telemetry.c.obj
  .debug_frame   0x00000000       0x80 CMakeFiles/cortex-m-objects.dir/src/telemetry.c.obj
  .debug_info    0x00000000      0x1e1 CMakeFiles/cortex-m-objects.dir/src/transport.c.obj
  .debug_abbrev  0x00000000      0x176 CMakeFiles/cortex-m-objects.dir/src/transport.c.obj
@@ -48,7 +48,7 @@ Discarded input sections
                 0x00000000       0x20 CMakeFiles/cortex-m-objects.dir/src/transport.c.obj
  .debug_line    0x00000000      0x107 CMakeFiles/cortex-m-objects.dir/src/transport.c.obj
  .debug_str     0x00000000      0x2ff CMakeFiles/cortex-m-objects.dir/src/transport.c.obj
- .comment       0x00000000       0x3a CMakeFiles/cortex-m-objects.dir/src/transport.c.obj
+ .comment       0x00000000       0x27 CMakeFiles/cortex-m-objects.dir/src/transport.c.obj
  .debug_frame   0x00000000       0x98 CMakeFiles/cortex-m-objects.dir/src/transport.c.obj
 
 Memory Configuration

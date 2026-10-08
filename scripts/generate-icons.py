@@ -8,7 +8,7 @@ import struct
 
 import cairosvg
 
-ROOT = Path(__file__).resolve().parents[1] / "crates/firmware-gui/packaging/icons"
+ROOT = Path(__file__).resolve().parents[1] / "crates/snout/packaging/icons"
 
 
 def png(size):

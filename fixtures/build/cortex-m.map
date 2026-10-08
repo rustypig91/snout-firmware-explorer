@@ -1,12 +1,12 @@
 
 Discarded input sections
 
- .comment       0x00000000       0x3a CMakeFiles/cortex-m-objects.dir/src/main.c.obj
- .comment       0x00000000       0x3a CMakeFiles/cortex-m-objects.dir/src/config.c.obj
- .comment       0x00000000       0x3a CMakeFiles/cortex-m-objects.dir/src/sensor.c.obj
- .comment       0x00000000       0x3a CMakeFiles/cortex-m-objects.dir/src/diag.c.obj
- .comment       0x00000000       0x3a CMakeFiles/cortex-m-objects.dir/src/telemetry.c.obj
- .comment       0x00000000       0x3a CMakeFiles/cortex-m-objects.dir/src/transport.c.obj
+ .comment       0x00000000       0x27 CMakeFiles/cortex-m-objects.dir/src/main.c.obj
+ .comment       0x00000000       0x27 CMakeFiles/cortex-m-objects.dir/src/config.c.obj
+ .comment       0x00000000       0x27 CMakeFiles/cortex-m-objects.dir/src/sensor.c.obj
+ .comment       0x00000000       0x27 CMakeFiles/cortex-m-objects.dir/src/diag.c.obj
+ .comment       0x00000000       0x27 CMakeFiles/cortex-m-objects.dir/src/telemetry.c.obj
+ .comment       0x00000000       0x27 CMakeFiles/cortex-m-objects.dir/src/transport.c.obj
 
 Memory Configuration
 
@@ -188,11 +188,16 @@ LOAD linker stubs
 .debug_str      0x00000000      0x6c5
  .debug_str     0x00000000      0x6c5 CMakeFiles/cortex-m-objects.dir/src/main.c.obj
                                 0x36d (size before relaxing)
- .debug_str     0x000006c5      0x258 CMakeFiles/cortex-m-objects.dir/src/config.c.obj
- .debug_str     0x000006c5      0x26b CMakeFiles/cortex-m-objects.dir/src/sensor.c.obj
- .debug_str     0x000006c5      0x2b7 CMakeFiles/cortex-m-objects.dir/src/diag.c.obj
- .debug_str     0x000006c5      0x2f5 CMakeFiles/cortex-m-objects.dir/src/telemetry.c.obj
- .debug_str     0x000006c5      0x2ff CMakeFiles/cortex-m-objects.dir/src/transport.c.obj
+ .debug_str     0x000006c5        0x0 CMakeFiles/cortex-m-objects.dir/src/config.c.obj
+                                0x258 (size before relaxing)
+ .debug_str     0x000006c5        0x0 CMakeFiles/cortex-m-objects.dir/src/sensor.c.obj
+                                0x26b (size before relaxing)
+ .debug_str     0x000006c5        0x0 CMakeFiles/cortex-m-objects.dir/src/diag.c.obj
+                                0x2b7 (size before relaxing)
+ .debug_str     0x000006c5        0x0 CMakeFiles/cortex-m-objects.dir/src/telemetry.c.obj
+                                0x2f5 (size before relaxing)
+ .debug_str     0x000006c5        0x0 CMakeFiles/cortex-m-objects.dir/src/transport.c.obj
+                                0x2ff (size before relaxing)
 
 .debug_frame    0x00000000      0x3b0
  .debug_frame   0x00000000      0x100 CMakeFiles/cortex-m-objects.dir/src/main.c.obj

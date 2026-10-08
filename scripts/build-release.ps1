@@ -25,7 +25,7 @@ try {
     $target = 'x86_64-pc-windows-msvc'
     $metadata = & cargo metadata --no-deps --format-version 1
     if ($LASTEXITCODE -ne 0) { throw 'cargo metadata failed' }
-    $version = (($metadata | ConvertFrom-Json).packages | Where-Object name -eq 'firmware-gui').version
+    $version = (($metadata | ConvertFrom-Json).packages | Where-Object name -eq 'snout').version
     $name = "snout-v$version-$target"
     $out = Join-Path $root "target/release-assets/$target"
     $toolDir = Join-Path $root 'target/release-tools'
@@ -51,14 +51,14 @@ try {
     $bin = Join-Path $root "target/$target/release"
     $stage = Join-Path $root "target/release-staging/$name"
     New-Item -ItemType Directory -Force -Path $stage | Out-Null
-    Copy-Item -LiteralPath "$bin/firmware-gui.exe", "$bin/firmware-explorer.exe", "$root/README.md", "$root/LICENSE" -Destination $stage -Force
+    Copy-Item -LiteralPath "$bin/snout.exe", "$bin/snout-cli.exe", "$root/README.md", "$root/LICENSE" -Destination $stage -Force
     Compress-Archive -LiteralPath $stage -DestinationPath "$out/$name.zip" -Force
-    Copy-Item -LiteralPath "$bin/firmware-gui.exe" -Destination "$out/$name.exe" -Force
+    Copy-Item -LiteralPath "$bin/snout.exe" -Destination "$out/$name.exe" -Force
 
     $obj = Join-Path $root 'target/release-staging/main.wixobj'
     Invoke-Checked "$wix/candle.exe" @(
         '-nologo', '-arch', 'x64', "-dVersion=$version", '-dPlatform=x64',
-        "-dCargoTargetBinDir=$bin", '-out', $obj, "$root/crates/firmware-gui/wix/main.wxs"
+        "-dCargoTargetBinDir=$bin", '-out', $obj, "$root/crates/snout/wix/main.wxs"
     )
     Invoke-Checked "$wix/light.exe" @(
         '-nologo', '-ext', 'WixUIExtension', '-cultures:en-us',
@@ -66,7 +66,7 @@ try {
     )
     Invoke-Checked "$inno/ISCC.exe" @(
         "/DAppVersion=$version", "/DSourceBinDir=$bin", "/O$out",
-        "$root/crates/firmware-gui/packaging/windows/snout.iss"
+        "$root/crates/snout/packaging/windows/snout.iss"
     )
     Write-Host "`nRelease assets: $out"
 } finally {

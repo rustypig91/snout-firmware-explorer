@@ -1125,54 +1125,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 
 [[package]]
-name = "firmware-analysis-core"
-version = "0.5.0"
-dependencies = [
- "addr2line",
- "cpp_demangle",
- "gimli",
- "goblin",
- "rustc-demangle",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "firmware-cli"
-version = "0.5.0"
-dependencies = [
- "clap",
- "firmware-analysis-core",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "firmware-gui"
-version = "0.5.0"
-dependencies = [
- "ashpd",
- "chrono",
- "crossbeam-channel",
- "eframe",
- "egui_extras",
- "embed-resource",
- "firmware-analysis-core",
- "futures-lite",
- "layout-rs",
- "rfd",
- "same-file",
- "self-replace",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "ureq",
- "winit",
-]
-
-[[package]]
 name = "flate2"
 version = "1.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3149,6 +3101,54 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd538fb6910ac1099850255cf94a94df6551fbdd602454387d0adb2d1ca6dead"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "snout"
+version = "0.6.0"
+dependencies = [
+ "ashpd",
+ "chrono",
+ "crossbeam-channel",
+ "eframe",
+ "egui_extras",
+ "embed-resource",
+ "futures-lite",
+ "layout-rs",
+ "rfd",
+ "same-file",
+ "self-replace",
+ "serde",
+ "serde_json",
+ "sha2",
+ "snout-core",
+ "tempfile",
+ "ureq",
+ "winit",
+]
+
+[[package]]
+name = "snout-cli"
+version = "0.6.0"
+dependencies = [
+ "clap",
+ "serde",
+ "serde_json",
+ "snout-core",
+]
+
+[[package]]
+name = "snout-core"
+version = "0.6.0"
+dependencies = [
+ "addr2line",
+ "cpp_demangle",
+ "gimli",
+ "goblin",
+ "rustc-demangle",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
