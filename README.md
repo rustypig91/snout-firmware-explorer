@@ -21,7 +21,7 @@ Download a Windows or Linux build from [Releases](https://github.com/rustypig91/
 2. Select your firmware in the sidebar.
 3. Start with **Overview**, then explore **Files** or **Symbols** to find the largest contributors.
 
-Matching linker maps and stack reports are discovered automatically where possible. Press **F5** after rebuilding to refresh the analysis. Use **Menu > Snapshot** to save a build for comparison.
+Matching linker maps and stack reports are discovered automatically where possible. Press **F5** after rebuilding to refresh the analysis. Use **Baselines** in the left sidebar to save builds for comparison, and select a baseline or **None** within that tab. The header shows the active baseline.
 
 ## Build from source
 

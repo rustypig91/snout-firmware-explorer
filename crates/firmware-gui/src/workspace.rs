@@ -449,10 +449,39 @@ impl Explorer {
             configured_report(options, analysis, path.display().to_string(), build.as_deref(), reports)
         });
     }
+    #[cfg(test)]
     pub(super) fn build_browser(&mut self, ctx: &egui::Context) {
+        egui::SidePanel::left("build_artifacts")
+            .default_width(260.0)
+            .width_range(180.0..=500.0)
+            .show(ctx, |ui| self.build_files_contents(ui, false));
+    }
+
+    pub(super) fn build_files(&mut self, ui: &mut egui::Ui) {
+        self.build_files_contents(ui, true);
+    }
+
+    fn build_files_contents(&mut self, ui: &mut egui::Ui, current_only: bool) {
         let Some(build) = self.build.clone() else {
+            ui.label("Open a build folder to select map and stack usage files.");
+            if ui
+                .add_enabled(
+                    self.receiver.is_none(),
+                    egui::Button::new("Open build folder..."),
+                )
+                .clicked()
+            {
+                self.pick_build();
+            }
             return;
         };
+        if !build.warnings.is_empty() {
+            ui.collapsing(format!("{} scan notes", build.warnings.len()), |ui| {
+                for note in &build.warnings {
+                    ui.label(note);
+                }
+            });
+        }
         let mut selected = None;
         let mut selected_map = None;
         let previous = self.browser_cache.take();
@@ -486,26 +515,87 @@ impl Explorer {
                 cache
             });
         let mut report_change = None;
-        egui::SidePanel::left("build_artifacts")
-            .default_width(260.0)
-            .width_range(180.0..=500.0)
-            .show(ctx, |ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.artifact_search)
-                        .hint_text("Find file...")
-                        .desired_width(f32::INFINITY),
-                );
-                cache.filter(&self.artifact_search);
-                ui.small(format!("{} compatible files", build.artifacts.len()));
-                if !build.warnings.is_empty() {
-                    ui.collapsing(format!("{} scan notes", build.warnings.len()), |ui| {
-                        for note in &build.warnings {
-                            ui.label(note);
+        if current_only && self.analysis.is_some() {
+            // A fresh tab lists all supporting artifacts for the selected ELF.
+            cache.filter("");
+            ui.label("Supporting files for the ELF selected in the header. Choices are saved per firmware.");
+            ui.columns(2, |columns| {
+                columns[0].heading("Map file");
+                columns[0].weak("Select memory regions or preview a map.");
+                egui::ScrollArea::vertical()
+                    .id_salt("map_choices")
+                    .show(&mut columns[0], |ui| {
+                        if cache.artifacts[1].is_empty() {
+                            ui.weak("No map files found.");
+                        }
+                        let height = ui.spacing().interact_size.y;
+                        super::artifact_browser::show_rows(
+                            ui,
+                            height,
+                            cache.artifacts[1].len(),
+                            |ui, range| {
+                                for row in range {
+                                    let index = cache.artifacts[1][row];
+                                    let map = &build.artifacts[index];
+                                    let in_use = self.map_in_use(&map.path);
+                                    ui.horizontal(|ui| {
+                                        if ui
+                                            .add_enabled(
+                                                self.receiver.is_none(),
+                                                egui::RadioButton::new(in_use, ""),
+                                            )
+                                            .on_hover_text("Use memory regions from this map")
+                                            .clicked()
+                                            && !in_use
+                                        {
+                                            selected_map = Some(map.path.clone());
+                                        }
+                                        if ui
+                                            .add_enabled(
+                                                self.receiver.is_none(),
+                                                egui::Button::new(display_path(
+                                                    &cache.labels[index],
+                                                ))
+                                                .frame(false)
+                                                .truncate(),
+                                            )
+                                            .on_hover_text(display_path(
+                                                &map.path.to_string_lossy(),
+                                            ))
+                                            .clicked()
+                                        {
+                                            selected = Some(map.clone());
+                                        }
+                                    });
+                                }
+                            },
+                        );
+                    });
+                columns[1].heading("Stack usage files (.su)");
+                columns[1].weak("Select reports or entire directories.");
+                egui::ScrollArea::vertical()
+                    .id_salt("su_choices")
+                    .show(&mut columns[1], |ui| {
+                        if cache.paths.is_empty() {
+                            ui.weak("No stack usage files found.");
+                        } else {
+                            ui.add_enabled_ui(self.receiver.is_none(), |ui| {
+                                report_change = cache.report_ui(ui);
+                            });
                         }
                     });
-                }
-                ui.separator();
-                egui::ScrollArea::vertical().show(ui, |ui| {
+            });
+        } else {
+            ui.strong("BUILD FILES");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.artifact_search)
+                    .hint_text("Find file...")
+                    .desired_width(f32::INFINITY),
+            );
+            cache.filter(&self.artifact_search);
+            ui.small(format!("{} compatible files", build.artifacts.len()));
+            ui.separator();
+            egui::ScrollArea::vertical().show(ui, |ui| {
                     if build.artifacts.is_empty() {
                         ui.label("No compatible files found in this folder or its subfolders.");
                     }
@@ -568,6 +658,7 @@ impl Explorer {
                     }
                     for index in firmware_indices {
                         let artifact = &build.artifacts[index];
+                        if current_only && !self.analysis.as_ref().is_some_and(|a| std::path::Path::new(&a.path) == artifact.path) { continue; }
                         let active = self.analysis.as_ref().is_some_and(|a|
                             std::path::Path::new(&a.path) == artifact.path);
                         // Reserve collapsed offscreen rows even during background jobs.
@@ -671,7 +762,7 @@ impl Explorer {
                         });
                     }
                 });
-            });
+        }
         if let Some((path, checked)) = report_change {
             cache.reports.set(&path, checked, &cache.paths);
             let reports = cache.reports.clone();
@@ -717,7 +808,15 @@ impl Explorer {
                         if format == MapFormat::LlvmLld {
                             ui.small("LLVM maps contain section placement, not memory capacities. Physical memory capacities remain unknown.");
                         } else {
-                            ui.small("Select this map's radio button in the left menu to use its memory regions.");
+                            if ui
+                                .add_enabled(
+                                    !self.map_in_use(&path),
+                                    egui::Button::new("Use memory regions from this map"),
+                                )
+                                .clicked()
+                            {
+                                self.apply_map(path.clone());
+                            }
                         }
                 }
             });

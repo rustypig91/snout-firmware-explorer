@@ -456,6 +456,7 @@ impl Explorer {
     pub(super) fn sync_snapshot_comparison(&mut self) {
         // Baseline-only sections and regions have temporary display indexes.
         // A different baseline can reuse them for unrelated entries.
+        #[cfg(test)]
         if self.overview_section.is_some_and(|index| {
             self.analysis
                 .as_ref()
@@ -593,6 +594,7 @@ impl Explorer {
             _ => value.to_string(),
         }
     }
+    #[cfg(test)]
     pub(super) fn snapshot_placement_address(
         &self,
         symbol: &Symbol,
@@ -630,6 +632,7 @@ impl Explorer {
             .map(|(used, size)| used as f64 * 100.0 / size.max(1) as f64);
         self.snapshot_percentage(used as f64 * 100.0 / size.max(1) as f64, old)
     }
+    #[cfg(test)]
     pub(super) fn snapshot_difference(&self, value: u64, old: Option<u64>) -> String {
         if self.selected_snapshot().is_some() {
             annotate(format_bytes(value), value, old, false)
@@ -845,143 +848,296 @@ impl Explorer {
         self.details = None;
         Ok(())
     }
-    pub(super) fn baseline_menu(&mut self, ui: &mut egui::Ui) {
-        enum Action {
-            Select(Option<String>),
-            Create,
-            Manage,
+    pub(super) fn baselines_view(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Baselines");
+        ui.label("Compare against a saved baseline, or save the current firmware for later.");
+        ui.separator();
+        if self.analysis.is_none() {
+            ui.label("Select firmware from the ELF dropdown first.");
+            return;
         }
-        let popup_id = ui.id().with("baseline_menu");
-        let active = self.snapshot_label().map(str::to_owned);
-        let label = active.as_ref().map_or_else(
-            || "Baseline: none".to_owned(),
-            |name| format!("Baseline: {name} · Diffs only"),
-        );
-        let mut text = egui::RichText::new(label).small();
-        if active.is_some() {
-            text = text.strong().color(super::views::ACCENT);
+        if let Some(message) = &self.snapshot_message {
+            ui.label(message);
         }
-        let response = ui
-            .add_enabled(
-                self.receiver.is_none() && self.snapshot_job.is_none(),
-                egui::Button::new(text).selected(active.is_some()),
-            )
-            .on_hover_text("Select, create, or clear the comparison baseline");
-        if response.clicked() {
-            if !ui.memory(|memory| memory.is_popup_open(popup_id)) {
-                self.snapshot_name.clear();
-                self.snapshot_dialog_error = None;
-                self.snapshot_select_after_save = false;
-            }
-            ui.memory_mut(|memory| memory.toggle_popup(popup_id));
+        if let Some(error) = &self.snapshot_dialog_error {
+            ui.colored_label(egui::Color32::LIGHT_RED, error);
         }
-        let mut action = None;
-        egui::popup::popup_above_or_below_widget(
-            ui,
-            popup_id,
-            &response,
-            egui::AboveOrBelow::Above,
-            egui::popup::PopupCloseBehavior::CloseOnClickOutside,
+        let mut save = false;
+        ui.add_enabled_ui(
+            self.receiver.is_none() && self.snapshot_job.is_none(),
             |ui| {
-                ui.set_width(320.0_f32.min((ui.ctx().screen_rect().width() - 32.0).max(160.0)));
-                ui.strong("Comparison baseline");
-                ui.label(
-                    egui::RichText::new(
-                        "Selecting a baseline shows only differences in every tab.",
-                    )
-                    .size(super::shell::MIN_TEXT_SIZE),
-                );
-                ui.separator();
-                if ui
-                    .selectable_label(active.is_none(), "No baseline — show all entries")
-                    .clicked()
-                {
-                    action = Some(Action::Select(None));
-                }
-                let firmware = self.snapshot_firmware();
-                let mut snapshots: Vec<_> = self
-                    .snapshots
-                    .snapshots
-                    .iter()
-                    .filter(|s| firmware.as_ref() == Some(&s.firmware))
-                    .collect();
-                snapshots.sort_by(|a, b| {
-                    b.taken_at
-                        .cmp(&a.taken_at)
-                        .then_with(|| a.name.cmp(&b.name))
+                ui.horizontal(|ui| {
+                    ui.label("Baseline name:");
+                    let name = ui.add(
+                        egui::TextEdit::singleline(&mut self.snapshot_name)
+                            .hint_text("e.g. Before adding Bluetooth")
+                            .desired_width(320.0),
+                    );
+                    let can_save = !self.snapshot_name.trim().is_empty()
+                        && self.preferences_file.is_some()
+                        && self.build.is_some();
+                    save = ui
+                        .add_enabled(can_save, egui::Button::new("Save baseline"))
+                        .clicked()
+                        || (can_save
+                            && name.lost_focus()
+                            && ui.input(|input| input.key_pressed(egui::Key::Enter)));
                 });
-                if snapshots.is_empty() {
-                    ui.weak("No saved baselines for this firmware.");
-                }
-                egui::ScrollArea::vertical()
-                    .max_height(200.0)
-                    .show(ui, |ui| {
-                        for snapshot in snapshots {
-                            if ui
-                                .selectable_label(
-                                    active.as_deref() == Some(snapshot.name.as_str()),
-                                    &snapshot.name,
-                                )
-                                .on_hover_text(format!(
-                                    "{}\nELF: {}",
-                                    snapshot.time_label(),
-                                    super::display::display_path(&snapshot.firmware)
-                                ))
-                                .clicked()
-                            {
-                                action = Some(Action::Select(Some(snapshot.name.clone())));
-                            }
-                        }
-                    });
-                ui.separator();
-                ui.strong("Create a new baseline");
-                let name = ui.add(
-                    egui::TextEdit::singleline(&mut self.snapshot_name)
-                        .hint_text("Baseline name")
-                        .desired_width(f32::INFINITY),
-                );
-                let can_create = !self.snapshot_name.trim().is_empty()
-                    && self.preferences_file.is_some()
-                    && self.build.is_some();
-                if ui
-                    .add_enabled(can_create, egui::Button::new("Create and select baseline"))
-                    .clicked()
-                    || (can_create
-                        && name.lost_focus()
-                        && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                {
-                    action = Some(Action::Create);
-                }
-                if let Some(error) = &self.snapshot_dialog_error {
-                    ui.colored_label(egui::Color32::LIGHT_RED, error);
-                }
-                ui.separator();
-                if ui.button("Manage snapshots...").clicked() {
-                    action = Some(Action::Manage);
-                }
             },
         );
-        let result = match action {
-            Some(Action::Select(name)) => self.select_snapshot(name),
-            Some(Action::Create) => {
-                self.snapshot_select_after_save = true;
-                self.request_snapshot_save(ui.ctx())
-            }
-            Some(Action::Manage) => {
-                self.open_snapshot_manager();
-                Ok(())
-            }
-            None => return,
-        };
-        match result {
-            Ok(()) => ui.memory_mut(|memory| memory.close_popup()),
-            Err(error) => {
-                self.snapshot_select_after_save = false;
+        if save {
+            self.snapshot_select_after_save = false;
+            if let Err(error) = self.request_snapshot_save(ui.ctx()) {
                 self.snapshot_dialog_error = Some(error);
             }
         }
+        ui.add_space(12.0);
+        let firmware = self.snapshot_firmware();
+        let mut snapshots: Vec<_> = self
+            .snapshots
+            .snapshots
+            .iter()
+            .filter(|snapshot| firmware.as_ref() == Some(&snapshot.firmware))
+            .collect();
+        snapshots.sort_by(|a, b| {
+            b.taken_at
+                .cmp(&a.taken_at)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        let count = snapshots.len();
+        ui.strong(format!("Saved baselines ({count})"));
+        let active = self.snapshot_label().map(str::to_owned);
+        let mut selection = None;
+        let mut delete = None;
+        let mut delete_all = false;
+        ui.add_enabled_ui(
+            self.receiver.is_none() && self.snapshot_job.is_none(),
+            |ui| {
+                ui.horizontal(|ui| {
+                    if ui.selectable_label(active.is_none(), "None").clicked() {
+                        selection = Some(None);
+                    }
+                    ui.weak("Click a baseline to compare; click it again to clear comparison.");
+                });
+                ui.add_space(8.0);
+                if ui
+                    .add_enabled(count > 0, egui::Button::new("Delete all baselines"))
+                    .clicked()
+                {
+                    delete_all = true;
+                }
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    if snapshots.is_empty() {
+                        ui.weak("No baselines for this firmware yet.");
+                    }
+                    for snapshot in snapshots {
+                        ui.push_id((&snapshot.firmware, &snapshot.name), |ui| {
+                            let selected = active.as_deref() == Some(snapshot.name.as_str());
+                            let mut card = egui::Frame::none()
+                                .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                                .rounding(6.0)
+                                .begin(ui);
+                            let ui_content = &mut card.content_ui;
+                            let width = ui_content.available_width();
+                            let (row, _) = ui_content
+                                .allocate_exact_size(egui::vec2(width, 44.0), egui::Sense::hover());
+                            let delete_width = 32.0_f32;
+                            let delete_rect = egui::Rect::from_center_size(
+                                egui::pos2(row.right() - delete_width / 2.0, row.center().y),
+                                egui::vec2(delete_width, 30.0),
+                            );
+                            let details_right = delete_rect.left() - 20.0;
+                            let name_width = ((details_right - row.left()) * 0.38).max(1.0);
+                            let name_rect =
+                                egui::Rect::from_min_size(row.min, egui::vec2(name_width, 26.0));
+                            ui_content.scope_builder(
+                                egui::UiBuilder::new()
+                                    .max_rect(name_rect)
+                                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                                |ui| {
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(&snapshot.name).size(20.0).strong(),
+                                        )
+                                        .truncate(),
+                                    )
+                                    .on_hover_text(&snapshot.name);
+                                },
+                            );
+                            if selected {
+                                ui_content.painter().text(
+                                    egui::pos2(row.left(), row.top() + 30.0),
+                                    egui::Align2::LEFT_TOP,
+                                    "Selected",
+                                    egui::FontId::proportional(super::shell::MIN_TEXT_SIZE),
+                                    super::views::ACCENT,
+                                );
+                            }
+                            let metadata_rect = egui::Rect::from_min_max(
+                                egui::pos2(name_rect.right() + 20.0, row.top() + 4.0),
+                                egui::pos2(
+                                    details_right.max(name_rect.right() + 21.0),
+                                    row.bottom(),
+                                ),
+                            );
+                            ui_content.scope_builder(
+                                egui::UiBuilder::new()
+                                    .max_rect(metadata_rect)
+                                    .layout(egui::Layout::top_down(egui::Align::Min)),
+                                |ui| {
+                                    ui.spacing_mut().item_spacing.y = 3.0;
+                                    let muted = egui::Color32::from_rgb(135, 151, 170);
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(snapshot.time_label())
+                                                .size(12.0)
+                                                .color(muted),
+                                        )
+                                        .truncate(),
+                                    );
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(format!(
+                                                "ELF: {}",
+                                                super::display::display_path(&snapshot.firmware),
+                                            ))
+                                            .size(12.0)
+                                            .color(muted),
+                                        )
+                                        .truncate(),
+                                    )
+                                    .on_hover_text(&snapshot.firmware);
+                                },
+                            );
+                            ui_content.scope_builder(
+                                egui::UiBuilder::new().max_rect(delete_rect),
+                                |ui| {
+                                    let response =
+                                        ui.add_sized(
+                                            delete_rect.size(),
+                                            egui::Button::new("")
+                                                .fill(egui::Color32::from_rgb(40, 29, 36))
+                                                .stroke(egui::Stroke::new(
+                                                    1.0_f32,
+                                                    egui::Color32::from_rgb(79, 48, 56),
+                                                ))
+                                                .rounding(5.0),
+                                        )
+                                        .on_hover_text(
+                                            format!("Delete baseline ‘{}’", snapshot.name),
+                                        );
+                                    response.widget_info(|| {
+                                        egui::WidgetInfo::labeled(
+                                            egui::WidgetType::Button,
+                                            ui.is_enabled(),
+                                            "Delete baseline",
+                                        )
+                                    });
+                                    let center = response.rect.center();
+                                    let color = if response.hovered() {
+                                        egui::Color32::from_rgb(255, 182, 182)
+                                    } else {
+                                        egui::Color32::from_rgb(226, 150, 150)
+                                    };
+                                    let stroke = egui::Stroke::new(
+                                        1.4_f32,
+                                        if ui.is_enabled() {
+                                            color
+                                        } else {
+                                            color.gamma_multiply(0.4)
+                                        },
+                                    );
+                                    let painter = ui.painter();
+                                    painter.rect_stroke(
+                                        egui::Rect::from_min_max(
+                                            center + egui::vec2(-5.0, -3.0),
+                                            center + egui::vec2(5.0, 8.0),
+                                        ),
+                                        1.5,
+                                        stroke,
+                                    );
+                                    for (a, b) in [
+                                        ((-7.0, -6.0), (7.0, -6.0)),
+                                        ((-3.0, -6.0), (-3.0, -9.0)),
+                                        ((-3.0, -9.0), (3.0, -9.0)),
+                                        ((3.0, -9.0), (3.0, -6.0)),
+                                        ((-2.0, 0.0), (-2.0, 5.0)),
+                                        ((2.0, 0.0), (2.0, 5.0)),
+                                    ] {
+                                        painter.line_segment(
+                                            [
+                                                center + egui::vec2(a.0, a.1),
+                                                center + egui::vec2(b.0, b.1),
+                                            ],
+                                            stroke,
+                                        );
+                                    }
+                                    if response.clicked() {
+                                        delete = Some(snapshot.name.clone());
+                                    }
+                                },
+                            );
+                            let mut select_rect = card.allocate_space(ui).rect;
+                            // Keep the delete button outside the selection hit area.
+                            select_rect.max.x = delete_rect.left() - ui.spacing().item_spacing.x;
+                            let response = ui
+                                .interact(select_rect, ui.id().with("select"), egui::Sense::click())
+                                .on_hover_cursor(egui::CursorIcon::PointingHand);
+                            let hovered = response.contains_pointer() && ui.is_enabled();
+                            card.frame.fill = if hovered {
+                                egui::Color32::from_rgb(30, 48, 62)
+                            } else if selected {
+                                egui::Color32::from_rgb(22, 39, 48)
+                            } else {
+                                egui::Color32::from_rgb(16, 25, 35)
+                            };
+                            card.frame.stroke = egui::Stroke::new(
+                                1.0_f32,
+                                if selected {
+                                    super::views::ACCENT
+                                } else if hovered {
+                                    super::overview::MUTED
+                                } else {
+                                    egui::Color32::TRANSPARENT
+                                },
+                            );
+                            card.paint(ui);
+                            if response.clicked() && delete.is_none() {
+                                selection = Some(if selected {
+                                    None
+                                } else {
+                                    Some(snapshot.name.clone())
+                                });
+                            }
+                        });
+                        ui.add_space(8.0);
+                    }
+                });
+            },
+        );
+        if let Some(selection) = selection {
+            if let Err(error) = self.select_snapshot(selection) {
+                self.snapshot_error = Some(error);
+            }
+        }
+        if let Some(name) = delete {
+            self.snapshot_dialog = Some(Dialog::Delete(name));
+            self.snapshot_dialog_error = None;
+        } else if delete_all {
+            self.snapshot_dialog = Some(Dialog::DeleteAll);
+            self.snapshot_dialog_error = None;
+        }
     }
 
+    fn return_to_snapshot_management(&mut self) {
+        self.snapshot_dialog = if self.view == super::View::Baselines {
+            None
+        } else {
+            Some(Dialog::Manager)
+        };
+    }
+
+    #[cfg(test)]
     pub(super) fn open_snapshot_manager(&mut self) {
         self.snapshot_select_after_save = false;
         self.snapshot_dialog = Some(Dialog::Manager);
@@ -1089,7 +1245,7 @@ impl Explorer {
         };
         let select_after_save = job.select_after_save;
         self.snapshot_job = None;
-        self.snapshot_dialog = Some(Dialog::Manager);
+        self.return_to_snapshot_management();
         match result {
             Ok(snapshot) => {
                 let saved_name = snapshot.name.clone();
@@ -1233,7 +1389,7 @@ impl Explorer {
                 visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0_f32,egui::Color32::from_rgb(87,99,114));
                 visuals.widgets.hovered.weak_bg_fill = egui::Color32::from_rgb(61,75,92);
                 visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0_f32,super::views::ACCENT);
-                ui.heading("Snapshots");
+                ui.heading(if self.view == super::View::Baselines { "Baselines" } else { "Snapshots" });
                 ui.separator();
                 if let Some(error) = &self.snapshot_dialog_error {
                     ui.colored_label(egui::Color32::LIGHT_RED,error);
@@ -1342,7 +1498,7 @@ impl Explorer {
             }
             Some(Action::Delete(name)) => {
                 let result = self.delete_snapshot(&name);
-                self.snapshot_dialog = Some(Dialog::Manager);
+                self.return_to_snapshot_management();
                 if result.is_ok() {
                     self.snapshot_message = Some(format!("Deleted snapshot “{name}”."));
                 }
@@ -1356,7 +1512,7 @@ impl Explorer {
             }
             Some(Action::DeleteAll) => {
                 let result = self.delete_all_snapshots();
-                self.snapshot_dialog = Some(Dialog::Manager);
+                self.return_to_snapshot_management();
                 result.map(|count| {
                     self.snapshot_message =
                         Some(format!("Deleted {count} snapshots for this firmware."));
@@ -1378,7 +1534,7 @@ impl Explorer {
             }
             Some(Action::Back) => {
                 self.snapshot_select_after_save = false;
-                self.snapshot_dialog = Some(Dialog::Manager);
+                self.return_to_snapshot_management();
                 self.snapshot_dialog_error = None;
                 Ok(())
             }
@@ -2777,13 +2933,7 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
-        for view in [
-            View::Files,
-            View::Symbols,
-            View::Sections,
-            View::MemoryMap,
-            View::Stack,
-        ] {
+        for view in [View::Files, View::Symbols, View::Sections, View::Stack] {
             let texts = render(&mut app, view);
             assert!(
                 texts.iter().any(|t| t.contains("0 B (-1.70 KiB; removed)")),
@@ -2825,8 +2975,24 @@ mod tests {
                 .unwrap(),
         );
         let texts = render(&mut app, View::MemoryMap);
+        // This tab now describes regions, not individual removed symbols.
+        let region = current
+            .options
+            .regions
+            .iter()
+            .find(|r| r.name == "probe_RAM")
+            .unwrap();
+        let usage = firmware_analysis_core::regions::region_usage(&current, region);
         assert!(
-            texts.iter().any(|t| t.contains("0 B (-1.70 KiB; removed)")),
+            texts
+                .iter()
+                .any(|t| t.contains(&format!("{} used", format_bytes(usage.used)))),
+            "{texts:?}"
+        );
+        assert!(
+            !texts
+                .iter()
+                .any(|t| t.contains("old_probe") || t.contains("Symbols in")),
             "{texts:?}"
         );
 
@@ -2998,7 +3164,7 @@ mod tests {
         assert!(!label.contains("removed"), "{label}");
     }
 
-    fn footer_frame(
+    fn shell_frame(
         ctx: &egui::Context,
         app: &mut Explorer,
         events: Vec<egui::Event>,
@@ -3015,23 +3181,29 @@ mod tests {
             |ctx| app.show(ctx),
         )
     }
-    fn click_footer_text(ctx: &egui::Context, app: &mut Explorer, label: &str) {
-        let mut output = footer_frame(ctx, app, vec![]);
+    fn click_shell_text(ctx: &egui::Context, app: &mut Explorer, label: &str) {
+        let mut output = shell_frame(ctx, app, vec![]);
         for _ in 0..2 {
-            output = footer_frame(ctx, app, vec![]);
+            output = shell_frame(ctx, app, vec![]);
         }
         let pos = output
             .shapes
             .iter()
+            .rev()
             .find_map(|shape| match &shape.shape {
                 egui::Shape::Text(text) if text.galley.text() == label => {
                     Some(text.pos + text.galley.size() / 2.0)
                 }
+                egui::Shape::Rect(rect)
+                    if label == "Delete" && rect.fill == egui::Color32::from_rgb(40, 29, 36) =>
+                {
+                    Some(rect.rect.center())
+                }
                 _ => None,
             })
-            .unwrap_or_else(|| panic!("Missing footer action {label}"));
+            .unwrap_or_else(|| panic!("Missing shell action {label}"));
         for pressed in [true, false] {
-            footer_frame(
+            shell_frame(
                 ctx,
                 app,
                 vec![
@@ -3047,7 +3219,7 @@ mod tests {
         }
     }
     #[test]
-    fn header_clears_the_baseline_in_every_tab() {
+    fn header_clears_baseline_without_changing_tabs() {
         use super::super::View;
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
@@ -3058,20 +3230,24 @@ mod tests {
         for view in View::ALL {
             app.select_snapshot(Some("baseline".into())).unwrap();
             app.change_view(view);
-            click_footer_text(&ctx, &mut app, "Clear baseline");
+            click_shell_text(&ctx, &mut app, "Baseline: baseline");
+
             assert!(app.snapshot_label().is_none(), "{}", view.label());
             assert!(app.comparison.is_none());
             assert!(app.baseline_display.is_none());
             assert!(!app.diffs_active());
             assert!(app.view == view);
+            let output = shell_frame(&ctx, &mut app, vec![]);
+            assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.text().starts_with("Baseline: "))));
         }
         app.change_view(View::Symbols);
-        footer_frame(&ctx, &mut app, vec![]);
+        shell_frame(&ctx, &mut app, vec![]);
         assert!(app.visible_rows > 0);
     }
 
     #[test]
-    fn footer_popup_selects_clears_and_creates_baselines() {
+    fn baselines_tab_selects_saved_baselines_or_none() {
         use super::super::View;
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
@@ -3081,70 +3257,134 @@ mod tests {
         app.change_view(View::Symbols);
         let ctx = egui::Context::default();
         super::super::shell::configure_style(&ctx);
-        footer_frame(&ctx, &mut app, vec![]);
+        shell_frame(&ctx, &mut app, vec![]);
         assert!(app.visible_rows > 0);
-        click_footer_text(&ctx, &mut app, "Baseline: none");
-        let output = footer_frame(&ctx, &mut app, vec![]);
-        let menu = output
+        click_shell_text(&ctx, &mut app, "Baselines");
+        assert!(app.view == View::Baselines);
+        let output = shell_frame(&ctx, &mut app, vec![]);
+        let name_pos = output
             .shapes
             .iter()
             .find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) if text.galley.text() == "Comparison baseline" => {
-                    Some(text.pos)
+                egui::Shape::Text(text) if text.galley.text() == "saved baseline" => {
+                    Some(text.pos + text.galley.size() / 2.0)
                 }
                 _ => None,
             })
             .unwrap();
-        assert!(menu.y < 950.0, "The popup must open above the footer");
-        click_footer_text(&ctx, &mut app, "saved baseline");
-        assert_eq!(app.snapshot_label(), Some("saved baseline"));
-        let output = footer_frame(&ctx, &mut app, vec![]);
-        assert_eq!(app.visible_rows, 0);
-        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
-            egui::Shape::Text(text) if text.galley.text() == "Showing only differences · current minus baseline")));
-        click_footer_text(&ctx, &mut app, "Baseline: saved baseline · Diffs only");
-        click_footer_text(&ctx, &mut app, "No baseline — show all entries");
-        assert!(app.snapshot_label().is_none());
-        footer_frame(&ctx, &mut app, vec![]);
-        assert!(app.visible_rows > 0);
-        click_footer_text(&ctx, &mut app, "Baseline: none");
-        click_footer_text(&ctx, &mut app, "Baseline name");
-        footer_frame(
-            &ctx,
-            &mut app,
-            vec![egui::Event::Text("fresh baseline".into())],
+        let text_rect = |label: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let name_rect = text_rect("saved baseline");
+        let date_rect = text_rect(&app.snapshots.snapshots[0].time_label());
+        assert!(date_rect.left() > name_rect.right());
+        assert!(name_rect.height() > date_rect.height());
+        let hovered = shell_frame(&ctx, &mut app, vec![egui::Event::PointerMoved(name_pos)]);
+        assert_eq!(
+            hovered.platform_output.cursor_icon,
+            egui::CursorIcon::PointingHand
         );
-        assert_eq!(app.snapshot_name, "fresh baseline");
-        click_footer_text(&ctx, &mut app, "Create and select baseline");
+        assert!(hovered.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Rect(rect) if rect.fill == egui::Color32::from_rgb(30, 48, 62)
+                && rect.rect.contains(name_pos)
+                && name_pos.y - rect.rect.top() < 28.0)));
+        click_shell_text(&ctx, &mut app, "saved baseline");
+        assert_eq!(app.snapshot_label(), Some("saved baseline"));
+        let selected = shell_frame(&ctx, &mut app, vec![]);
+        assert!(selected.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.text() == "Selected")));
+        for shape in &selected.shapes {
+            if let egui::Shape::Text(text) = &shape.shape {
+                assert!(
+                    text.galley
+                        .job
+                        .sections
+                        .iter()
+                        .all(|section| section.format.font_id.size
+                            >= super::super::shell::MIN_TEXT_SIZE),
+                    "Baseline text is too small: {}",
+                    text.galley.text()
+                );
+            }
+        }
+
+        click_shell_text(&ctx, &mut app, "saved baseline");
+        assert!(app.snapshot_label().is_none());
+        assert!(app.comparison.is_none());
+        assert!(app.baseline_display.is_none());
+        let cleared = shell_frame(&ctx, &mut app, vec![]);
+        assert!(!cleared.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.text() == "Selected")));
+        click_shell_text(&ctx, &mut app, "saved baseline");
+        click_shell_text(&ctx, &mut app, "None");
+        assert!(app.snapshot_label().is_none());
+        click_shell_text(&ctx, &mut app, "saved baseline");
+        app.change_view(View::Symbols);
+        let output = shell_frame(&ctx, &mut app, vec![]);
+        assert_eq!(app.visible_rows, 0);
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if matches!(text.galley.text(), "Clear baseline" | "Create and select baseline" | "Manage snapshots..."))));
+        click_shell_text(&ctx, &mut app, "Baseline: saved baseline");
+        assert!(app.view == View::Symbols);
+        assert!(app.snapshot_label().is_none());
+        app.change_view(View::Symbols);
+        shell_frame(&ctx, &mut app, vec![]);
+        assert!(app.visible_rows > 0);
+        let output = shell_frame(&ctx, &mut app, vec![]);
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if matches!(text.galley.text(), "Baseline name" | "Create and select baseline" | "Manage snapshots..."))));
+    }
+
+    #[test]
+    fn baselines_tab_saves_and_confirms_overwrite_without_selecting_a_baseline() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        let ctx = egui::Context::default();
+        click_shell_text(&ctx, &mut app, "Baselines");
+        assert!(app.view == super::super::View::Baselines);
+        app.snapshot_name = "existing".into();
+        click_shell_text(&ctx, &mut app, "Save baseline");
         assert!(app.snapshot_job.is_some());
         finish_save(&mut app);
-        assert_eq!(app.snapshot_label(), Some("fresh baseline"));
+        assert!(app.snapshot_label().is_none());
         assert!(app.snapshot_dialog.is_none());
         assert!(app
             .snapshots
             .snapshots
             .iter()
-            .any(|s| s.name == "fresh baseline"));
-    }
-
-    #[test]
-    fn footer_creation_confirms_overwrite_before_selecting_the_baseline() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join("build");
-        fixture(&root);
-        let mut app = open(&root);
-        app.take_snapshot("existing").unwrap();
-        let ctx = egui::Context::default();
-        click_footer_text(&ctx, &mut app, "Baseline: none");
-        app.snapshot_name = "existing".into();
-        click_footer_text(&ctx, &mut app, "Create and select baseline");
+            .any(|snapshot| snapshot.name == "existing"));
+        click_shell_text(&ctx, &mut app, "Save baseline");
         assert!(matches!(app.snapshot_dialog, Some(Dialog::Overwrite(_))));
         assert!(app.snapshot_job.is_none());
-        assert!(app.snapshot_label().is_none());
         click_manager(&ctx, &mut app, "Overwrite");
         finish_save(&mut app);
-        assert_eq!(app.snapshot_label(), Some("existing"));
+        assert!(app.snapshot_label().is_none());
         assert!(app.snapshot_dialog.is_none());
+        // Comparison selection lives in the Baselines tab.
+        click_shell_text(&ctx, &mut app, "existing");
+        assert_eq!(app.snapshot_label(), Some("existing"));
+        click_shell_text(&ctx, &mut app, "Delete");
+        assert!(matches!(app.snapshot_dialog, Some(Dialog::Delete(_))));
+        click_manager(&ctx, &mut app, "Cancel");
+        assert!(app.snapshot_dialog.is_none());
+        assert_eq!(app.snapshot_label(), Some("existing"));
+        click_shell_text(&ctx, &mut app, "Delete");
+        click_manager(&ctx, &mut app, "Delete snapshot");
+        assert!(app.snapshot_dialog.is_none());
+        assert!(app.snapshots.snapshots.is_empty());
+        assert!(app.snapshot_label().is_none());
+        assert!(app.view == super::super::View::Baselines);
     }
 
     #[test]
@@ -3206,6 +3446,108 @@ mod tests {
             app.visible_rows > 0,
             "Clearing the baseline restores the normal view"
         );
+    }
+
+    #[test]
+    fn dashboard_memory_links_open_address_only_baseline_changes() {
+        use super::super::View;
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        let mut current = (**app.analysis.as_ref().unwrap()).clone();
+        // Move an unused region so its occupancy remains unchanged.
+        current
+            .options
+            .regions
+            .push(firmware_analysis_core::MemoryRegion {
+                name: "unused".into(),
+                start: 0x60000000,
+                size: 4096,
+                kind: firmware_analysis_core::MemoryKind::Ram,
+            });
+        app.analysis = Some(Arc::new(current));
+        app.take_snapshot("with unused region").unwrap();
+        app.select_snapshot(Some("with unused region".into()))
+            .unwrap();
+        let mut current = (**app.analysis.as_ref().unwrap()).clone();
+        current
+            .sections
+            .iter_mut()
+            .find(|s| s.name == ".text")
+            .unwrap()
+            .address += 16;
+        current.options.regions.last_mut().unwrap().start += 4096;
+        app.analysis = Some(Arc::new(current));
+        app.sync_snapshot_comparison();
+        let ctx = egui::Context::default();
+        super::super::shell::configure_style(&ctx);
+        for (label, view, id) in [
+            (".text".to_owned(), View::Sections, ".text"),
+            (
+                format!(
+                    "View all regions ({})",
+                    app.analysis.as_ref().unwrap().options.regions.len()
+                ),
+                View::MemoryMap,
+                "unused",
+            ),
+        ] {
+            app.change_view(View::Overview);
+            app.show_address_changes[view as usize] = false;
+            click_shell_text(&ctx, &mut app, &label);
+            assert!(app.view == view);
+            shell_frame(&ctx, &mut app, vec![]);
+            assert_eq!(app.visible_rows, 1, "Drilldown from {label} hides {id}");
+        }
+    }
+
+    #[test]
+    fn dashboard_rankings_open_address_only_symbol_changes() {
+        use super::super::View;
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        let mut current = (**app.analysis.as_ref().unwrap()).clone();
+        let mut symbol = current
+            .symbols
+            .iter()
+            .find(|s| s.kind == "Function" && s.usage.flash > 0 && s.source_file.is_some())
+            .unwrap()
+            .clone();
+        symbol.name = "dashboard_moved_function".into();
+        symbol.demangled_name = symbol.name.clone();
+        let owner = symbol.source_file.clone().unwrap();
+        current.symbols = vec![symbol];
+        current.files.retain(|f| f.path == owner);
+        app.analysis = Some(Arc::new(current));
+        app.take_snapshot("baseline").unwrap();
+        app.select_snapshot(Some("baseline".into())).unwrap();
+        let mut current = (**app.analysis.as_ref().unwrap()).clone();
+        current.symbols[0].address += 16;
+        current.symbols[0].normalized_address += 16;
+        app.analysis = Some(Arc::new(current));
+        app.sync_snapshot_comparison();
+        let display = app.baseline_display_analysis().unwrap();
+        let file_label = app.source_paths(&display).short(&owner);
+        let ctx = egui::Context::default();
+        super::super::shell::configure_style(&ctx);
+        for label in [
+            "dashboard_moved_function",
+            file_label.as_str(),
+            "View all functions",
+        ] {
+            app.change_view(View::Overview);
+            app.show_address_changes[View::Symbols as usize] = false;
+            click_shell_text(&ctx, &mut app, label);
+            assert!(app.view == View::Symbols);
+            shell_frame(&ctx, &mut app, vec![]);
+            assert_eq!(
+                app.visible_rows, 1,
+                "Drilldown from {label} hides its symbol"
+            );
+        }
     }
 
     #[test]

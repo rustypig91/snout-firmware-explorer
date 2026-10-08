@@ -41,6 +41,8 @@ use std::{
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum View {
     Overview,
+    BuildFiles,
+    Baselines,
     Files,
     Symbols,
     Sections,
@@ -50,8 +52,10 @@ enum View {
     Memory,
 }
 impl View {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 10] = [
         Self::Overview,
+        Self::BuildFiles,
+        Self::Baselines,
         Self::Files,
         Self::Symbols,
         Self::Sections,
@@ -70,6 +74,8 @@ impl View {
             Self::Dependencies => "Dependencies",
             Self::Stack => "Stack",
             Self::Memory => "Hex viewer",
+            Self::BuildFiles => "Build files",
+            Self::Baselines => "Baselines",
         }
     }
     fn tooltip(self) -> &'static str {
@@ -78,10 +84,12 @@ impl View {
             Self::Files => "Flash and RAM usage attributed to each source file.",
             Self::Symbols => "Functions, variables, and labels with their sizes, addresses, and source files.",
             Self::Sections => "ELF sections with their sizes, memory usage, and load and runtime addresses.",
-            Self::MemoryMap => "Memory regions, used and free space, and the symbols within them.",
+            Self::MemoryMap => "Memory regions, physical occupancy, capacity and free space.",
             Self::Dependencies => "Connections between compilation units and objects based on linker symbol references.",
             Self::Memory => "Hexdump of Flash and inferred RAM startup contents; current firmware only.",
             Self::Stack => "Local function stack frames from compiler reports; total call-chain usage is unknown.",
+            Self::BuildFiles => "Choose map and compiler stack reports for the current firmware.",
+            Self::Baselines => "Save, overwrite and delete firmware baselines.",
         }
     }
 }
@@ -156,6 +164,8 @@ struct BuildSettings {
     dependency_maps: std::collections::BTreeMap<PathBuf, PathBuf>,
     #[serde(default)]
     stack_reports: std::collections::BTreeMap<PathBuf, workspace::StackSelection>,
+    #[serde(default)]
+    overview_regions: std::collections::BTreeMap<PathBuf, [Option<String>; 2]>,
 }
 impl BuildSettings {
     fn reset_choices(&mut self) {
@@ -205,9 +215,11 @@ struct Explorer {
     search: String,
     selected_file: Option<String>,
     selected_region: Option<usize>,
+    reveal_tls_details: bool,
+    #[cfg(test)]
     overview_section: Option<usize>,
+    #[cfg(test)]
     overview_unit: Option<pie::UnitKey>,
-    overview_scroll_top: bool,
     sort_column: usize,
     descending: bool,
     error: Option<String>,
@@ -217,12 +229,16 @@ struct Explorer {
     show_about: bool,
     visible_rows: usize,
     kind_filter: String,
+    #[cfg(test)]
     overview_metric: overview::Metric,
+    #[cfg(test)]
     contributor_ram: bool,
     region_cache: Vec<firmware_analysis_core::regions::RegionUsage>,
     region_cache_key: usize,
+    overview_regions: [Option<String>; 2],
     top_files: [Vec<usize>; 2],
     top_symbols: [Vec<usize>; 2],
+    top_functions: Vec<usize>,
     layout_source: String,
     updates: update_ui::Updates,
     pending_restore: Option<(PathBuf, Option<AnalysisOptions>, String)>,
@@ -265,9 +281,11 @@ impl Default for Explorer {
             search: String::new(),
             selected_file: None,
             selected_region: None,
+            reveal_tls_details: false,
+            #[cfg(test)]
             overview_section: None,
+            #[cfg(test)]
             overview_unit: None,
-            overview_scroll_top: false,
             sort_column: 1,
             descending: true,
             error: None,
@@ -277,12 +295,16 @@ impl Default for Explorer {
             show_about: false,
             visible_rows: 0,
             kind_filter: "All".into(),
+            #[cfg(test)]
             overview_metric: overview::Metric::Flash,
+            #[cfg(test)]
             contributor_ram: false,
             region_cache: Vec::new(),
             region_cache_key: 0,
+            overview_regions: Default::default(),
             top_files: Default::default(),
             top_symbols: Default::default(),
+            top_functions: Vec::new(),
             layout_source: String::new(),
             pending_restore: None,
             remembered_firmware: None,
@@ -436,8 +458,11 @@ impl Explorer {
                         self.stack = None;
                         self.details = None;
                         self.clear_firmware_filters();
-                        self.overview_section = None;
-                        self.overview_unit = None;
+                        #[cfg(test)]
+                        {
+                            self.overview_section = None;
+                            self.overview_unit = None;
+                        }
                         self.artifact_search.clear();
                         self.visible_rows = 0;
                         let restore = self
@@ -488,7 +513,9 @@ impl Explorer {
                         }
                     }
                     Ok(Loaded::Text(path, text)) => {
-                        self.change_view(View::Overview);
+                        if self.view != View::BuildFiles {
+                            self.change_view(View::Overview);
+                        }
                         self.preview = Some((path, text));
                     }
                     Ok(Loaded::Firmware(a, stack, layout, source)) => {
@@ -500,8 +527,11 @@ impl Explorer {
                         self.graph_view = Default::default();
                         self.replace_stack(stack);
                         self.clear_firmware_filters();
-                        self.overview_section = None;
-                        self.overview_unit = None;
+                        #[cfg(test)]
+                        {
+                            self.overview_section = None;
+                            self.overview_unit = None;
+                        }
                         self.details = None;
                         self.visible_rows = 0;
                     }
@@ -527,14 +557,19 @@ impl Explorer {
                                 .insert(PathBuf::from(&analysis.path), paths);
                         }
                         self.stack = Some(s);
-                        self.change_view(View::Stack);
+                        if self.view != View::BuildFiles {
+                            self.change_view(View::Stack);
+                        }
                     }
                     Ok(Loaded::Config(options, analysis, source, stack, build)) => {
                         self.layout_source = source;
                         self.details = None;
                         self.clear_region_filters();
-                        self.overview_section = None;
-                        self.overview_unit = None;
+                        #[cfg(test)]
+                        {
+                            self.overview_section = None;
+                            self.overview_unit = None;
+                        }
                         self.layout_override = Some(options.clone());
                         self.options = options;
                         self.analysis = analysis.map(Arc::new);
@@ -569,6 +604,7 @@ impl Explorer {
                         source: self.layout_source.clone(),
                     });
                 }
+                self.restore_overview_regions();
                 self.sync_snapshot_comparison();
                 self.persist_preferences();
             }
