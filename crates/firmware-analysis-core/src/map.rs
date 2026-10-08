@@ -415,7 +415,15 @@ fn gnu_section_row(name: &str, fields: &[&str]) -> Result<MapOutputSection, Erro
             })?)
         })
         .transpose()?;
-    output_section(name, hex(fields[0])?, hex(fields[1])?, load_address)
+    let address = hex(fields[0])?;
+    // GNU ld prints a load-address annotation when LMA differs from VMA.
+    // Its absence therefore establishes equal placement, not unknown LMA.
+    output_section(
+        name,
+        address,
+        hex(fields[1])?,
+        Some(load_address.unwrap_or(address)),
+    )
 }
 
 fn parse_gnu_sections(text: &str) -> Result<Option<Vec<MapOutputSection>>, Error> {
@@ -499,7 +507,9 @@ fn ti_section_row(name: &str, fields: &[&str]) -> Result<MapOutputSection, Error
         name,
         run.unwrap_or(origin),
         hex(fields[2])?,
-        run.map(|_| origin),
+        // Origin is the load placement; RUN overrides only runtime placement.
+        // Uninitialized sections have no file payload to load.
+        (!fields.contains(&"UNINITIALIZED")).then_some(origin),
     )
 }
 

@@ -723,3 +723,32 @@ fn conflicting_load_addresses_reject_maps_with_matching_runtime_sections() {
         assert!(report.dependencies.map_path.is_none());
     }
 }
+
+#[test]
+fn implicit_load_addresses_reject_stale_maps_for_copied_sections() {
+    use firmware_analysis_core::map::MapFormat;
+    for format in [MapFormat::GnuLd, MapFormat::TexasCgt] {
+        let dir = Temp::new();
+        let elf = dir.0.join("app.elf");
+        fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+        let map = dir.0.join("app.map");
+        let text = matching_section_map(format);
+        // The stale map places .ram_code directly in RAM, with no separate Flash
+        // load placement. Its runtime name/address/size still match the ELF.
+        let stale = match format {
+            MapFormat::GnuLd => text.replace(" load address 0x8000598", ""),
+            MapFormat::TexasCgt => text.replace(
+                "0 08000598 0000001c RUN ADDR = 20000000",
+                "0 20000000 0000001c",
+            ),
+            _ => unreachable!(),
+        };
+        assert_ne!(text, stale, "{format:?}");
+        fs::write(&map, stale).unwrap();
+        let build = scan_folder(&dir.0).unwrap();
+        assert!(build.matching_map(&elf).is_none(), "{format:?}");
+        let report = analyze_build_firmware(&build, &elf, None).unwrap();
+        assert!(report.options.regions.is_empty());
+        assert!(report.dependencies.map_path.is_none());
+    }
+}
