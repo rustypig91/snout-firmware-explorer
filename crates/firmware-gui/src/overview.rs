@@ -308,6 +308,7 @@ impl Explorer {
         if a.tls.is_some() && ui.link("Thread-local storage details").clicked() {
             self.change_view(View::Sections);
             self.search.clear();
+            self.reveal_tls_details = true;
         }
     }
 

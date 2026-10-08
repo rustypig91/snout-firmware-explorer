@@ -849,13 +849,18 @@ impl Explorer {
         let display = self.baseline_display_analysis();
         let a = display.as_deref().unwrap_or(a);
         if let Some(tls) = &a.tls {
+            let reveal = std::mem::take(&mut self.reveal_tls_details);
             egui::CollapsingHeader::new("Thread-local storage (TLS)")
                 .default_open(true)
+                .open(reveal.then_some(true))
                 .show(ui, |ui| {
-                    egui::ScrollArea::vertical()
+                    let mut scroll = egui::ScrollArea::vertical()
                         .id_salt("tls_details")
-                        .max_height(160.0)
-                        .show(ui, |ui| {
+                        .max_height(160.0);
+                    if reveal {
+                        scroll = scroll.vertical_scroll_offset(0.0);
+                    }
+                    scroll.show(ui, |ui| {
                             ui.label(format!(
                                 "Template per thread: {} — {} initialized, {} zero-initialized; alignment {}",
                                 self.snapshot_bytes("tls", "", "template_size", tls.template_size),

@@ -215,6 +215,7 @@ struct Explorer {
     search: String,
     selected_file: Option<String>,
     selected_region: Option<usize>,
+    reveal_tls_details: bool,
     #[cfg(test)]
     overview_section: Option<usize>,
     #[cfg(test)]
@@ -280,6 +281,7 @@ impl Default for Explorer {
             search: String::new(),
             selected_file: None,
             selected_region: None,
+            reveal_tls_details: false,
             #[cfg(test)]
             overview_section: None,
             #[cfg(test)]

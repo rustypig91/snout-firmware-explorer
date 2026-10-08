@@ -4840,6 +4840,37 @@ fn sections_expose_tls_template_and_variable_details_without_inventing_total_ram
         )
     };
     app.search = "stale section filter".into();
+    // The dashboard link must reveal details even after a user collapses them.
+    ctx.style_mut(|style| style.animation_time = 0.0);
+    frame(&mut app, vec![]);
+    let output = frame(&mut app, vec![]);
+    let header = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "Thread-local storage (TLS)" => {
+                Some(text.pos + text.galley.size() * 0.5)
+            }
+            _ => None,
+        })
+        .unwrap();
+    for pressed in [true, false] {
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(header),
+                egui::Event::PointerButton {
+                    pos: header,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    let output = frame(&mut app, vec![]);
+    assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+        egui::Shape::Text(text) if text.galley.text().contains("Template per thread:"))));
     app.change_view(View::Overview);
     frame(&mut app, vec![]);
     let output = frame(&mut app, vec![]);
