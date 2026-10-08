@@ -17,6 +17,8 @@ The main target is ARM Cortex-M firmware built with GCC. Other ELF files may wor
 
 Download a Windows or Linux build from [Releases](https://github.com/rustypig91/snout-firmware-explorer/releases).
 
+On Ubuntu 22.04 or newer (amd64), you can also install published packages through the shared [Rusty APT repository](https://github.com/rustypig91/rusty-apt#install-on-ubuntu-2204-or-newer-amd64). After adding that repository, run `sudo apt install snout`; upgrades use `sudo apt update && sudo apt upgrade`.
+
 1. Open Snout and choose **Open build folder**, or drag in a folder or ELF file.
 2. Select your firmware in the sidebar.
 3. Start with **Overview**, then explore **Files** or **Symbols** to find the largest contributors.

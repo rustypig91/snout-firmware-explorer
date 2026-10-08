@@ -86,6 +86,8 @@ Release assets include portable archives containing the GUI and CLI, standalone 
 
 The Debian package is named `snout` and installs the GUI as `/usr/bin/snout`. Its desktop launcher runs `snout`; the AppImage uses the same executable name internally. Cargo builds and portable archives also use `snout` (`snout.exe` on Windows).
 
+After a successful tagged GitHub release, the `publish-apt` job dispatches `publish-apt.yml` on `main` in the shared [Rusty APT repository](https://github.com/rustypig91/rusty-apt). That publisher imports release Debian assets, signs repository metadata, and deploys the APT repository. Pull-request and manual branch builds do not dispatch publication. The application repository needs the `APT_PUBLISH_TOKEN` Actions secret with Actions write access only to `rustypig91/rusty-apt`; signing and Pages configuration belong to the shared repository. A failed dispatch can be recovered by manually running its **Publish APT** workflow.
+
 Build packages locally using `bash scripts/build-release.sh` on x86_64 Debian/Ubuntu or `scripts\build-release.cmd` from a Windows developer shell. Output goes to `target/release-assets/<target>/`. The Linux script needs the desktop build packages listed above, plus `curl`, `pkg-config`, and `dpkg-dev`; packaging downloads linuxdeploy and installs cargo-deb if needed. Windows requires Rust, the C++ Build Tools and Windows SDK; the script downloads portable WiX and Inno Setup. To capture a screenshot locally, install `xvfb xauth xdotool imagemagick`, then run:
 
 ```sh
