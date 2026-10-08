@@ -9,9 +9,9 @@
 
 ## Code map
 
-- `crates/firmware-analysis-core`: ELF/DWARF and map parsing, memory accounting, attribution, comparisons, dependencies and stack reports. Keep accounting in the core.
-- `crates/firmware-gui`: egui/eframe desktop UI, workspace preferences, snapshots and updates. Analysis runs on a worker thread; failed loads preserve the last successful report.
-- `crates/firmware-cli`: command-line interface and JSON output.
+- `crates/snout-core`: ELF/DWARF and map parsing, memory accounting, attribution, comparisons, dependencies and stack reports. Keep accounting in the core.
+- `crates/snout`: egui/eframe desktop UI, workspace preferences, snapshots and updates. Analysis runs on a worker thread; failed loads preserve the last successful report.
+- `crates/snout-cli`: command-line interface and JSON output.
 - `fixtures`: committed firmware and compiler reports for reproducible tests.
 - `scripts` and `.github/workflows/build.yml`: packaging and release automation.
 

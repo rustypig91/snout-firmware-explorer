@@ -89,7 +89,7 @@ fixtures/
 Baseline and stripped images share the baseline objects. Each configuration's stack reports cover 24 functions. To inspect only the baseline reports, use:
 
 ```sh
-cargo run -p firmware-cli -- stack fixtures/build/cortex-m.elf \
+cargo run -p snout-cli -- stack fixtures/build/cortex-m.elf \
     --stack-usage fixtures/build/CMakeFiles/cortex-m-objects.dir/src
 ```
 

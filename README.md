@@ -28,14 +28,14 @@ Matching linker maps and stack reports are discovered automatically where possib
 With a stable Rust toolchain and the [platform build dependencies](docs/technical-reference.md#opening-firmware-and-selecting-supporting-files) installed:
 
 ```sh
-cargo run -p firmware-gui -- fixtures/build/cortex-m.elf
+cargo run -p snout -- fixtures/build/cortex-m.elf
 ```
 
 The CLI can also analyze firmware or compare two builds:
 
 ```sh
-cargo run -p firmware-cli -- analyze fixtures/build/cortex-m.elf
-cargo run -p firmware-cli -- diff fixtures/build/cortex-m.elf fixtures/build/cortex-m-grown.elf
+cargo run -p snout-cli -- analyze fixtures/build/cortex-m.elf
+cargo run -p snout-cli -- diff fixtures/build/cortex-m.elf fixtures/build/cortex-m-grown.elf
 ```
 
 See the [technical reference](docs/technical-reference.md) for detailed behavior, supported inputs, memory accounting, CLI options and development checks. Coding agents should start with [AGENTS.md](AGENTS.md).

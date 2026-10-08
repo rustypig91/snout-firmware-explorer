@@ -114,9 +114,9 @@ jobs:
           OUT="snout-v${VERSION}-${{ matrix.target }}"
           mkdir "$OUT"
           if [ "${{ matrix.platform }}" = "windows-latest" ]; then
-            cp "$BIN_DIR/firmware-gui.exe" "$BIN_DIR/firmware-explorer.exe" "$OUT/"
+            cp "$BIN_DIR/snout.exe" "$BIN_DIR/snout-cli.exe" "$OUT/"
           else
-            cp "$BIN_DIR/firmware-gui" "$BIN_DIR/firmware-explorer" "$OUT/"
+            cp "$BIN_DIR/snout" "$BIN_DIR/snout-cli" "$OUT/"
           fi
           cp README.md LICENSE "$OUT/"
           if [ "${{ matrix.platform }}" = "windows-latest" ]; then
@@ -132,7 +132,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          BIN="target/${{ matrix.target }}/release/firmware-gui"
+          BIN="target/${{ matrix.target }}/release/snout"
           ASSET="snout-v${VERSION}-${{ matrix.target }}"
           if [ "${{ matrix.platform }}" = "windows-latest" ]; then
             BIN="$BIN.exe"
@@ -145,8 +145,8 @@ jobs:
 
       # --- Windows installer -------------------------------------------------
       # WiX v3 is not guaranteed to be present on the runner image, so fetch a
-      # pinned copy and drive candle/light directly. The same crates/firmware-gui/
-      # wix/main.wxs also works locally via `cargo wix -p firmware-gui`.
+      # pinned copy and drive candle/light directly. The same crates/snout/
+      # wix/main.wxs also works locally via `cargo wix -p snout`.
       - name: Install WiX toolset (windows only)
         if: matrix.platform == 'windows-latest'
         shell: bash
@@ -172,7 +172,7 @@ jobs:
             -dPlatform=x64 \
             -dCargoTargetBinDir="$WS/target/${{ matrix.target }}/release" \
             -out obj/ \
-            "$WS/crates/firmware-gui/wix/main.wxs"
+            "$WS/crates/snout/wix/main.wxs"
           light.exe \
             -nologo \
             -ext WixUIExtension \
@@ -199,7 +199,7 @@ jobs:
             "/DAppVersion=$($env:VERSION)" `
             "/DSourceBinDir=$env:GITHUB_WORKSPACE\target\${{ matrix.target }}\release" `
             "/O$env:GITHUB_WORKSPACE" `
-            "$env:GITHUB_WORKSPACE\crates\firmware-gui\packaging\windows\snout.iss"
+            "$env:GITHUB_WORKSPACE\crates\snout\packaging\windows\snout.iss"
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
           "SETUP_ASSET=snout-v$($env:VERSION)-x86_64-setup.exe" |
             Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
@@ -213,7 +213,7 @@ jobs:
           cargo install cargo-deb --locked
           # --no-build reuses the release binary built above. cargo-deb prints
           # the path of the package it wrote as its last line of stdout.
-          DEB="$(cargo deb -p firmware-gui --target ${{ matrix.target }} --no-build | tail -n1)"
+          DEB="$(cargo deb -p snout --target ${{ matrix.target }} --no-build | tail -n1)"
           dpkg-deb --info "$DEB"
           dpkg-deb --contents "$DEB"
           echo "Built $DEB"
@@ -224,8 +224,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash crates/firmware-gui/packaging/linux/build-appimage.sh \
-            "target/${{ matrix.target }}/release/firmware-gui" "$VERSION" .
+          bash crates/snout/packaging/linux/build-appimage.sh \
+            "target/${{ matrix.target }}/release/snout" "$VERSION" .
           echo "APPIMAGE_ASSET=snout-v${VERSION}-x86_64.AppImage" >> "$GITHUB_ENV"
 
       - name: Capture release screenshot (ubuntu only)
@@ -236,7 +236,7 @@ jobs:
           set -euo pipefail
           SCREENSHOT="snout-screenshot.png"
           bash scripts/capture-screenshot.sh \
-            "target/${{ matrix.target }}/release/firmware-gui" "$SCREENSHOT" fixtures/build/cortex-m.elf
+            "target/${{ matrix.target }}/release/snout" "$SCREENSHOT" fixtures/build/cortex-m.elf
           echo "SCREENSHOT_ASSET=$SCREENSHOT" >> "$GITHUB_ENV"
 
       - name: Upload build artifacts
