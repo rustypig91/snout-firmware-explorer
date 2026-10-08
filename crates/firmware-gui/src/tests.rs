@@ -3764,6 +3764,21 @@ fn header_switches_elf_and_build_files_selects_support_without_leaving_the_tab()
     finish_job(&mut app);
     assert!(app.view == View::BuildFiles);
     assert_eq!(app.preview.as_ref().unwrap().0, root.join("other.map"));
+    let output = frame(&ctx, &mut app, vec![]);
+    click(&ctx, &mut app, text_pos(&output, "Back to file selection"));
+    let output = frame(&ctx, &mut app, vec![]);
+    click(&ctx, &mut app, text_pos(&output, "app.map"));
+    finish_job(&mut app);
+    let output = frame(&ctx, &mut app, vec![]);
+    click(
+        &ctx,
+        &mut app,
+        text_pos(&output, "Use memory regions from this map"),
+    );
+    assert!(app.receiver.is_some());
+    finish_job(&mut app);
+    assert!(app.map_in_use(&root.join("app.map")));
+    assert!(app.view == View::BuildFiles);
 }
 
 #[test]

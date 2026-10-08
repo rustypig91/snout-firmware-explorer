@@ -3479,7 +3479,11 @@ mod tests {
         let file_label = app.source_paths(&display).short(&owner);
         let ctx = egui::Context::default();
         super::super::shell::configure_style(&ctx);
-        for label in ["dashboard_moved_function", file_label.as_str()] {
+        for label in [
+            "dashboard_moved_function",
+            file_label.as_str(),
+            "View all functions",
+        ] {
             app.change_view(View::Overview);
             app.show_address_changes[View::Symbols as usize] = false;
             click_shell_text(&ctx, &mut app, label);

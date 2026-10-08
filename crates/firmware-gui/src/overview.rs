@@ -603,6 +603,9 @@ impl Explorer {
             })
             .clicked()
         {
+            if functions && self.diffs_active() {
+                self.show_address_changes[View::Symbols as usize] = true;
+            }
             self.change_view(if functions {
                 View::Symbols
             } else {

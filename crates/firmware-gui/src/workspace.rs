@@ -808,7 +808,15 @@ impl Explorer {
                         if format == MapFormat::LlvmLld {
                             ui.small("LLVM maps contain section placement, not memory capacities. Physical memory capacities remain unknown.");
                         } else {
-                            ui.small("Select this map's radio button in the left menu to use its memory regions.");
+                            if ui
+                                .add_enabled(
+                                    !self.map_in_use(&path),
+                                    egui::Button::new("Use memory regions from this map"),
+                                )
+                                .clicked()
+                            {
+                                self.apply_map(path.clone());
+                            }
                         }
                 }
             });
