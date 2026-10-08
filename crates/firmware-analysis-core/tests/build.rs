@@ -430,7 +430,10 @@ fn stale_named_map_is_rejected_and_changes_are_reread() {
         .regions
         .is_empty());
     fs::write(&map, include_str!("../../../fixtures/build/cortex-m.map")).unwrap();
-    assert_eq!(build.matching_map(&elf), Some(map.as_path()));
+    assert_eq!(
+        build.matching_map(&elf),
+        Some(build.root.join("app.map").as_path())
+    );
 }
 
 #[test]
@@ -636,7 +639,11 @@ fn generic_matching_selects_rejects_and_disambiguates_each_format() {
         let text = matching_section_map(format);
         fs::write(&map, &text).unwrap();
         let build = scan_folder(&dir.0).unwrap();
-        assert_eq!(build.matching_map(&elf), Some(map.as_path()), "{format:?}");
+        assert_eq!(
+            build.matching_map(&elf),
+            Some(build.root.join("renamed.map").as_path()),
+            "{format:?}"
+        );
         fs::write(dir.0.join("duplicate.map"), &text).unwrap();
         let build = scan_folder(&dir.0).unwrap();
         assert!(build.matching_map(&elf).is_none(), "{format:?}");
@@ -708,7 +715,11 @@ fn conflicting_load_addresses_reject_maps_with_matching_runtime_sections() {
         let text = matching_section_map(format);
         fs::write(&map, &text).unwrap();
         let build = scan_folder(&dir.0).unwrap();
-        assert_eq!(build.matching_map(&elf), Some(map.as_path()), "{format:?}");
+        assert_eq!(
+            build.matching_map(&elf),
+            Some(build.root.join("app.map").as_path()),
+            "{format:?}"
+        );
         let stale = match format {
             MapFormat::GnuLd => text.replace("load address 0x8000598", "load address 0x8001598"),
             MapFormat::TexasCgt => text.replace("0 08000598", "0 08001598"),
