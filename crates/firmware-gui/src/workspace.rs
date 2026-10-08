@@ -475,6 +475,13 @@ impl Explorer {
             }
             return;
         };
+        if !build.warnings.is_empty() {
+            ui.collapsing(format!("{} scan notes", build.warnings.len()), |ui| {
+                for note in &build.warnings {
+                    ui.label(note);
+                }
+            });
+        }
         let mut selected = None;
         let mut selected_map = None;
         let previous = self.browser_cache.take();
@@ -587,13 +594,6 @@ impl Explorer {
             );
             cache.filter(&self.artifact_search);
             ui.small(format!("{} compatible files", build.artifacts.len()));
-            if !build.warnings.is_empty() {
-                ui.collapsing(format!("{} scan notes", build.warnings.len()), |ui| {
-                    for note in &build.warnings {
-                        ui.label(note);
-                    }
-                });
-            }
             ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| {
                     if build.artifacts.is_empty() {

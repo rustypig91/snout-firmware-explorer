@@ -3643,6 +3643,73 @@ fn distribution_legend_opens_sections_without_resetting_overview_filters() {
 }
 
 #[test]
+fn build_files_scan_notes_remain_accessible_after_loading_firmware() {
+    let analysis = firmware_analysis_core::analyze_bytes(
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        "fixture.elf",
+        &Default::default(),
+    )
+    .unwrap();
+    for loaded in [false, true] {
+        let mut app = Explorer {
+            build: Some(Arc::new(firmware_analysis_core::build::BuildFolder {
+                root: PathBuf::from("build"),
+                artifacts: vec![],
+                warnings: vec!["build/private: Permission denied".into()],
+            })),
+            analysis: loaded.then(|| Arc::new(analysis.clone())),
+            view: View::BuildFiles,
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        shell::configure_style(&ctx);
+        ctx.style_mut(|style| style.animation_time = 0.0);
+        let frame = |app: &mut Explorer, events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1280.0, 820.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| app.show(ctx),
+            )
+        };
+        frame(&mut app, vec![]);
+        let output = frame(&mut app, vec![]);
+        let header = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "1 scan notes" => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .expect("Scan notes must be reachable with or without loaded firmware");
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(header),
+                    egui::Event::PointerButton {
+                        pos: header,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        let output = frame(&mut app, vec![]);
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.text() == "build/private: Permission denied")));
+    }
+}
+
+#[test]
 fn header_switches_elf_and_build_files_selects_support_without_leaving_the_tab() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
