@@ -4405,6 +4405,76 @@ fn section_distributions_use_separate_flash_and_static_ram_sizes() {
 }
 
 #[test]
+fn dashboard_distribution_legends_remain_readable_at_minimum_window_size() {
+    let mut analysis = firmware_analysis_core::analyze_bytes(
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        "fixture.elf",
+        &Default::default(),
+    )
+    .unwrap();
+    let template = analysis.sections[0].clone();
+    let names = [".text", ".data", ".bss", ".rodata", ".init", ".extra"];
+    analysis.sections = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let mut section = template.clone();
+            section.name = (*name).into();
+            section.usage = firmware_analysis_core::Usage {
+                flash: (6 - i) as u64 * 100,
+                ram: (6 - i) as u64 * 100,
+            };
+            section
+        })
+        .collect();
+    let mut app = Explorer {
+        analysis: Some(Arc::new(analysis)),
+        ..Default::default()
+    };
+    let ctx = egui::Context::default();
+    shell::configure_style(&ctx);
+    let mut output = egui::FullOutput::default();
+    for _ in 0..3 {
+        output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| app.show(ctx),
+        );
+    }
+    for name in names[..5].iter().copied().chain(["Other"]) {
+        let labels: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == name => {
+                    Some((text, shape.clip_rect))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(labels.len(), 2, "Both distributions must show {name}");
+        for (text, clip) in labels {
+            let rendered: String = text
+                .galley
+                .rows
+                .iter()
+                .flat_map(|row| row.glyphs.iter().map(|glyph| glyph.chr))
+                .collect();
+            assert_eq!(
+                rendered, name,
+                "Legend name must not collapse into an ellipsis"
+            );
+            assert!(clip.contains_rect(egui::Rect::from_min_size(text.pos, text.galley.size())));
+        }
+    }
+}
+
+#[test]
 fn dashboard_memory_controls_fit_at_minimum_window_size() {
     let options = firmware_analysis_core::map::parse_map_regions(include_str!(
         "../../../fixtures/build/cortex-m.map"

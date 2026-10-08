@@ -41,13 +41,31 @@ impl Explorer {
             items.push(("Other".into(), other));
         }
         let available = ui.available_size();
-        let diameter = (available.x * 0.49)
-            .min(available.y - 4.0)
-            .clamp(60.0, 180.0);
-        let height = diameter.max(items.len() as f32 * 26.0).min(available.y);
+        // Narrow dashboard cards cannot fit a readable legend beside the donut.
+        let stacked = available.x < 240.0;
+        let row_height = if stacked { 18.0 } else { 26.0 };
+        let legend_height = items.len() as f32 * row_height;
+        let diameter = if stacked {
+            (available.y - legend_height - 8.0)
+                .min(available.x)
+                .clamp(60.0, 120.0)
+        } else {
+            (available.x * 0.49)
+                .min(available.y - 4.0)
+                .clamp(60.0, 180.0)
+        };
+        let height = if stacked {
+            diameter + 8.0 + legend_height
+        } else {
+            diameter.max(legend_height)
+        };
         let (area, _) =
             ui.allocate_exact_size(egui::vec2(available.x, height), egui::Sense::hover());
-        let center = area.left_center() + egui::vec2(diameter * 0.5, 0.0);
+        let center = if stacked {
+            egui::pos2(area.center().x, area.top() + diameter * 0.5)
+        } else {
+            area.left_center() + egui::vec2(diameter * 0.5, 0.0)
+        };
         let outer = diameter * 0.49;
         let inner = outer * 0.53;
         let mut angle = -std::f32::consts::FRAC_PI_2;
@@ -86,19 +104,30 @@ impl Explorer {
             egui::FontId::proportional((diameter * 0.15).clamp(12.0, 18.0)),
             ui.visuals().text_color(),
         );
-        let legend_left = area.left() + diameter + 12.0;
+        let legend_left = if stacked {
+            area.left()
+        } else {
+            area.left() + diameter + 12.0
+        };
         let legend_width = (area.right() - legend_left).max(1.0);
-        let top = area.center().y - items.len() as f32 * 13.0;
+        let top = if stacked {
+            area.top() + diameter + 8.0
+        } else {
+            area.center().y - legend_height * 0.5
+        };
+        let text_offset = (row_height
+            - ui.fonts(|fonts| fonts.row_height(&egui::FontId::proportional(14.0))))
+            * 0.5;
         for (index, (name, size)) in items.iter().enumerate() {
             let row = egui::Rect::from_min_size(
-                egui::pos2(legend_left, top + index as f32 * 26.0),
-                egui::vec2(legend_width, 26.0),
+                egui::pos2(legend_left, top + index as f32 * row_height),
+                egui::vec2(legend_width, row_height),
             );
             ui.painter()
                 .circle_filled(row.left_center() + egui::vec2(4.0, 0.0), 5.0, color(index));
             super::overview::clipped_text(
                 ui,
-                row.min + egui::vec2(18.0, 4.0),
+                row.min + egui::vec2(18.0, text_offset),
                 name,
                 (legend_width - 63.0).max(1.0),
                 14.0,
@@ -106,7 +135,7 @@ impl Explorer {
             );
             super::overview::right_text(
                 ui,
-                row.right_top() + egui::vec2(0.0, 4.0),
+                row.right_top() + egui::vec2(0.0, text_offset),
                 &format!("{:.1}%", *size as f64 * 100.0 / total as f64),
                 45.0,
                 14.0,
