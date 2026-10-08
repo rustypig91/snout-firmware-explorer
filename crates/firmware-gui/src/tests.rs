@@ -426,7 +426,7 @@ fn dropping_an_elf_opens_its_folder_and_selects_it() {
 }
 
 #[test]
-fn active_map_follows_analysis_instead_of_preview_selection() {
+fn active_map_follows_successful_map_selection() {
     let mut app = Explorer::default();
     let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build");
     app.scan_build(folder);
@@ -439,7 +439,6 @@ fn active_map_follows_analysis_instead_of_preview_selection() {
     finish_job(&mut app);
     assert!(app.map_in_use(&map));
     assert!(!app.map_in_use(&other_map));
-    app.preview = Some((other_map.clone(), String::new()));
     assert!(app.map_in_use(&map));
     assert!(!app.map_in_use(&other_map));
     app.apply_map(other_map.clone());
@@ -475,6 +474,125 @@ fn active_map_follows_analysis_instead_of_preview_selection() {
     app.scan_build(empty.path().to_owned());
     finish_job(&mut app);
     assert!(!app.map_in_use(&other_map));
+}
+
+#[test]
+fn memory_regions_links_to_build_files_and_no_map_choice_survives_restart() {
+    let mut app = Explorer::default();
+    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build"));
+    finish_job(&mut app);
+    let root = app.build.as_ref().unwrap().root.clone();
+    app.open(root.join("cortex-m.elf"));
+    finish_job(&mut app);
+    app.change_view(View::BuildFiles);
+    let ctx = egui::Context::default();
+    let frame = |app: &mut Explorer, events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 820.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.show(ctx),
+        )
+    };
+    let text_pos = |output: &egui::FullOutput, label: &str| {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("Missing text: {label}"))
+    };
+    let click = |app: &mut Explorer, pos| {
+        for pressed in [true, false] {
+            frame(
+                app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+    };
+    frame(&mut app, vec![]);
+    let output = frame(&mut app, vec![]);
+    let load = text_pos(&output, "Load map file...");
+    let detect = text_pos(&output, "Autodetect map file");
+    for name in [
+        "cortex-m-grown.map",
+        "cortex-m-stripped.map",
+        "cortex-m.map",
+    ] {
+        let pos = text_pos(&output, name);
+        assert!(
+            pos.y < load.y && pos.y < detect.y,
+            "map actions must follow the list"
+        );
+    }
+    click(&mut app, text_pos(&output, "No map selected"));
+    finish_job(&mut app);
+    assert!(app.options.regions.is_empty());
+    assert!(!app.map_in_use(&root.join("cortex-m.map")));
+    let mut restored = Explorer::default();
+    restored.apply_preferences(&app.preference_value());
+    finish_job(&mut restored);
+    finish_job(&mut restored);
+    assert!(restored.options.regions.is_empty());
+    restored.change_view(View::MemoryMap);
+    frame(&mut restored, vec![]);
+    let output = frame(&mut restored, vec![]);
+    text_pos(&output, "No map selected");
+    for shape in &output.shapes {
+        if let egui::Shape::Text(text) = &shape.shape {
+            assert!(![
+                "Use ELF inference",
+                "Load memory regions...",
+                "Discover layout from matching map",
+                "Restore map memory regions"
+            ]
+            .contains(&text.galley.text()));
+        }
+    }
+    click(&mut restored, text_pos(&output, "Open Build files"));
+    assert!(restored.view == View::BuildFiles);
+    let output = frame(&mut restored, vec![]);
+    let label = text_pos(&output, "cortex-m-grown.map");
+    let radio = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Circle(circle)
+                if circle.center.x < label.x && (circle.center.y - label.y).abs() < 2.0 =>
+            {
+                Some(circle.center)
+            }
+            _ => None,
+        })
+        .unwrap();
+    click(&mut restored, radio);
+    finish_job(&mut restored);
+    assert!(restored.map_in_use(&root.join("cortex-m-grown.map")));
+    assert!(!restored.options.regions.is_empty());
+    let output = frame(&mut restored, vec![]);
+    click(&mut restored, text_pos(&output, "Autodetect map file"));
+    finish_job(&mut restored);
+    assert!(restored.error.is_none());
+    assert!(restored.view == View::BuildFiles);
+    assert!(restored.map_in_use(&root.join("cortex-m.map")));
+    assert!(restored.layout_override.is_none());
 }
 
 #[test]
@@ -566,17 +684,14 @@ fn folder_reset_preserves_saved_choices_and_report_when_reanalysis_fails() {
         app.apply_map(root.join("manual.map"));
         finish_job(&mut app);
     }
-    app.preview = Some((root.join("manual.map"), "Preview".into()));
     let preferences = app.preference_value();
     let analysis = app.analysis.clone().unwrap();
-    let preview = app.preview.clone();
     std::fs::write(root.join("app.elf"), b"incomplete rebuild").unwrap();
     app.reset_build_settings();
     finish_job(&mut app);
     assert!(app.error.is_some());
     assert!(Arc::ptr_eq(&analysis, app.analysis.as_ref().unwrap()));
     assert_eq!(app.preference_value(), preferences);
-    assert_eq!(app.preview, preview);
     assert_eq!(app.build_settings[&root].layouts.len(), 2);
 
     std::fs::write(
@@ -589,7 +704,6 @@ fn folder_reset_preserves_saved_choices_and_report_when_reanalysis_fails() {
     assert!(app.error.is_none());
     assert!(app.build_settings[&root].layouts.is_empty());
     assert!(app.map_in_use(&root.join("app.map")));
-    assert!(app.preview.is_none());
 }
 
 #[test]
@@ -664,7 +778,7 @@ fn folder_workflow_selects_firmware_and_loads_stack_automatically() {
     assert!(output
         .shapes
         .iter()
-        .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == "Settings")));
+        .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == "Menu")));
     app.scan_build(build.root.join("cortex-m.elf"));
     finish_job(&mut app);
     assert!(app.error.as_ref().unwrap().contains("folder"));
@@ -1129,6 +1243,7 @@ fn build_folder_scan_finds_adjacent_and_nested_reports() {
         .unwrap()
         .recv_timeout(std::time::Duration::from_secs(5))
         .unwrap()
+        .result
         .unwrap();
     std::fs::remove_dir_all(&root).unwrap();
     let Loaded::SelectedStack(report, _) = result else {
@@ -1209,6 +1324,145 @@ fn configured_regions_render_bars_and_search_without_symbols() {
             }
         }
     }
+}
+
+#[test]
+fn header_reload_is_right_aligned_clickable_and_replaced_while_loading() {
+    let mut app = Explorer::default();
+    let ctx = egui::Context::default();
+    shell::configure_style(&ctx);
+    let frame = |app: &mut Explorer, width, events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 800.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.show(ctx),
+        )
+    };
+    // Locate the drawn reload arc; the icon-only control has no visible text.
+    let reload_center = |output: &egui::FullOutput| {
+        output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Path(path) if path.points.len() == 33 && !path.closed => {
+                let angle = std::f32::consts::PI * 0.2;
+                Some(path.points[0] - egui::vec2(angle.cos(), angle.sin()) * 8.0)
+            }
+            _ => None,
+        })
+    };
+    let click = |app: &mut Explorer, pos| {
+        for pressed in [true, false] {
+            frame(
+                app,
+                1280.0,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+    };
+    frame(&mut app, 1280.0, vec![]);
+    let output = frame(&mut app, 1280.0, vec![]);
+    click(&mut app, reload_center(&output).unwrap());
+    assert!(
+        app.receiver.is_none(),
+        "Refresh is disabled without a build folder"
+    );
+
+    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build"));
+    finish_job(&mut app);
+    app.open(app.build.as_ref().unwrap().root.join("cortex-m.elf"));
+    finish_job(&mut app);
+    for width in [900.0, 1280.0] {
+        frame(&mut app, width, vec![]);
+        let output = frame(&mut app, width, vec![]);
+        let center = reload_center(&output).expect("Idle header must have a reload icon");
+        assert!(
+            (center.x - (width - 32.0)).abs() < 1.0,
+            "Reload must stay at the top right at {width}: {center:?}"
+        );
+        assert!(center.y < 140.0);
+    }
+    let output = frame(&mut app, 1280.0, vec![]);
+    click(&mut app, reload_center(&output).unwrap());
+    assert!(
+        app.receiver.is_some(),
+        "Clicking reload must start a refresh"
+    );
+    let output = frame(&mut app, 1280.0, vec![]);
+    assert!(
+        reload_center(&output).is_none(),
+        "Loading must replace the reload button"
+    );
+    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+        egui::Shape::Text(text) if text.galley.text() == "Analyzing..."
+    )));
+    finish_job(&mut app);
+    let output = frame(&mut app, 1280.0, vec![]);
+    assert!(reload_center(&output).is_some());
+}
+
+#[test]
+fn changed_firmware_indicator_survives_failed_reload_and_clears_on_success() {
+    let directory = tempfile::tempdir().unwrap();
+    let elf = directory.path().join("zephyr.elf");
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/cortex-m.elf");
+    std::fs::copy(&fixture, &elf).unwrap();
+    let mut app = Explorer::default();
+    app.scan_build(directory.path().to_owned());
+    finish_job(&mut app);
+    app.open(elf.clone());
+    finish_job(&mut app);
+    assert!(!app.firmware_watch.changed());
+    // Change after analysis, before starting the monitor, to exercise its
+    // immediate first check without waiting for the periodic interval.
+    std::fs::write(&elf, b"incomplete linker output").unwrap();
+    let ctx = egui::Context::default();
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while !app.firmware_watch.changed() {
+        app.firmware_watch.poll(&ctx);
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Worker must flag the changed ELF"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let report = app.analysis.clone().unwrap();
+    app.refresh();
+    finish_job(&mut app);
+    assert!(app.error.is_some());
+    assert!(Arc::ptr_eq(&report, app.analysis.as_ref().unwrap()));
+    assert!(app.firmware_watch.changed());
+    let output = ctx.run(egui::RawInput::default(), |ctx| app.show(ctx));
+    assert!(
+        output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Circle(circle) if circle.radius == 2.5
+                && circle.fill == egui::Color32::from_rgb(245, 184, 75)
+        )),
+        "Changed firmware must show the amber reload badge"
+    );
+    std::fs::copy(fixture, &elf).unwrap();
+    app.refresh();
+    finish_job(&mut app);
+    assert!(app.error.is_none());
+    assert!(!app.firmware_watch.changed());
+    // Switching away from a report must stop tracking that ELF.
+    let empty_folder = tempfile::tempdir().unwrap();
+    app.scan_build(empty_folder.path().to_owned());
+    finish_job(&mut app);
+    assert!(app.analysis.is_none());
+    assert!(!app.firmware_watch.changed());
 }
 
 #[test]
@@ -1739,58 +1993,6 @@ fn stack_view_scopes_rows_to_selected_elf_and_keeps_unresolved_available() {
 }
 
 #[test]
-fn supporting_file_preview_is_confined_to_overview_and_preserves_elf() {
-    let mut app = Explorer::default();
-    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build"));
-    finish_job(&mut app);
-    let build = app.build.clone().unwrap();
-    app.open(build.root.join("cortex-m.elf"));
-    finish_job(&mut app);
-    let analysis = app.analysis.clone().unwrap();
-    let ctx = egui::Context::default();
-    for kind in [
-        firmware_analysis_core::build::ArtifactKind::Map,
-        firmware_analysis_core::build::ArtifactKind::StackUsage,
-    ] {
-        app.change_view(View::Symbols);
-        app.select_artifact(
-            build
-                .artifacts
-                .iter()
-                .find(|a| a.kind == kind)
-                .unwrap()
-                .clone(),
-        );
-        finish_job(&mut app);
-        assert!(app.view == View::Overview);
-        assert!(Arc::ptr_eq(&analysis, app.analysis.as_ref().unwrap()));
-        // Use distinctive text to verify what the shell actually renders on every tab.
-        app.preview.as_mut().unwrap().1 = "supporting-file-preview-marker".into();
-        for view in View::ALL {
-            app.change_view(view);
-            let output = ctx.run(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(1280.0, 820.0),
-                    )),
-                    ..Default::default()
-                },
-                |ctx| app.show(ctx),
-            );
-            let preview_visible = output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text().contains("supporting-file-preview-marker")));
-            assert_eq!(
-                preview_visible,
-                matches!(view, View::Overview | View::BuildFiles),
-                "{}",
-                view.label()
-            );
-            assert!(Arc::ptr_eq(&analysis, app.analysis.as_ref().unwrap()));
-        }
-    }
-}
-
-#[test]
 fn map_choices_survive_elf_folder_switching_restart_and_folder_reset() {
     let mut app = Explorer::default();
     app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build"));
@@ -1878,35 +2080,45 @@ fn map_choices_survive_elf_folder_switching_restart_and_folder_reset() {
 }
 
 #[test]
-fn dependency_map_choices_survive_refresh_restart_and_failed_import() {
+fn selected_map_supplies_dependencies_across_refresh_restart_and_failure() {
     let folder = tempfile::tempdir().unwrap();
+    let root = folder.path().canonicalize().unwrap();
+    let firmware = root.join("app.elf");
     std::fs::write(
-        folder.path().join("app.elf"),
+        &firmware,
         include_bytes!("../../../fixtures/build/cortex-m.elf"),
     )
     .unwrap();
-    let map = folder.path().join("manual.map");
+    let map = root.join("manual.map");
+    let regions = "Memory Configuration\nName Origin Length Attributes\nFLASH 0x08000000 0x40000 xr\nRAM 0x20000000 0x10000 xrw\nLinker script and memory map\n";
     let table =
-        "Cross Reference Table\n\nSymbol File\nReset_Handler  main.o\ndiagnose  diag.o\n  main.o\n";
-    std::fs::write(&map, table).unwrap();
+        "Cross Reference Table\nSymbol File\nReset_Handler main.o\ndiagnose diag.o\n main.o\n";
+    std::fs::write(&map, format!("{regions}{table}")).unwrap();
     let mut app = Explorer::default();
-    app.scan_build(folder.path().into());
+    app.scan_build(root.clone());
     finish_job(&mut app);
-    let firmware = app.build.as_ref().unwrap().root.join("app.elf");
     app.open(firmware.clone());
     finish_job(&mut app);
-    assert!(app.analysis.as_ref().unwrap().dependencies.edges.is_empty());
-    app.apply_dependency_map(map.clone());
+    app.change_view(View::BuildFiles);
+    app.apply_map(map.clone());
     finish_job(&mut app);
-    assert!(app.view == View::Dependencies);
+    assert!(app.view == View::BuildFiles);
     assert_eq!(app.analysis.as_ref().unwrap().dependencies.edges.len(), 1);
-    assert_eq!(app.saved_dependency_map(&firmware), Some(map.clone()));
-    let prefs = app.preference_value();
-    app.apply_dependency_map(folder.path().join("missing.map"));
+    assert!(app.map_in_use(&map));
+    let mut prefs = app.preference_value();
+    // Older preferences may contain an independently selected dependency map.
+    // The current map remains the single input when those preferences are read.
+    prefs["build_settings"][root.to_str().unwrap()]["dependency_maps"] =
+        serde_json::json!({firmware.to_str().unwrap(): root.join("obsolete.map")});
+    app.apply_map(root.join("missing.map"));
     finish_job(&mut app);
     assert!(app.error.is_some());
-    assert_eq!(app.analysis.as_ref().unwrap().dependencies.edges.len(), 1);
-    std::fs::write(&map, format!("{table}initialized  main.o\n  diag.o\n")).unwrap();
+    assert!(app.map_in_use(&map));
+    std::fs::write(
+        &map,
+        format!("{regions}{table}initialized main.o\n diag.o\n"),
+    )
+    .unwrap();
     app.refresh();
     finish_job(&mut app);
     assert_eq!(app.analysis.as_ref().unwrap().dependencies.edges.len(), 2);
@@ -1914,14 +2126,23 @@ fn dependency_map_choices_survive_refresh_restart_and_failed_import() {
     restored.apply_preferences(&prefs);
     finish_job(&mut restored);
     finish_job(&mut restored);
-    assert!(restored.view == View::Dependencies);
+    assert!(restored.map_in_use(&map));
     assert_eq!(
         restored.analysis.as_ref().unwrap().dependencies.edges.len(),
         2
     );
+    let last_report = restored.analysis.clone().unwrap();
     std::fs::remove_file(&map).unwrap();
     restored.refresh();
     finish_job(&mut restored);
+    assert!(restored.error.is_some());
+    assert!(Arc::ptr_eq(
+        &last_report,
+        restored.analysis.as_ref().unwrap()
+    ));
+    restored.configure(None);
+    finish_job(&mut restored);
+    assert!(restored.options.regions.is_empty());
     assert!(restored
         .analysis
         .as_ref()
@@ -1934,30 +2155,36 @@ fn dependency_map_choices_survive_refresh_restart_and_failed_import() {
         .as_ref()
         .unwrap()
         .dependencies
-        .notes
-        .iter()
-        .any(|n| n.contains("manual.map")));
-    restored.configure(None);
+        .map_path
+        .is_none());
+    restored.refresh();
     finish_job(&mut restored);
     assert!(restored
         .analysis
         .as_ref()
         .unwrap()
         .dependencies
-        .notes
-        .iter()
-        .any(|n| n.contains("manual.map")));
-    std::fs::write(&map, table).unwrap();
-    restored.configure(None);
+        .edges
+        .is_empty());
+    std::fs::write(&map, format!("{regions}{table}")).unwrap();
+    restored.apply_map(map.clone());
     finish_job(&mut restored);
     assert_eq!(
         restored.analysis.as_ref().unwrap().dependencies.edges.len(),
         1
     );
-    assert_eq!(restored.saved_dependency_map(&firmware), Some(map));
-    restored.reset_build_settings();
+    // A map without cross references replaces the previous map's graph too.
+    std::fs::write(&map, regions).unwrap();
+    restored.apply_map(map.clone());
     finish_job(&mut restored);
-    assert_eq!(restored.saved_dependency_map(&firmware), None);
+    assert!(restored
+        .analysis
+        .as_ref()
+        .unwrap()
+        .dependencies
+        .edges
+        .is_empty());
+    assert!(restored.map_in_use(&map));
 }
 
 #[test]
@@ -2462,7 +2689,7 @@ fn sidebar_expands_firmware_loaded_outside_the_sidebar() {
 }
 
 #[test]
-fn sidebar_previews_supporting_files_without_firmware() {
+fn build_files_without_firmware_does_not_load_supporting_files() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     std::fs::write(root.join("only.map"), "map preview contents").unwrap();
@@ -2513,8 +2740,7 @@ fn sidebar_previews_supporting_files_without_firmware() {
                 ],
             );
         }
-        finish_job(&mut app);
-        assert_eq!(app.preview.as_ref().unwrap().0, root.join(name));
+        assert!(app.receiver.is_none());
         assert!(app.analysis.is_none());
     }
 }
@@ -2690,14 +2916,14 @@ fn sidebar_checkboxes_and_map_radios_apply_choices_to_current_elf() {
         app.saved_stack_reports(&elf),
         Some(vec![root.join("frame.su")])
     );
-    // Previewing a map and returning via the firmware row preserve these choices.
+    // A filename selects its map directly and keeps the firmware/report choices.
     click(&ctx, &mut app, text_pos(&output, "app.map"));
     finish_job(&mut app);
-    assert_eq!(app.preview.as_ref().unwrap().0, root.join("app.map"));
-    let output = frame(&ctx, &mut app, vec![]);
-    click(&ctx, &mut app, text_pos(&output, "app.elf"));
-    assert!(app.preview.is_none());
-    assert!(app.map_in_use(&root.join("other.map")));
+    assert!(app.map_in_use(&root.join("app.map")));
+    assert_eq!(
+        app.saved_stack_reports(&elf),
+        Some(vec![root.join("frame.su")])
+    );
 }
 
 #[test]
@@ -2892,12 +3118,13 @@ fn failed_stack_selection_does_not_display_the_previous_selection_report() {
 }
 
 #[test]
-fn llvm_map_preview_and_manual_import_preserve_analysis_and_capacity() {
+fn llvm_map_selection_imports_dependencies_and_keeps_capacity_unknown() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/maps");
-    let map = root.join("llvm-lld.map");
     let mut app = Explorer::default();
     app.scan_build(root.clone());
     finish_job(&mut app);
+    let root = app.build.as_ref().unwrap().root.clone();
+    let map = root.join("llvm-lld.map");
     app.open(root.join("llvm-lld.elf"));
     finish_job(&mut app);
     app.configure(Some(
@@ -2907,113 +3134,30 @@ fn llvm_map_preview_and_manual_import_preserve_analysis_and_capacity() {
     let analysis = app.analysis.clone().unwrap();
     app.apply_map(map.clone());
     finish_job(&mut app);
-    assert!(app
-        .error
-        .as_ref()
-        .unwrap()
-        .contains("not physical memory capacities"));
-    assert!(Arc::ptr_eq(&analysis, app.analysis.as_ref().unwrap()));
-    app.apply_dependency_map(map.clone());
-    finish_job(&mut app);
     assert!(app.error.is_none());
     let imported = app.analysis.as_ref().unwrap();
-    assert_eq!(imported.options, analysis.options);
+    assert!(imported.options.regions.is_empty());
     assert_eq!(imported.dependencies.edges.len(), 16);
+    assert!(app.map_in_use(&map));
     assert_eq!(
         serde_json::to_value(&imported.symbols).unwrap(),
         serde_json::to_value(&analysis.symbols).unwrap()
     );
-    app.preview = Some((
-        map,
-        include_str!("../../../fixtures/maps/llvm-lld.map").into(),
-    ));
-    let ctx = egui::Context::default();
-    ctx.style_mut(|style| style.animation_time = 0.0);
-    let frame = |app: &mut Explorer, events| {
-        ctx.run(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(1280.0, 820.0),
-                )),
-                events,
-                ..Default::default()
-            },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    app.artifact_preview(ui);
-                });
-            },
-        )
-    };
-    frame(&mut app, vec![]);
-    let output = frame(&mut app, vec![]);
-    assert!(output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == "Detected format: LLVM lld (ELF)")));
-    let pos = output
-        .shapes
-        .iter()
-        .find_map(|s| match &s.shape {
-            egui::Shape::Text(t) if t.galley.text() == "LLVM output section placement" => {
-                Some(t.pos + t.galley.size() * 0.5)
-            }
-            _ => None,
-        })
-        .unwrap();
-    for pressed in [true, false] {
-        frame(
-            &mut app,
-            vec![
-                egui::Event::PointerMoved(pos),
-                egui::Event::PointerButton {
-                    pos,
-                    button: egui::PointerButton::Primary,
-                    pressed,
-                    modifiers: egui::Modifiers::NONE,
-                },
-            ],
-        );
-    }
-    let output = frame(&mut app, vec![]);
-    for heading in ["Runtime address", "Load address", "Size (bytes)"] {
-        assert!(
-            output
-                .shapes
-                .iter()
-                .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == heading)),
-            "Missing {heading}"
-        );
-    }
-
-    // The real file loader cuts this valid map halfway through a numeric field.
-    // The section table must retain complete rows and identify the partial view.
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("large.map");
-    let mut text = String::from("VMA LMA Size Align Out In Symbol\n0 0 10 1 .large\n");
-    text.extend(std::iter::repeat_n('\n', 1024 * 1024 - text.len() - 2));
-    text.push_str("1234 1234 10 1 .beyond_preview\n");
-    std::fs::write(&path, text).unwrap();
-    app.select_artifact(firmware_analysis_core::build::Artifact {
-        path,
-        kind: firmware_analysis_core::build::ArtifactKind::Map,
-    });
+    app.refresh();
     finish_job(&mut app);
-    let output = frame(&mut app, vec![]);
-    let labels: Vec<_> = output
-        .shapes
-        .iter()
-        .filter_map(|s| match &s.shape {
-            egui::Shape::Text(t) => Some(t.galley.text()),
-            _ => None,
-        })
-        .collect();
-    assert!(labels
-        .iter()
-        .any(|text| text.starts_with("Partial placement preview:")));
-    assert!(labels.contains(&".large"));
-    assert!(!labels
-        .iter()
-        .any(|text| text.starts_with("Cannot parse the map preview:")));
-    assert!(!labels.contains(&".beyond_preview"));
+    assert!(app.map_in_use(&map));
+    assert!(app.options.regions.is_empty());
+    assert_eq!(app.analysis.as_ref().unwrap().dependencies.edges.len(), 16);
+    let mut restored = Explorer::default();
+    restored.apply_preferences(&app.preference_value());
+    finish_job(&mut restored);
+    finish_job(&mut restored);
+    assert!(restored.map_in_use(&map));
+    assert!(restored.options.regions.is_empty());
+    assert_eq!(
+        restored.analysis.as_ref().unwrap().dependencies.edges.len(),
+        16
+    );
 }
 
 #[test]
@@ -3266,21 +3410,23 @@ fn check_recent_folder_submenu(width: f32, folder_name: &str) {
     };
     frame(&mut app, vec![]);
     let output = frame(&mut app, vec![]);
-    let settings_text = text_rect(&output, "Settings");
-    let gear = output
-        .shapes
-        .iter()
-        .find_map(|shape| match &shape.shape {
-            egui::Shape::Circle(circle) if circle.radius == 5.5 => Some(circle.center),
-            _ => None,
-        })
-        .expect("Settings gear must render");
+    let menu_text = text_rect(&output, "Menu");
+    let icon_center = egui::pos2(25.0, menu_text.center().y);
+    for offset in [-5.0, 0.0, 5.0] {
+        assert!(
+            output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::LineSegment { points, .. }
+                    if (points[0] - (icon_center + egui::vec2(-8.0, offset))).length() < 1.0
+                        && (points[1] - (icon_center + egui::vec2(8.0, offset))).length() < 1.0
+            )),
+            "Menu icon must render three horizontal lines"
+        );
+    }
     assert!(
-        settings_text.left() >= gear.x + 8.0 + 8.0,
-        "Gear and label must have a clear gap"
+        menu_text.left() >= icon_center.x + 8.0 + 8.0,
+        "Menu icon and label must have a clear gap"
     );
-    assert!((settings_text.center().y - gear.y).abs() < 1.0);
-    let menu = settings_text.center();
+    let menu = menu_text.center();
     for pressed in [true, false] {
         frame(
             &mut app,
@@ -3310,8 +3456,8 @@ fn check_recent_folder_submenu(width: f32, folder_name: &str) {
     ] {
         let rect = text_rect(&output, label);
         assert!(
-            rect.bottom() < gear.y - 17.0 && rect.left() >= 0.0 && rect.right() <= width,
-            "Settings action must fit above its sidebar button: {label}: {rect:?}"
+            rect.bottom() < icon_center.y - 17.0 && rect.left() >= 0.0 && rect.right() <= width,
+            "Menu action must fit above its sidebar button: {label}: {rect:?}"
         );
     }
     let refresh = text_rect(&output, "Refresh");
@@ -3325,7 +3471,29 @@ fn check_recent_folder_submenu(width: f32, folder_name: &str) {
     frame(&mut app, vec![egui::Event::PointerMoved(recent.center())]);
     frame(&mut app, vec![]);
     let output = frame(&mut app, vec![]);
-    let child = text_rect(&output, &display::display_path(&folder.to_string_lossy()));
+    let full_path = display::display_path(&folder.to_string_lossy()).into_owned();
+    let child = text_rect(&output, &full_path);
+    let path_shape = output
+        .shapes
+        .iter()
+        .find(|shape| {
+            matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.text() == full_path
+            )
+        })
+        .unwrap();
+    let egui::Shape::Text(path_text) = &path_shape.shape else {
+        unreachable!()
+    };
+    assert!(
+        !path_text.galley.elided,
+        "Recent folder paths must be shown in full"
+    );
+    assert!(
+        child.right() <= width,
+        "Full path must fit within the window"
+    );
+    assert!(child.intersect(path_shape.clip_rect).contains_rect(child));
     let parent = text_rect(&output, "Open build folder...");
     assert!(
         child.left() > parent.right(),
@@ -3465,7 +3633,7 @@ fn dashboard_cards_fit_and_navigation_remains_visible_at_both_widths() {
         for label in View::ALL
             .iter()
             .map(|view| view.label())
-            .chain(["Settings", "Build files"])
+            .chain(["Menu", "Build files"])
         {
             assert!(
                 output.shapes.iter().any(|shape| matches!(&shape.shape,
@@ -3485,12 +3653,13 @@ fn dashboard_cards_fit_and_navigation_remains_visible_at_both_widths() {
                 })
                 .unwrap()
         };
-        let settings = position("Settings");
-        assert!(settings.x < 165.0 && settings.y > height - 85.0);
+        let menu = position("Menu");
+        assert!(menu.x < 165.0 && menu.y > height - 85.0);
         assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
-            egui::Shape::Text(text) if text.galley.text() == "Menu")));
+            egui::Shape::Text(text) if text.galley.text() == "Settings")));
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.text() == "ELF")));
         for label in [
-            "ELF".to_owned(),
             analysis.metadata.architecture.clone(),
             format!("{}-bit", analysis.metadata.bitness),
         ] {
@@ -3785,7 +3954,16 @@ fn header_switches_elf_and_build_files_selects_support_without_leaving_the_tab()
     let output = frame(&ctx, &mut app, vec![]);
     click(&ctx, &mut app, text_pos(&output, "app.elf"));
     let output = frame(&ctx, &mut app, vec![]);
-    click(&ctx, &mut app, text_pos(&output, "second.elf"));
+    let second_path = root.join("second.elf");
+    let second_path = second_path.to_string_lossy();
+    let second_path = display::display_path(&second_path);
+    let name_pos = text_pos(&output, "second.elf");
+    let path_pos = text_pos(&output, &second_path);
+    assert!(
+        path_pos.y > name_pos.y,
+        "Full path belongs below the filename"
+    );
+    click(&ctx, &mut app, path_pos);
     assert!(app.receiver.is_some());
     finish_job(&mut app);
     assert_eq!(
@@ -3828,20 +4006,13 @@ fn header_switches_elf_and_build_files_selects_support_without_leaving_the_tab()
     assert!(app.view == View::BuildFiles);
     let output = frame(&ctx, &mut app, vec![]);
     click(&ctx, &mut app, text_pos(&output, "other.map"));
-    finish_job(&mut app);
+    assert!(
+        app.receiver.is_none(),
+        "clicking the active map must not reload or open contents"
+    );
     assert!(app.view == View::BuildFiles);
-    assert_eq!(app.preview.as_ref().unwrap().0, root.join("other.map"));
-    let output = frame(&ctx, &mut app, vec![]);
-    click(&ctx, &mut app, text_pos(&output, "Back to file selection"));
     let output = frame(&ctx, &mut app, vec![]);
     click(&ctx, &mut app, text_pos(&output, "app.map"));
-    finish_job(&mut app);
-    let output = frame(&ctx, &mut app, vec![]);
-    click(
-        &ctx,
-        &mut app,
-        text_pos(&output, "Use memory regions from this map"),
-    );
     assert!(app.receiver.is_some());
     finish_job(&mut app);
     assert!(app.map_in_use(&root.join("app.map")));
@@ -4182,16 +4353,16 @@ fn overview_memory_dropdown_and_regions_link_work_and_unknown_capacity_has_no_ba
     let output = ctx.run(egui::RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| app.compact_memory(ui, &a));
     });
-    assert_eq!(
-        output
-            .shapes
-            .iter()
-            .filter(|shape| matches!(&shape.shape,
-                egui::Shape::Text(t) if t.galley.text() == "Capacity unknown"
-            ))
-            .count(),
-        2
-    );
+    assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+        egui::Shape::Text(text) if text.galley.text() == "Capacity unknown"
+    )));
+    for label in [
+        "No map selected",
+        "Capacity and free space are unknown.",
+        "Open Build files",
+    ] {
+        text_position(&output, label);
+    }
     for label in [
         "Flash payload".to_owned(),
         "Static RAM".to_owned(),
@@ -4702,13 +4873,33 @@ fn firmware_dropdown_scrolling_keeps_the_last_row_at_the_bottom() {
         })
         .expect("Last firmware should be visible after scrolling to the end");
     assert!(clip.contains_rect(row));
+    let path = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "/build/app_0999.elf" => {
+                assert_eq!(text.galley.job.sections[0].format.font_id.size, 12.0);
+                Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+            }
+            _ => None,
+        })
+        .expect("Each dropdown row must show the full firmware path");
+    assert!(path.top() > row.bottom());
+    assert!(clip.contains_rect(path));
     assert!(
-        clip.bottom() - row.bottom() < 26.0,
-        "Unexpected blank space below final row: row {row:?}, clip {clip:?}"
+        clip.bottom() - path.bottom() < 26.0,
+        "Unexpected blank space below final row: path {path:?}, clip {clip:?}"
     );
     let pos = row.center();
     frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
-    frame(&mut app, vec![]);
+    let hovered = frame(&mut app, vec![]);
+    assert!(
+        hovered.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Rect(rect) if rect.rect.contains(pos)
+                && rect.fill == egui::Color32::from_rgb(23, 40, 49)
+        )),
+        "Hovered firmware rows must use the application's navigation highlight"
+    );
     for pressed in [true, false] {
         frame(
             &mut app,
@@ -4996,4 +5187,138 @@ fn sections_expose_tls_template_and_variable_details_without_inventing_total_ram
         && text.contains("4 B")
         && text.contains(".tbss")));
     assert_eq!(app.analysis.as_ref().unwrap().totals, totals);
+}
+
+#[test]
+fn build_files_selection_panels_fit_small_and_large_windows() {
+    for size in [egui::vec2(900.0, 600.0), egui::vec2(1280.0, 820.0)] {
+        let mut app = Explorer::default();
+        app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build"));
+        finish_job(&mut app);
+        app.open(app.build.as_ref().unwrap().root.join("cortex-m.elf"));
+        finish_job(&mut app);
+        app.change_view(View::BuildFiles);
+        let ctx = egui::Context::default();
+        shell::configure_style(&ctx);
+        let frame = |app: &mut Explorer| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    ..Default::default()
+                },
+                |ctx| app.show(ctx),
+            )
+        };
+        frame(&mut app);
+        let output = frame(&mut app);
+        for label in [
+            "Map file",
+            "Stack reports",
+            "Load map file...",
+            "Autodetect map file",
+        ] {
+            let shape = output
+                .shapes
+                .iter()
+                .find(|shape| {
+                    matches!(&shape.shape,
+                        egui::Shape::Text(text) if text.galley.text() == label
+                    )
+                })
+                .unwrap_or_else(|| panic!("Missing {label} at {size:?}"));
+            if let egui::Shape::Text(text) = &shape.shape {
+                let center = text.pos + text.galley.size() * 0.5;
+                assert!(
+                    shape.clip_rect.contains(center),
+                    "Clipped {label} at {size:?}: {center:?}"
+                );
+                assert!(
+                    egui::Rect::from_min_size(egui::Pos2::ZERO, size).contains(center),
+                    "Offscreen {label} at {size:?}: {center:?}"
+                );
+            }
+        }
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if ["Back to file selection", "Back to firmware", "Detected format: GNU ld", "Cross-reference map", "Load cross-reference map...", "Back to Overview"].contains(&text.galley.text())
+        )));
+    }
+}
+
+#[test]
+fn overview_no_map_warning_and_build_files_link_fit_and_navigate() {
+    let analysis = firmware_analysis_core::analyze_bytes(
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        "fixture.elf",
+        &Default::default(),
+    )
+    .unwrap();
+    for size in [egui::vec2(900.0, 600.0), egui::vec2(1280.0, 820.0)] {
+        let mut app = Explorer {
+            analysis: Some(Arc::new(analysis.clone())),
+            layout_source: "ELF inference".into(),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        shell::configure_style(&ctx);
+        let frame = |app: &mut Explorer, events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| app.show(ctx),
+            )
+        };
+        frame(&mut app, vec![]);
+        let output = frame(&mut app, vec![]);
+        let mut link = None;
+        for label in [
+            "Flash payload",
+            "Static RAM",
+            "No map selected",
+            "Capacity and free space are unknown.",
+            "Open Build files",
+        ] {
+            let matches: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        Some((shape.clip_rect, text))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(matches.len(), 1, "{label} at {size:?}");
+            let (clip, text) = matches[0];
+            let rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+            assert!(
+                clip.contains_rect(rect),
+                "Clipped {label} at {size:?}: {rect:?} outside {clip:?}"
+            );
+            if label == "Open Build files" {
+                link = Some(rect.center());
+            }
+        }
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.text() == "Capacity unknown"
+        )));
+        let pos = link.unwrap();
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert!(app.view == View::BuildFiles);
+    }
 }

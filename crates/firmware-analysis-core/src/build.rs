@@ -1,4 +1,6 @@
 //! Build folder discovery and automatic linker-map memory configuration import.
+mod map_match;
+
 pub use crate::map::{detect_map_format, parse_map_regions, MapFormat};
 use crate::{analyze_path, Analysis, AnalysisOptions, Error};
 use std::{
@@ -124,26 +126,77 @@ pub fn scan_folder(root: impl AsRef<Path>) -> Result<BuildFolder, Error> {
 }
 
 impl BuildFolder {
-    /// Prefer a sibling map with the same stem; otherwise require a unique same-stem map.
+    /// Match section placement first, then use unambiguous filename evidence
+    /// only for maps without usable placement data. Conflicting maps are excluded.
     pub fn matching_map(&self, firmware: &Path) -> Option<&Path> {
-        let matches: Vec<_> = self
+        self.matching_map_with_reason(firmware)
+            .map(|(path, _)| path)
+    }
+
+    fn matching_map_with_reason(&self, firmware: &Path) -> Option<(&Path, &'static str)> {
+        let sections = fs::read(firmware)
+            .ok()
+            .and_then(|bytes| map_match::elf_sections(&bytes));
+        let mut content = Vec::new();
+        let mut fallback = Vec::new();
+        for artifact in self
             .artifacts
             .iter()
-            .filter(|a| {
-                a.kind == ArtifactKind::Map
-                    && (a.path.file_stem() == firmware.file_stem()
-                        || a.path.file_stem() == firmware.file_name())
-            })
-            .collect();
-        let siblings: Vec<_> = matches
-            .iter()
-            .filter(|a| a.path.parent() == firmware.parent())
-            .collect();
-        if siblings.len() == 1 {
-            return Some(&siblings[0].path);
+            .filter(|artifact| artifact.kind == ArtifactKind::Map)
+        {
+            let evidence = sections
+                .as_ref()
+                .and_then(|sections| {
+                    fs::read_to_string(&artifact.path).ok().map(|text| {
+                        match crate::map::parse_map_sections(&text) {
+                            Ok(placements) => map_match::evidence(placements.as_deref(), sections),
+                            Err(_) => map_match::Evidence::Conflicts,
+                        }
+                    })
+                })
+                .unwrap_or(map_match::Evidence::Unavailable);
+            match evidence {
+                map_match::Evidence::Matches => content.push(artifact.path.as_path()),
+                map_match::Evidence::Unavailable if filename_matches(&artifact.path, firmware) => {
+                    fallback.push(artifact.path.as_path())
+                }
+                _ => {}
+            }
         }
-        (matches.len() == 1).then(|| matches[0].path.as_path())
+        if !content.is_empty() {
+            if content.len() == 1 {
+                return Some((
+                    content[0],
+                    "matched by ELF section names, addresses and sizes",
+                ));
+            }
+            // Identical layouts can belong to different targets. Filename and
+            // sibling evidence may disambiguate these, but proximity alone cannot.
+            let named: Vec<_> = content
+                .into_iter()
+                .filter(|path| filename_matches(path, firmware))
+                .collect();
+            return unique_named(&named, firmware)
+                .map(|path| (path, "matched by ELF sections and filename"));
+        }
+        unique_named(&fallback, firmware)
+            .map(|path| (path, "matched by filename; section evidence unavailable"))
     }
+}
+
+fn filename_matches(map: &Path, firmware: &Path) -> bool {
+    map.file_stem() == firmware.file_stem() || map.file_stem() == firmware.file_name()
+}
+
+fn unique_named<'a>(matches: &[&'a Path], firmware: &Path) -> Option<&'a Path> {
+    let siblings: Vec<_> = matches
+        .iter()
+        .filter(|path| path.parent() == firmware.parent())
+        .collect();
+    if siblings.len() == 1 {
+        return Some(siblings[0]);
+    }
+    (matches.len() == 1).then(|| matches[0])
 }
 
 pub fn analyze_build_firmware(
@@ -151,10 +204,11 @@ pub fn analyze_build_firmware(
     path: &Path,
     override_options: Option<&AnalysisOptions>,
 ) -> Result<Analysis, Error> {
+    let selected_map = build.matching_map_with_reason(path);
     let mut notes = Vec::new();
     let mut options = override_options.cloned().unwrap_or_default();
     if override_options.is_none() {
-        if let Some(map) = build.matching_map(path) {
+        if let Some((map, reason)) = selected_map {
             match fs::read_to_string(map)
                 .map_err(|e| e.to_string())
                 .and_then(|text| {
@@ -164,7 +218,7 @@ pub fn analyze_build_firmware(
                 }) {
                 Ok((format, layout)) => {
                     options = layout;
-                    notes.push(format!("Memory capacities imported from {} ({}; matched by filename). Flash/RAM roles are inferred from region names and attributes. Verify that the map belongs to this firmware build.", map.display(), format.label()));
+                    notes.push(format!("Memory capacities imported from {} ({}; {reason}). Flash/RAM roles are inferred from region names and attributes. Verify that the map belongs to this firmware build.", map.display(), format.label()));
                 }
                 Err(e) => notes.push(format!("{}: {e}; capacity remains unknown", map.display())),
             }
@@ -176,7 +230,7 @@ pub fn analyze_build_firmware(
         }
     }
     let mut analysis = analyze_path(path, &options)?;
-    if let Some(map) = build.matching_map(path) {
+    if let Some((map, _)) = selected_map {
         match fs::read_to_string(map) {
             Ok(text) => {
                 crate::dependencies::import_map(&mut analysis, &text, &map.display().to_string())

@@ -917,28 +917,9 @@ impl Explorer {
     pub(super) fn memory_map(&mut self, ui: &mut egui::Ui, a: &Analysis) {
         let display = self.baseline_display_analysis();
         let a = display.as_deref().unwrap_or(a);
-        ui.add_enabled_ui(self.receiver.is_none(), |ui| {
-            ui.horizontal_wrapped(|ui| {
-                if ui.button("Load memory regions...").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Linker map", &["map"])
-                        .pick_file()
-                    {
-                        self.apply_map(path);
-                    }
-                }
-                if ui.button("Discover layout from matching map").clicked() {
-                    self.discover_layout();
-                }
-                if ui.button("Use ELF inference").clicked() {
-                    self.configure(None);
-                }
-            });
-        });
-        ui.separator();
         self.ensure_region_cache(a);
         if a.options.regions.is_empty() {
-            ui.label("Region capacity and free space are unknown. Use Load memory regions above to import a linker map.");
+            self.map_selection_notice(ui);
         } else {
             ui.small("Physical occupancy includes section padding and reservations. Free space may be needed by runtime heap and stack.");
             self.visible_rows = 0;

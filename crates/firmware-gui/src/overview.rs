@@ -370,8 +370,62 @@ impl Explorer {
             .map(|(index, _)| index)
     }
 
+    pub(super) fn map_selection_notice(&mut self, ui: &mut egui::Ui) {
+        let warning = ui.visuals().warn_fg_color;
+        egui::Frame::none()
+            .fill(warning.linear_multiply(0.08))
+            .stroke(egui::Stroke::new(1.0_f32, warning.linear_multiply(0.35)))
+            .rounding(6.0)
+            .inner_margin(8.0)
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.spacing_mut().item_spacing.y = 4.0;
+                let title =
+                    if self.layout_source == "ELF inference" || self.layout_source.is_empty() {
+                        "No map selected"
+                    } else {
+                        "No region capacities"
+                    };
+                ui.label(egui::RichText::new(title).strong().color(warning));
+                ui.small("Capacity and free space are unknown.");
+                if ui.link("Open Build files").clicked() {
+                    self.change_view(View::BuildFiles);
+                }
+            });
+    }
+
     pub(super) fn compact_memory(&mut self, ui: &mut egui::Ui, a: &Analysis) {
         use firmware_analysis_core::MemoryKind;
+        if a.options.regions.is_empty() {
+            for (label, field, bytes, color, help) in [
+                (
+                    "Flash payload",
+                    "flash",
+                    a.totals.flash,
+                    super::views::ACCENT,
+                    super::views::FLASH_HELP,
+                ),
+                (
+                    "Static RAM",
+                    "ram",
+                    a.totals.ram,
+                    egui::Color32::from_rgb(76, 156, 250),
+                    super::views::RAM_HELP,
+                ),
+            ] {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.small(label).on_hover_text(help);
+                ui.label(
+                    egui::RichText::new(self.snapshot_bytes("totals", "", field, bytes))
+                        .strong()
+                        .color(color),
+                )
+                .on_hover_text(help);
+                ui.add_space(6.0);
+            }
+            self.map_selection_notice(ui);
+            return;
+        }
         let block_height = ((ui.available_height() - 28.0) / 2.0).clamp(54.0, 74.0);
         for (slot, (kind, label, total, field, help)) in [
             (

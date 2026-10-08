@@ -374,3 +374,329 @@ fn ti_automatic_import_preserves_elf_and_dwarf_information() {
     };
     assert_eq!(attribution(&baseline), attribution(&imported));
 }
+
+#[test]
+fn section_evidence_selects_a_renamed_map_over_a_stale_same_name_map() {
+    let dir = Temp::new();
+    fs::write(
+        dir.0.join("app.elf"),
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+    )
+    .unwrap();
+    fs::write(
+        dir.0.join("app.map"),
+        include_str!("../../../fixtures/build/cortex-m-grown.map"),
+    )
+    .unwrap();
+    fs::create_dir(dir.0.join("reports")).unwrap();
+    fs::write(
+        dir.0.join("reports/linker-output.map"),
+        include_str!("../../../fixtures/build/cortex-m.map"),
+    )
+    .unwrap();
+    let build = scan_folder(&dir.0).unwrap();
+    let elf = build.root.join("app.elf");
+    let map = build.root.join("reports/linker-output.map");
+    assert_eq!(build.matching_map(&elf), Some(map.as_path()));
+    let report = analyze_build_firmware(&build, &elf, None).unwrap();
+    assert_eq!(report.options.regions.len(), 2);
+    assert_eq!(report.dependencies.edges.len(), 16);
+    assert!(report
+        .warnings
+        .iter()
+        .any(|note| note.contains("matched by ELF section")));
+}
+
+#[test]
+fn stale_named_map_is_rejected_and_changes_are_reread() {
+    let dir = Temp::new();
+    fs::write(
+        dir.0.join("app.elf"),
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+    )
+    .unwrap();
+    let map = dir.0.join("app.map");
+    fs::write(
+        &map,
+        include_str!("../../../fixtures/build/cortex-m-grown.map"),
+    )
+    .unwrap();
+    let build = scan_folder(&dir.0).unwrap();
+    let elf = build.root.join("app.elf");
+    assert!(build.matching_map(&elf).is_none());
+    assert!(analyze_build_firmware(&build, &elf, None)
+        .unwrap()
+        .options
+        .regions
+        .is_empty());
+    fs::write(&map, include_str!("../../../fixtures/build/cortex-m.map")).unwrap();
+    assert_eq!(build.matching_map(&elf), Some(map.as_path()));
+}
+
+#[test]
+fn identical_unnamed_content_matches_remain_ambiguous() {
+    let dir = Temp::new();
+    fs::write(
+        dir.0.join("app.elf"),
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+    )
+    .unwrap();
+    for name in ["one.map", "two.map"] {
+        fs::write(
+            dir.0.join(name),
+            include_str!("../../../fixtures/build/cortex-m.map"),
+        )
+        .unwrap();
+    }
+    let build = scan_folder(&dir.0).unwrap();
+    assert!(build.matching_map(&build.root.join("app.elf")).is_none());
+    // Filename evidence can disambiguate maps with identical section layouts.
+    fs::rename(dir.0.join("one.map"), dir.0.join("app.map")).unwrap();
+    let build = scan_folder(&dir.0).unwrap();
+    assert_eq!(
+        build.matching_map(&build.root.join("app.elf")),
+        Some(build.root.join("app.map").as_path())
+    );
+}
+
+#[test]
+fn region_coverage_and_partial_sections_do_not_identify_a_map() {
+    let dir = Temp::new();
+    fs::write(
+        dir.0.join("app.elf"),
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+    )
+    .unwrap();
+    fs::write(dir.0.join("unrelated.map"), MAP).unwrap();
+    fs::write(
+        dir.0.join("app.map"),
+        format!("{MAP}\n.text 0x08000000 0x540\n"),
+    )
+    .unwrap();
+    let build = scan_folder(&dir.0).unwrap();
+    assert!(build.matching_map(&build.root.join("app.elf")).is_none());
+}
+
+#[test]
+fn gnu_wrapped_output_names_and_input_sections_are_distinguished() {
+    let dir = Temp::new();
+    fs::write(
+        dir.0.join("app.elf"),
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+    )
+    .unwrap();
+    let text = include_str!("../../../fixtures/build/cortex-m.map").replace(
+        ".text           0x08000000      0x540",
+        ".text\n                0x08000000      0x540",
+    );
+    fs::write(
+        dir.0.join("renamed.map"),
+        format!("\u{feff}{}", text.replace('\n', "\r\n")),
+    )
+    .unwrap();
+    let build = scan_folder(&dir.0).unwrap();
+    assert_eq!(
+        build.matching_map(&build.root.join("app.elf")),
+        Some(build.root.join("renamed.map").as_path())
+    );
+}
+
+#[test]
+fn lld_section_content_can_select_dependency_map_without_capacities() {
+    use goblin::elf::{section_header::SHF_ALLOC, Elf};
+    let dir = Temp::new();
+    let bytes = include_bytes!("../../../fixtures/build/cortex-m.elf");
+    fs::write(dir.0.join("app.elf"), bytes).unwrap();
+    let elf = Elf::parse(bytes).unwrap();
+    let mut text = String::from("VMA LMA Size Align Out In Symbol\n");
+    for section in &elf.section_headers {
+        if section.sh_flags & u64::from(SHF_ALLOC) != 0 && section.sh_size != 0 {
+            text.push_str(&format!(
+                "{:x} {:x} {:x} 4 {}\n",
+                section.sh_addr,
+                section.sh_addr,
+                section.sh_size,
+                elf.shdr_strtab.get_at(section.sh_name).unwrap()
+            ));
+        }
+    }
+    text.push_str(
+        "Cross Reference Table\nSymbol File\nReset_Handler main.o\ndiagnose diag.o\n main.o\n",
+    );
+    fs::write(dir.0.join("linker.map"), text).unwrap();
+    let build = scan_folder(&dir.0).unwrap();
+    let firmware = build.root.join("app.elf");
+    assert_eq!(
+        build.matching_map(&firmware),
+        Some(build.root.join("linker.map").as_path())
+    );
+    let report = analyze_build_firmware(&build, &firmware, None).unwrap();
+    assert!(report.options.regions.is_empty());
+    assert_eq!(report.dependencies.edges.len(), 1);
+}
+
+#[test]
+fn common_sections_parse_committed_gnu_map() {
+    let rows = firmware_analysis_core::map::parse_map_sections(include_str!(
+        "../../../fixtures/build/cortex-m.map"
+    ))
+    .unwrap()
+    .unwrap();
+    assert!(rows
+        .iter()
+        .any(|row| row.name == ".text" && row.size == 0x540));
+}
+
+fn matching_section_map(format: firmware_analysis_core::map::MapFormat) -> String {
+    use firmware_analysis_core::map::{parse_map_sections, MapFormat};
+    let sections = parse_map_sections(include_str!("../../../fixtures/build/cortex-m.map"))
+        .unwrap()
+        .unwrap();
+    let mut text = match format {
+        MapFormat::GnuLd => MAP.to_owned(),
+        MapFormat::TexasCgt => TI_MAP.replace("not a memory region\n", "output attributes/\nsection page origin length input sections\n-------- ---- ---------- ---------- ----------------\n"),
+        MapFormat::LlvmLld => "VMA LMA Size Align Out In Symbol\n".into(),
+        _ => unreachable!(),
+    };
+    for section in sections
+        .into_iter()
+        .filter(|section| section.address != 0 && section.size != 0)
+    {
+        match format {
+            MapFormat::GnuLd => text.push_str(&format!(
+                "{} 0x{:x} 0x{:x}\n",
+                section.name, section.address, section.size
+            )),
+            MapFormat::TexasCgt => {
+                let origin = section.load_address.unwrap_or(section.address);
+                // Exercise wrapped names and ignore nested inputs.
+                text.push_str(&format!(
+                    "{}\n 0 {:08x} {:08x}",
+                    section.name, origin, section.size
+                ));
+                if section.load_address.is_some() {
+                    text.push_str(&format!(" RUN ADDR = {:08x}", section.address));
+                }
+                text.push_str(&format!(
+                    "\n {:08x} {:08x} main.obj ({})\n",
+                    origin, section.size, section.name
+                ));
+            }
+            MapFormat::LlvmLld => text.push_str(&format!(
+                "{:x} {:x} {:x} 4 {}\n",
+                section.address,
+                section.load_address.unwrap_or(section.address),
+                section.size,
+                section.name
+            )),
+            _ => unreachable!(),
+        }
+    }
+    text
+}
+
+#[test]
+fn all_formats_expose_common_runtime_section_evidence() {
+    use firmware_analysis_core::map::{parse_map_sections, MapFormat};
+    let mut expected = None;
+    for format in [MapFormat::GnuLd, MapFormat::TexasCgt, MapFormat::LlvmLld] {
+        let text = matching_section_map(format);
+        let sections = parse_map_sections(&format!("\u{feff}{}", text.replace('\n', "\r\n")))
+            .unwrap()
+            .unwrap();
+        let values: Vec<_> = sections
+            .iter()
+            .map(|section| (&section.name, section.address, section.size))
+            .collect();
+        let values = serde_json::to_value(values).unwrap();
+        if let Some(expected) = &expected {
+            assert_eq!(&values, expected, "{format:?}");
+        } else {
+            expected = Some(values);
+        }
+        if format == MapFormat::TexasCgt {
+            let copied = sections
+                .iter()
+                .find(|section| section.name == ".ram_code")
+                .unwrap();
+            assert_eq!(copied.address, 0x20000000);
+            assert_eq!(copied.load_address, Some(0x08000598));
+        }
+    }
+}
+
+#[test]
+fn generic_matching_selects_rejects_and_disambiguates_each_format() {
+    use firmware_analysis_core::map::MapFormat;
+    for format in [MapFormat::GnuLd, MapFormat::TexasCgt, MapFormat::LlvmLld] {
+        let dir = Temp::new();
+        let elf = dir.0.join("app.elf");
+        fs::write(
+            &elf,
+            include_bytes!("../../../fixtures/build/cortex-m-stripped.elf"),
+        )
+        .unwrap();
+        let map = dir.0.join("renamed.map");
+        let text = matching_section_map(format);
+        fs::write(&map, &text).unwrap();
+        let build = scan_folder(&dir.0).unwrap();
+        assert_eq!(build.matching_map(&elf), Some(map.as_path()), "{format:?}");
+        fs::write(dir.0.join("duplicate.map"), &text).unwrap();
+        let build = scan_folder(&dir.0).unwrap();
+        assert!(build.matching_map(&elf).is_none(), "{format:?}");
+        fs::remove_file(dir.0.join("duplicate.map")).unwrap();
+        fs::rename(&map, dir.0.join("app.map")).unwrap();
+        // The same generic matcher rejects stale layouts even with matching names.
+        fs::write(
+            &elf,
+            include_bytes!("../../../fixtures/build/cortex-m-grown.elf"),
+        )
+        .unwrap();
+        let build = scan_folder(&dir.0).unwrap();
+        assert!(build.matching_map(&elf).is_none(), "{format:?}");
+    }
+}
+
+#[test]
+fn malformed_ti_section_rows_and_unsupported_targets_are_not_filename_fallbacks() {
+    use firmware_analysis_core::map::{parse_map_sections, MapFormat};
+    let text = matching_section_map(MapFormat::TexasCgt);
+    for text in [
+        text.replace("0 08000000 00000540", "0 BAD_ADDRESS 00000540"),
+        text.replace("RUN ADDR = 20000000", "RUN ADDR = INVALID"),
+        text.replace("ARM Linker", "TMS320C2800 Linker"),
+        text.replace("0 08000000 00000540", "0 ffffffffffffffff 00000540"),
+    ] {
+        assert!(parse_map_sections(&text).is_err());
+        let dir = Temp::new();
+        fs::write(
+            dir.0.join("app.elf"),
+            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        )
+        .unwrap();
+        fs::write(dir.0.join("app.map"), text).unwrap();
+        let build = scan_folder(&dir.0).unwrap();
+        assert!(build.matching_map(&build.root.join("app.elf")).is_none());
+    }
+    assert!(parse_map_sections(TI_MAP).unwrap().is_none());
+    assert!(parse_map_sections("unknown format").unwrap().is_none());
+    let empty = TI_MAP.replace(
+        "not a memory region\n",
+        "section page origin length input sections\n",
+    );
+    assert_eq!(parse_map_sections(&empty).unwrap(), Some(vec![]));
+}
+
+#[test]
+fn ti_common_sections_preserve_run_addresses_and_custom_names() {
+    use firmware_analysis_core::map::parse_map_sections;
+    let text = TI_MAP.replace("not a memory region\n", "output attributes/\nsection page origin length input sections\n-------- ---- ---------- ---------- ----------------\n.text 0 08000000 00000138\n 08000000 000000a0 ctrl.obj (.text)\nabc 0 20000000 00000020 UNINITIALIZED\nram_code\n 0 08000138 0000001c RUN ADDR = 20000020\n 08000138 0000001c main.obj (.text)\nGLOBAL SYMBOLS\n08000000 Reset_Handler\n");
+    let rows = parse_map_sections(&text).unwrap().unwrap();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0].name, ".text");
+    assert_eq!(rows[0].address, 0x08000000);
+    assert_eq!(rows[0].size, 0x138);
+    assert_eq!(rows[1].name, "abc");
+    assert_eq!(rows[2].address, 0x20000020);
+    assert_eq!(rows[2].load_address, Some(0x08000138));
+}

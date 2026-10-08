@@ -1,4 +1,4 @@
-//! Cached sidebar data and virtualized compiler-report tree.
+//! Cached build-file selections and virtualized compiler-report tree.
 use super::{egui, workspace::StackSelection, Analysis};
 use firmware_analysis_core::build::{ArtifactKind, BuildFolder};
 use std::{

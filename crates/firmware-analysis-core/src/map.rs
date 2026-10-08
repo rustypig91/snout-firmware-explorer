@@ -340,3 +340,224 @@ pub fn parse_lld_sections(text: &str) -> Result<Vec<LldOutputSection>, Error> {
     }
     Ok(rows)
 }
+
+/// Common output-section evidence. Addresses and sizes are byte counts; input
+/// sections and symbols never appear here. A missing load address is unknown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MapOutputSection {
+    pub name: String,
+    pub address: u64,
+    pub size: u64,
+    pub load_address: Option<u64>,
+}
+
+/// Parse output sections independently of format. None means the format/table
+/// is unavailable; Some(empty) means a recognized empty table. Malformed
+/// supported tables return errors rather than allowing weaker filename matching.
+pub fn parse_map_sections(text: &str) -> Result<Option<Vec<MapOutputSection>>, Error> {
+    let text = text.trim_start_matches('\u{feff}');
+    match detect_map_format(text) {
+        MapFormat::GnuLd => parse_gnu_sections(text),
+        MapFormat::TexasCgt => parse_ti_sections(text),
+        MapFormat::LlvmLld => Ok(Some(
+            parse_lld_sections(text)?
+                .into_iter()
+                .map(|row| MapOutputSection {
+                    name: row.name,
+                    address: row.vma,
+                    size: row.size,
+                    load_address: Some(row.lma),
+                })
+                .collect(),
+        )),
+        MapFormat::Unknown => Ok(None),
+    }
+}
+
+fn output_section(
+    name: &str,
+    address: u64,
+    size: u64,
+    load_address: Option<u64>,
+) -> Result<MapOutputSection, Error> {
+    if address.checked_add(size).is_none()
+        || load_address.is_some_and(|load| load.checked_add(size).is_none())
+    {
+        return Err(Error::Configuration(format!(
+            "Map section range overflows: {name}"
+        )));
+    }
+    Ok(MapOutputSection {
+        name: name.into(),
+        address,
+        size,
+        load_address,
+    })
+}
+
+fn gnu_section_row(name: &str, fields: &[&str]) -> Result<MapOutputSection, Error> {
+    if fields.len() < 2 {
+        return Err(Error::Configuration(format!(
+            "Incomplete GNU ld output section: {name}"
+        )));
+    }
+    let load_address = fields
+        .iter()
+        .position(|field| *field == "load")
+        .map(|index| {
+            if fields.get(index + 1) != Some(&"address") {
+                return Err(Error::Configuration(format!(
+                    "Invalid GNU ld load address: {name}"
+                )));
+            }
+            hex(fields.get(index + 2).ok_or_else(|| {
+                Error::Configuration(format!("Missing GNU ld load address: {name}"))
+            })?)
+        })
+        .transpose()?;
+    output_section(name, hex(fields[0])?, hex(fields[1])?, load_address)
+}
+
+fn parse_gnu_sections(text: &str) -> Result<Option<Vec<MapOutputSection>>, Error> {
+    let mut rows = Vec::new();
+    let mut in_layout = false;
+    let mut pending: Option<&str> = None;
+    for line in text.lines() {
+        if line.trim() == "Linker script and memory map" {
+            in_layout = true;
+            continue;
+        }
+        if !in_layout {
+            continue;
+        }
+        if line.trim() == "Cross Reference Table" {
+            break;
+        }
+        let fields: Vec<_> = line.split_whitespace().collect();
+        if fields.is_empty() {
+            continue;
+        }
+        if let Some(name) = pending.take() {
+            // Empty linker-script output sections can have only a name and
+            // wildcard rules, with no placement row (e.g. .ARM.exidx).
+            if fields[0].starts_with("0x") || fields[0].starts_with("0X") {
+                rows.push(gnu_section_row(name, &fields)?);
+                continue;
+            }
+        }
+        // GNU input rows and symbols are indented; output headers are not.
+        if line.starts_with(char::is_whitespace) {
+            continue;
+        }
+        let name = fields[0];
+        if fields
+            .get(1)
+            .is_some_and(|field| field.starts_with("0x") || field.starts_with("0X"))
+        {
+            rows.push(gnu_section_row(name, &fields[1..])?);
+        } else if fields.len() == 1 && name != "/DISCARD/" && !name.contains('(') {
+            pending = Some(name);
+        } else if name.starts_with('.') && fields.get(1) != Some(&"=") {
+            return Err(Error::Configuration(format!(
+                "Invalid GNU ld output section: {line}"
+            )));
+        }
+    }
+    if pending.is_some() {
+        return Err(Error::Configuration(
+            "Missing GNU ld output section placement".into(),
+        ));
+    }
+    // Region-only maps provide no placement evidence.
+    Ok((!rows.is_empty()).then_some(rows))
+}
+
+fn ti_section_row(name: &str, fields: &[&str]) -> Result<MapOutputSection, Error> {
+    if fields.len() < 3 || fields[0].parse::<u32>().is_err() {
+        return Err(Error::Configuration(format!(
+            "Invalid TI CGT output section: {name}"
+        )));
+    }
+    // PAGE is retained only as syntax evidence. Memory import already rejects
+    // overlapping PAGE spaces and word-addressed targets.
+    let origin = hex(fields[1])?;
+    let run = fields
+        .iter()
+        .position(|field| *field == "RUN")
+        .map(|index| {
+            if fields.get(index + 1) != Some(&"ADDR") || fields.get(index + 2) != Some(&"=") {
+                return Err(Error::Configuration(format!(
+                    "Invalid TI CGT run address: {name}"
+                )));
+            }
+            hex(fields.get(index + 3).ok_or_else(|| {
+                Error::Configuration(format!("Missing TI CGT run address: {name}"))
+            })?)
+        })
+        .transpose()?;
+    output_section(
+        name,
+        run.unwrap_or(origin),
+        hex(fields[2])?,
+        run.map(|_| origin),
+    )
+}
+
+fn parse_ti_sections(text: &str) -> Result<Option<Vec<MapOutputSection>>, Error> {
+    // Keep unsupported word-addressed and overlapping PAGE targets out of the
+    // common byte-addressed interface, including automatic matching.
+    parse_ti_regions(text)?;
+    let mut in_layout = false;
+    let mut header = false;
+    let mut pending: Option<&str> = None;
+    let mut rows = Vec::new();
+    for line in text.lines() {
+        let fields: Vec<_> = line.split_whitespace().collect();
+        if line.trim() == "SECTION ALLOCATION MAP" {
+            in_layout = true;
+            continue;
+        }
+        if !in_layout {
+            continue;
+        }
+        if line.trim().starts_with("GLOBAL SYMBOLS")
+            || line.trim().starts_with("SEGMENT ALLOCATION MAP")
+        {
+            break;
+        }
+        if fields.starts_with(&["section", "page", "origin", "length"]) {
+            header = true;
+            continue;
+        }
+        if !header
+            || fields.is_empty()
+            || line.trim().chars().all(|c| c == '-' || c.is_whitespace())
+        {
+            continue;
+        }
+        if let Some(name) = pending.take() {
+            rows.push(ti_section_row(name, &fields)?);
+            continue;
+        }
+        if fields.len() == 1 {
+            pending = Some(fields[0]);
+            continue;
+        }
+        // Names such as "abc" are valid hexadecimal strings too. An output
+        // row has a page/origin/length triple, unlike a nested input row.
+        let output_header = fields.len() >= 4
+            && fields[1].parse::<u32>().is_ok()
+            && hex(fields[2]).is_ok()
+            && hex(fields[3]).is_ok();
+        if !output_header && hex(fields[0]).is_ok() {
+            continue;
+        }
+        rows.push(ti_section_row(fields[0], &fields[1..])?);
+    }
+    if pending.is_some() {
+        return Err(Error::Configuration(
+            "Missing TI CGT output section placement".into(),
+        ));
+    }
+    Ok(header.then_some(rows))
+}
