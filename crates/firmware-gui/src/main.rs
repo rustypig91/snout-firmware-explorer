@@ -10,6 +10,7 @@ mod artifact_browser;
 mod baseline_display;
 mod dependencies;
 mod display;
+mod firmware_watch;
 mod insights;
 mod memory_view;
 mod overview;
@@ -135,7 +136,6 @@ enum Loaded {
         String,
     ),
     Build(firmware_analysis_core::build::BuildFolder),
-    Text(PathBuf, String),
     SelectedStack(StackReport, workspace::StackSelection),
     Config(
         AnalysisOptions,
@@ -144,9 +144,12 @@ enum Loaded {
         Option<LoadedStack>,
         Option<Arc<firmware_analysis_core::build::BuildFolder>>,
     ),
-    Dependencies(Analysis, PathBuf),
 }
 type JobResult = Result<Loaded, String>;
+struct JobCompletion {
+    result: JobResult,
+    observation: Option<firmware_watch::Observation>,
+}
 #[derive(Clone)]
 struct RememberedFirmware {
     folder: PathBuf,
@@ -160,8 +163,6 @@ struct BuildSettings {
     snapshots: snapshots::SnapshotStore,
     firmware: Option<PathBuf>,
     layouts: std::collections::BTreeMap<PathBuf, SavedLayout>,
-    #[serde(default)]
-    dependency_maps: std::collections::BTreeMap<PathBuf, PathBuf>,
     #[serde(default)]
     stack_reports: std::collections::BTreeMap<PathBuf, workspace::StackSelection>,
     #[serde(default)]
@@ -201,7 +202,6 @@ struct Explorer {
     memory_view: memory_view::MemoryView,
     build: Option<Arc<firmware_analysis_core::build::BuildFolder>>,
     artifact_search: String,
-    preview: Option<(PathBuf, String)>,
     layout_override: Option<AnalysisOptions>,
     comparison: Option<Comparison>,
     baseline_display: Option<baseline_display::BaselineDisplay>,
@@ -209,7 +209,8 @@ struct Explorer {
     stack: Option<StackReport>,
     stack_show_unresolved: bool,
     options: AnalysisOptions,
-    receiver: Option<mpsc::Receiver<JobResult>>,
+    receiver: Option<mpsc::Receiver<JobCompletion>>,
+    firmware_watch: firmware_watch::FirmwareWatch,
     view: View,
     tab_options: [TabOptions; View::ALL.len()],
     search: String,
@@ -267,7 +268,6 @@ impl Default for Explorer {
             memory_view: Default::default(),
             build: None,
             artifact_search: String::new(),
-            preview: None,
             layout_override: None,
             comparison: None,
             baseline_display: None,
@@ -276,6 +276,7 @@ impl Default for Explorer {
             stack_show_unresolved: false,
             options: AnalysisOptions::default(),
             receiver: None,
+            firmware_watch: Default::default(),
             view: View::Overview,
             tab_options: View::ALL.map(TabOptions::new),
             search: String::new(),
@@ -315,6 +316,13 @@ impl Default for Explorer {
 }
 impl Explorer {
     fn job(&mut self, task: impl FnOnce() -> JobResult + Send + 'static) {
+        self.job_observing(None, task);
+    }
+    fn job_observing(
+        &mut self,
+        path: Option<PathBuf>,
+        task: impl FnOnce() -> JobResult + Send + 'static,
+    ) {
         if self.receiver.is_some() {
             return;
         }
@@ -322,7 +330,12 @@ impl Explorer {
         self.receiver = Some(receiver);
         self.error = None;
         std::thread::spawn(move || {
-            let _ = sender.send(task());
+            let observation = path.map(firmware_watch::Observation::capture);
+            let result = task();
+            let _ = sender.send(JobCompletion {
+                result,
+                observation,
+            });
         });
     }
     fn open(&mut self, path: PathBuf) {
@@ -354,22 +367,14 @@ impl Explorer {
                 .map(|saved| saved.source.clone())
                 .unwrap_or_else(|| self.layout_source.clone())
         });
-        let dependency_map = if reset_settings {
-            None
-        } else {
-            self.saved_dependency_map(&path)
-        };
         let reports = if reset_settings {
             None
         } else {
             self.saved_stack_selection(&path)
         };
-        self.job(move || {
+        self.job_observing(Some(path.clone()), move || {
             let (mut analysis, layout, source) =
                 workspace::analyze_selected(&build, &path, layout, source)?;
-            if let Some(map) = dependency_map {
-                workspace::read_dependency_map(&mut analysis, &map);
-            }
             let stack = match workspace::load_stack_reports(&analysis, &build, reports) {
                 Ok(report) => Some(report),
                 Err(e) => {
@@ -388,38 +393,39 @@ impl Explorer {
         });
     }
     fn configure(&mut self, path: Option<PathBuf>) {
-        let dependency_map = self.dependency_map_for_reload();
-        let current_path = self.analysis.as_ref().map(|a| a.path.clone());
+        if let Some(path) = path {
+            self.apply_map(path);
+            return;
+        }
+        let current_path = self.analysis.as_ref().map(|analysis| analysis.path.clone());
         let build = self.build.clone();
         let reports = current_path
             .as_ref()
-            .and_then(|p| self.saved_stack_selection(std::path::Path::new(p)));
-        self.job(move || {
-            let source = path
-                .as_ref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "ELF inference".into());
-            let options = match path {
-                Some(path) => firmware_analysis_core::map::parse_map_regions(
-                    &std::fs::read_to_string(path).map_err(|e| e.to_string())?,
-                )
-                .map_err(|e| e.to_string())?,
-                None => AnalysisOptions::default(),
-            };
-            firmware_analysis_core::validate_options(&options).map_err(|e| e.to_string())?;
-            let mut analysis = current_path
-                .map(|p| analyze_path(p, &options))
+            .and_then(|path| self.saved_stack_selection(std::path::Path::new(path)));
+        self.job_observing(current_path.as_ref().map(PathBuf::from), move || {
+            let options = AnalysisOptions::default();
+            let analysis = current_path
+                .map(|path| analyze_path(path, &options))
                 .transpose()
-                .map_err(|e| e.to_string())?;
-            if let (Some(analysis), Some(map)) = (&mut analysis, dependency_map) {
-                workspace::read_dependency_map(analysis, &map);
-            }
-            workspace::configured_report(options, analysis, source, build.as_deref(), reports)
+                .map_err(|error| error.to_string())?;
+            workspace::configured_report(
+                options,
+                analysis,
+                "ELF inference".into(),
+                build.as_deref(),
+                reports,
+            )
         });
     }
     fn poll(&mut self) {
         match self.receiver.as_ref().map(|r| r.try_recv()) {
-            Some(Ok(result)) => {
+            Some(Ok(completion)) => {
+                if completion.result.is_ok() {
+                    if let Some(observation) = completion.observation {
+                        self.firmware_watch.set(Some(observation));
+                    }
+                }
+                let result = completion.result;
                 self.report_revision = self.report_revision.wrapping_add(1);
                 self.table_cache = Default::default();
                 self.receiver = None;
@@ -450,8 +456,8 @@ impl Explorer {
                         self.build = Some(Arc::new(build));
                         self.load_snapshots();
                         self.analysis = None;
+                        self.firmware_watch.set(None);
                         self.graph_view = Default::default();
-                        self.preview = None;
                         self.options = AnalysisOptions::default();
                         self.layout_override = None;
                         self.comparison = None;
@@ -512,17 +518,10 @@ impl Explorer {
                             self.open_with_layout(path, layout);
                         }
                     }
-                    Ok(Loaded::Text(path, text)) => {
-                        if self.view != View::BuildFiles {
-                            self.change_view(View::Overview);
-                        }
-                        self.preview = Some((path, text));
-                    }
                     Ok(Loaded::Firmware(a, stack, layout, source)) => {
                         self.layout_source = source;
                         self.layout_override = layout;
                         self.options = a.options.clone();
-                        self.preview = None;
                         self.analysis = Some(Arc::new(a));
                         self.graph_view = Default::default();
                         self.replace_stack(stack);
@@ -534,19 +533,6 @@ impl Explorer {
                         }
                         self.details = None;
                         self.visible_rows = 0;
-                    }
-                    Ok(Loaded::Dependencies(analysis, map)) => {
-                        if let Some(build) = &self.build {
-                            self.build_settings
-                                .entry(build.root.clone())
-                                .or_default()
-                                .dependency_maps
-                                .insert(PathBuf::from(&analysis.path), map);
-                        }
-                        self.analysis = Some(Arc::new(analysis));
-                        self.graph_view = Default::default();
-                        self.preview = None;
-                        self.change_view(View::Dependencies);
                     }
                     Ok(Loaded::SelectedStack(s, paths)) => {
                         if let (Some(build), Some(analysis)) = (&self.build, &self.analysis) {
@@ -578,7 +564,6 @@ impl Explorer {
                         }
                         self.replace_stack(stack);
                         self.graph_view = Default::default();
-                        self.preview = None;
                         self.comparison = None;
                     }
                     Err(error) => self.error = Some(error),

@@ -2,63 +2,55 @@ use super::display::display_path;
 use super::{egui, Explorer, Loaded};
 use firmware_analysis_core::{
     analyze_path,
-    build::{detect_map_format, parse_map_regions, scan_folder, Artifact, ArtifactKind, MapFormat},
+    build::{detect_map_format, parse_map_regions, scan_folder, Artifact, ArtifactKind},
 };
-use std::{io::Read, path::PathBuf};
+use std::path::PathBuf;
 
-const PREVIEW_TRUNCATED: &str =
-    "\n[Preview truncated at 1 MiB; applying a map reads the complete file.]";
+fn selected_map_options(text: &str) -> Result<super::AnalysisOptions, String> {
+    if detect_map_format(text) == firmware_analysis_core::map::MapFormat::LlvmLld {
+        firmware_analysis_core::map::parse_map_sections(text).map_err(|error| error.to_string())?;
+        Ok(Default::default())
+    } else {
+        parse_map_regions(text).map_err(|error| error.to_string())
+    }
+}
 
 pub(super) fn analyze_selected(
     build: &firmware_analysis_core::build::BuildFolder,
     path: &std::path::Path,
-    mut layout: Option<super::AnalysisOptions>,
+    layout: Option<super::AnalysisOptions>,
     source: Option<String>,
 ) -> Result<(super::Analysis, Option<super::AnalysisOptions>, String), String> {
-    if let Some(source) = &source {
-        let extension = std::path::Path::new(source)
+    if let Some(source) = source {
+        if std::path::Path::new(&source)
             .extension()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_ascii_lowercase();
-        if extension == "map" {
-            layout = Some(
-                parse_map_regions(&std::fs::read_to_string(source).map_err(|e| e.to_string())?)
-                    .map_err(|e| e.to_string())?,
-            );
+            .is_some_and(|extension| extension.to_string_lossy().eq_ignore_ascii_case("map"))
+        {
+            let text = std::fs::read_to_string(&source).map_err(|error| error.to_string())?;
+            let options = selected_map_options(&text)?;
+            let mut analysis = analyze_path(path, &options).map_err(|error| error.to_string())?;
+            firmware_analysis_core::dependencies::import_map(&mut analysis, &text, &source);
+            return Ok((analysis, Some(options), source));
         }
+        let options = layout.unwrap_or_default();
+        let analysis = analyze_path(path, &options).map_err(|error| error.to_string())?;
+        return Ok((analysis, Some(options), source));
     }
     let analysis =
         firmware_analysis_core::build::analyze_build_firmware(build, path, layout.as_ref())
-            .map_err(|e| e.to_string())?;
-    let source = source.unwrap_or_else(|| {
-        if analysis.options.regions.is_empty() {
-            "ELF inference".into()
-        } else {
-            build
-                .matching_map(path)
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "Matching map".into())
-        }
-    });
+            .map_err(|error| error.to_string())?;
+    let source = build
+        .matching_map(path)
+        .filter(|map| {
+            !analysis.options.regions.is_empty()
+                || std::fs::read_to_string(map).ok().is_some_and(|text| {
+                    detect_map_format(&text) == firmware_analysis_core::map::MapFormat::LlvmLld
+                        && selected_map_options(&text).is_ok()
+                })
+        })
+        .map(|map| map.display().to_string())
+        .unwrap_or_else(|| "ELF inference".into());
     Ok((analysis, layout, source))
-}
-
-pub(super) fn read_dependency_map(analysis: &mut super::Analysis, path: &std::path::Path) {
-    match std::fs::read_to_string(path) {
-        Ok(text) => firmware_analysis_core::dependencies::import_map(
-            analysis,
-            &text,
-            &path.display().to_string(),
-        ),
-        Err(error) => {
-            analysis.dependencies = firmware_analysis_core::dependencies::units(analysis);
-            analysis
-                .dependencies
-                .notes
-                .push(format!("{}: {error}", path.display()));
-        }
-    }
 }
 
 /// Persist directory rules and explicit exceptions instead of a snapshot of files.
@@ -250,6 +242,51 @@ pub(super) fn configured_report(
     Ok(Loaded::Config(options, analysis, source, stack, build))
 }
 
+fn ui_map_selection(explorer: &Explorer, ui: &mut egui::Ui, clear_map: &mut bool) {
+    ui.add_enabled_ui(explorer.receiver.is_none(), |ui| {
+        if ui
+            .radio(
+                explorer.layout_source.is_empty() || explorer.layout_source == "ELF inference",
+                "No map selected",
+            )
+            .on_hover_text(
+                "Infer address ranges from the ELF; capacity and free space remain unknown.",
+            )
+            .clicked()
+            && explorer.layout_source != "ELF inference"
+        {
+            *clear_map = true;
+        }
+    });
+}
+
+fn ui_map_actions(
+    explorer: &Explorer,
+    ui: &mut egui::Ui,
+    selected_map: &mut Option<PathBuf>,
+    autodetect_map: &mut bool,
+) {
+    ui.add_enabled_ui(explorer.receiver.is_none(), |ui| {
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Load map file...").clicked() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Linker map", &["map"])
+                    .pick_file()
+                {
+                    *selected_map = Some(path);
+                }
+            }
+            if ui
+                .button("Autodetect map file")
+                .on_hover_text("Rerun automatic map matching for the selected ELF.")
+                .clicked()
+            {
+                *autodetect_map = true;
+            }
+        });
+    });
+}
+
 impl Explorer {
     pub(super) fn saved_stack_selection(
         &self,
@@ -327,47 +364,6 @@ impl Explorer {
         selection
     }
 
-    pub(super) fn saved_dependency_map(&self, firmware: &std::path::Path) -> Option<PathBuf> {
-        self.build_settings
-            .get(&self.build.as_ref()?.root)?
-            .dependency_maps
-            .get(firmware)
-            .cloned()
-    }
-    pub(super) fn dependency_map_for_reload(&self) -> Option<PathBuf> {
-        let analysis = self.analysis.as_ref()?;
-        let firmware = std::path::Path::new(&analysis.path);
-        // A failed read clears map_path, but the selected map must still be
-        // retried when changing memory layouts, just as it is on refresh.
-        self.saved_dependency_map(firmware)
-            .or_else(|| analysis.dependencies.map_path.as_ref().map(PathBuf::from))
-            .or_else(|| {
-                self.build
-                    .as_ref()?
-                    .matching_map(firmware)
-                    .map(PathBuf::from)
-            })
-    }
-    pub(super) fn apply_dependency_map(&mut self, path: PathBuf) {
-        let Some(analysis) = self.analysis.clone() else {
-            return;
-        };
-        self.job(move || {
-            let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-            let graph = firmware_analysis_core::dependencies::from_map(
-                &analysis,
-                &text,
-                &path.display().to_string(),
-            )?;
-            let mut analysis = (*analysis).clone();
-            analysis.dependencies = graph;
-            analysis
-                .warnings
-                .retain(|warning| !warning.starts_with("Dependency graph: "));
-            Ok(Loaded::Dependencies(analysis, path))
-        });
-    }
-
     pub(super) fn saved_layout(&self, path: &std::path::Path) -> Option<&super::SavedLayout> {
         self.build_settings
             .get(&self.build.as_ref()?.root)?
@@ -388,7 +384,6 @@ impl Explorer {
                 }
                 self.remembered_firmware = None;
                 self.pending_restore = None;
-                self.preview = None;
                 self.discover_layout();
             }
         }
@@ -415,37 +410,54 @@ impl Explorer {
             self.open(artifact.path);
             return;
         }
-        self.job(move || {
-            let file = std::fs::File::open(&artifact.path).map_err(|e| e.to_string())?;
-            let mut bytes = Vec::new();
-            file.take(1024 * 1024 + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|e| e.to_string())?;
-            let truncated = bytes.len() > 1024 * 1024;
-            bytes.truncate(1024 * 1024);
-            let mut text = String::from_utf8_lossy(&bytes).into_owned();
-            if truncated {
-                text.push_str(PREVIEW_TRUNCATED);
+        if self.analysis.is_none() || self.receiver.is_some() {
+            return;
+        }
+        match artifact.kind {
+            ArtifactKind::Map => {
+                if !self.map_in_use(&artifact.path) {
+                    self.apply_map(artifact.path);
+                }
             }
-            Ok(Loaded::Text(artifact.path, text))
-        });
+            ArtifactKind::StackUsage => {
+                let mut selection = self.current_stack_selection();
+                let paths = self
+                    .build
+                    .as_ref()
+                    .map(|build| {
+                        build
+                            .artifacts
+                            .iter()
+                            .filter(|artifact| artifact.kind == ArtifactKind::StackUsage)
+                            .map(|artifact| artifact.path.clone())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let checked = !selection.contains(&artifact.path);
+                selection.set(&artifact.path, checked, &paths);
+                self.select_stack_selection(selection);
+            }
+            ArtifactKind::Firmware => unreachable!(),
+        }
     }
+
     pub(super) fn apply_map(&mut self, path: PathBuf) {
-        let dependency_map = self.dependency_map_for_reload();
         let current_path = self.analysis.as_ref().map(|a| a.path.clone());
         let build = self.build.clone();
         let reports = current_path
             .as_ref()
             .and_then(|p| self.saved_stack_selection(std::path::Path::new(p)));
-        self.job(move || {
+        self.job_observing(current_path.as_ref().map(PathBuf::from), move || {
             let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-            let options = parse_map_regions(&text).map_err(|e| e.to_string())?;
+            let options = selected_map_options(&text)?;
             let mut analysis = current_path.map(|p| {
                 let mut a = analyze_path(p, &options)?;
-                a.warnings.push(format!("Memory regions selected from {} ({}). Flash/RAM roles are inferred from names and attributes; verify this map belongs to the selected firmware.", path.display(), detect_map_format(&text).label()));
+                a.warnings.push(format!("Linker map selected from {} ({}). Flash/RAM roles are inferred from names and attributes; verify this map belongs to the selected firmware.", path.display(), detect_map_format(&text).label()));
                 Ok::<_, firmware_analysis_core::Error>(a)
             }).transpose().map_err(|e| e.to_string())?;
-            if let (Some(analysis), Some(map)) = (&mut analysis, dependency_map) { read_dependency_map(analysis, &map); }
+            if let Some(analysis) = &mut analysis {
+                firmware_analysis_core::dependencies::import_map(analysis, &text, &path.display().to_string());
+            }
             configured_report(options, analysis, path.display().to_string(), build.as_deref(), reports)
         });
     }
@@ -484,6 +496,8 @@ impl Explorer {
         }
         let mut selected = None;
         let mut selected_map = None;
+        let mut clear_map = false;
+        let mut autodetect_map = false;
         let previous = self.browser_cache.take();
         let firmware_changed = previous
             .as_ref()
@@ -516,74 +530,72 @@ impl Explorer {
             });
         let mut report_change = None;
         if current_only && self.analysis.is_some() {
-            // A fresh tab lists all supporting artifacts for the selected ELF.
-            cache.filter("");
-            ui.label("Supporting files for the ELF selected in the header. Choices are saved per firmware.");
+            ui.label("Choose supporting files for the ELF selected in the header. Selections are saved automatically.");
+            ui.add_space(8.0);
+            ui.add(
+                egui::TextEdit::singleline(&mut self.artifact_search)
+                    .hint_text("Find a map or stack report...")
+                    .desired_width(f32::INFINITY),
+            );
+            cache.filter(&self.artifact_search);
+            ui.add_space(12.0);
             ui.columns(2, |columns| {
-                columns[0].heading("Map file");
-                columns[0].weak("Select memory regions or preview a map.");
-                egui::ScrollArea::vertical()
-                    .id_salt("map_choices")
-                    .show(&mut columns[0], |ui| {
-                        if cache.artifacts[1].is_empty() {
-                            ui.weak("No map files found.");
-                        }
-                        let height = ui.spacing().interact_size.y;
-                        super::artifact_browser::show_rows(
-                            ui,
-                            height,
-                            cache.artifacts[1].len(),
-                            |ui, range| {
+                egui::Frame::group(columns[0].style()).inner_margin(12.0).show(&mut columns[0], |ui| {
+                    ui.heading("Map file");
+                    ui.weak("One map supplies memory regions and symbol dependencies.");
+                    ui.add_space(8.0);
+                    ui_map_selection(self, ui, &mut clear_map);
+                    ui.separator();
+                    egui::ScrollArea::vertical().id_salt("map_choices")
+                        .max_height((ui.available_height() - 90.0).max(60.0))
+                        .show(ui, |ui| {
+                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                            if cache.artifacts[1].is_empty() {
+                                ui.weak(if self.artifact_search.is_empty() { "No map files found." } else { "No maps match this search." });
+                            }
+                            let height = ui.spacing().interact_size.y;
+                            super::artifact_browser::show_rows(ui, height, cache.artifacts[1].len(), |ui, range| {
                                 for row in range {
                                     let index = cache.artifacts[1][row];
                                     let map = &build.artifacts[index];
                                     let in_use = self.map_in_use(&map.path);
-                                    ui.horizontal(|ui| {
-                                        if ui
-                                            .add_enabled(
-                                                self.receiver.is_none(),
-                                                egui::RadioButton::new(in_use, ""),
-                                            )
-                                            .on_hover_text("Use memory regions from this map")
-                                            .clicked()
-                                            && !in_use
-                                        {
-                                            selected_map = Some(map.path.clone());
-                                        }
-                                        if ui
-                                            .add_enabled(
-                                                self.receiver.is_none(),
-                                                egui::Button::new(display_path(
-                                                    &cache.labels[index],
-                                                ))
-                                                .frame(false)
-                                                .truncate(),
-                                            )
-                                            .on_hover_text(display_path(
-                                                &map.path.to_string_lossy(),
-                                            ))
-                                            .clicked()
-                                        {
-                                            selected = Some(map.clone());
-                                        }
-                                    });
+                                    if ui.add_enabled(self.receiver.is_none(), egui::RadioButton::new(in_use, display_path(&cache.labels[index])))
+                                        .on_hover_text(display_path(&map.path.to_string_lossy())).clicked() && !in_use {
+                                        selected_map = Some(map.path.clone());
+                                    }
                                 }
-                            },
-                        );
-                    });
-                columns[1].heading("Stack usage files (.su)");
-                columns[1].weak("Select reports or entire directories.");
-                egui::ScrollArea::vertical()
-                    .id_salt("su_choices")
-                    .show(&mut columns[1], |ui| {
-                        if cache.paths.is_empty() {
-                            ui.weak("No stack usage files found.");
-                        } else {
-                            ui.add_enabled_ui(self.receiver.is_none(), |ui| {
-                                report_change = cache.report_ui(ui);
                             });
-                        }
-                    });
+                        });
+                    ui.add_space(8.0);
+                    ui_map_actions(self, ui, &mut selected_map, &mut autodetect_map);
+                    ui.add_space(8.0);
+                    if self.options.regions.is_empty() {
+                        ui.weak("Physical capacities are unknown.");
+                    } else {
+                        ui.small(format!("{} memory regions loaded", self.options.regions.len()));
+                    }
+                    if self.layout_source != "ELF inference" {
+                        let source = std::path::Path::new(&self.layout_source);
+                        let label = source.strip_prefix(&build.root).unwrap_or(source).display().to_string();
+                        ui.add(egui::Label::new(format!("Selected: {}", display_path(&label))).truncate())
+                            .on_hover_text(display_path(&self.layout_source));
+                    }
+
+                });
+                egui::Frame::group(columns[1].style()).inner_margin(12.0).show(&mut columns[1], |ui| {
+                    ui.heading("Stack reports");
+                    ui.weak("Select files or entire folders. Frames are local, not call-chain totals.");
+                    let count = cache.paths.iter().filter(|path| cache.reports.contains(path)).count();
+                    ui.add_space(8.0);
+                    ui.small(format!("{count} of {} reports selected", cache.paths.len()));
+                    ui.separator();
+                    egui::ScrollArea::vertical().id_salt("su_choices")
+                        .max_height((ui.available_height() - 30.0).max(140.0))
+                        .show(ui, |ui| {
+                            if cache.paths.is_empty() { ui.weak("No stack reports found."); }
+                            else { ui.add_enabled_ui(self.receiver.is_none(), |ui| { report_change = cache.report_ui(ui); }); }
+                        });
+                });
             });
         } else {
             ui.strong("BUILD FILES");
@@ -631,7 +643,7 @@ impl Explorer {
                             "No firmware binaries found. Open a build folder containing an ELF to select its map and stack usage files."
                         });
                     }
-                    // Supporting files can still be inspected in folders without an ELF.
+                    // Supporting files are listed without exposing selection before an ELF is loaded.
                     if !has_firmware {
                         for (group, kind) in [(1, ArtifactKind::Map), (2, ArtifactKind::StackUsage)] {
                             if cache.artifacts[group].is_empty() {
@@ -644,10 +656,10 @@ impl Explorer {
                                             for row in range {
                                                 let index = cache.artifacts[group][row];
                                                 let artifact = &build.artifacts[index];
-                                                let previewing = self.preview.as_ref().is_some_and(|(p, _)| p == &artifact.path);
-                                                if ui.add_enabled(self.receiver.is_none(),
+
+                                                if ui.add_enabled(false,
                                                     egui::Button::new(display_path(&cache.labels[index]))
-                                                        .frame(false).selected(previewing).truncate())
+                                                        .frame(false).truncate())
                                                     .on_hover_text(display_path(&artifact.path.to_string_lossy())).clicked() {
                                                     selected = Some(artifact.clone());
                                                 }
@@ -688,7 +700,7 @@ impl Explorer {
                         ui.push_id(&artifact.path, |ui| {
                             let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
                                 ui.ctx(), ui.make_persistent_id("firmware_files"), active);
-                            // Only the loaded firmware exposes editable supporting files.
+                            // Only the loaded firmware exposes supporting-file selection.
                             if !active && self.receiver.is_none() {
                                 state.set_open(false);
                             }
@@ -702,8 +714,7 @@ impl Explorer {
                                 if response.clicked() {
                                     clicked = true;
                                     if active {
-                                        self.preview = None;
-                                    } else {
+                                                            } else {
                                         selected = Some(artifact.clone());
                                     }
                                 }
@@ -721,6 +732,7 @@ impl Explorer {
                                 }
                                 egui::CollapsingHeader::new(format!("Map file ({})", cache.artifacts[1].len()))
                                     .id_salt("maps").default_open(true).show(ui, |ui| {
+                                        ui_map_selection(self, ui, &mut clear_map);
                                         if cache.artifacts[1].is_empty() {
                                             ui.small("No map files found.");
                                         }
@@ -736,17 +748,18 @@ impl Explorer {
                                                             .clicked() && !in_use {
                                                             selected_map = Some(map.path.clone());
                                                         }
-                                                        let previewing = self.preview.as_ref().is_some_and(|(p, _)| p == &map.path);
+
                                                         if ui.add_enabled(self.receiver.is_none(),
                                                             egui::Button::new(display_path(&cache.labels[map_index]))
-                                                                .frame(false).selected(previewing).truncate())
-                                                            .on_hover_text(format!("Preview map\n{}", display_path(&map.path.to_string_lossy())))
+                                                                .frame(false).truncate())
+                                                            .on_hover_text(format!("Select map\n{}", display_path(&map.path.to_string_lossy())))
                                                             .clicked() {
                                                             selected = Some(map.clone());
                                                         }
                                                     });
                                                 }
                                             });
+                                        ui_map_actions(self, ui, &mut selected_map, &mut autodetect_map);
                                     });
                                 egui::CollapsingHeader::new(format!("Stack usage files ({})", cache.artifacts[2].len()))
                                     .id_salt("reports").default_open(false).show(ui, |ui| {
@@ -770,95 +783,16 @@ impl Explorer {
             self.select_stack_selection(reports);
         } else {
             self.browser_cache = Some(cache);
-            if let Some(path) = selected_map {
+            if clear_map {
+                self.configure(None);
+            } else if autodetect_map {
+                self.discover_layout();
+            } else if let Some(path) = selected_map {
                 self.apply_map(path);
             } else if let Some(artifact) = selected {
                 self.select_artifact(artifact);
             }
         }
-    }
-    pub(super) fn artifact_preview(&mut self, ui: &mut egui::Ui) -> bool {
-        let Some((path, text)) = self.preview.clone() else {
-            return false;
-        };
-        ui.heading(path.file_name().unwrap_or_default().to_string_lossy());
-        ui.label(display_path(&path.to_string_lossy()));
-        ui.horizontal_wrapped(|ui| {
-            if self.analysis.is_some() && ui.button("Back to firmware").clicked() {
-                self.preview = None;
-            }
-            ui.add_enabled_ui(self.receiver.is_none(), |ui| {
-                if path
-                    .extension()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_ascii_lowercase()
-                    == "map"
-                {
-                        let format = detect_map_format(&text);
-                        ui.label(format!("Detected format: {}", format.label()));
-                        if format == MapFormat::TexasCgt {
-                            ui.small("Memory regions supported; TI cross references are not yet supported.");
-                        }
-                        if format != MapFormat::TexasCgt && self.analysis.is_some()
-                            && ui.button("Use cross references from this map").clicked()
-                        {
-                            self.apply_dependency_map(path.clone());
-                        }
-                        if format == MapFormat::LlvmLld {
-                            ui.small("LLVM maps contain section placement, not memory capacities. Physical memory capacities remain unknown.");
-                        } else {
-                            if ui
-                                .add_enabled(
-                                    !self.map_in_use(&path),
-                                    egui::Button::new("Use memory regions from this map"),
-                                )
-                                .clicked()
-                            {
-                                self.apply_map(path.clone());
-                            }
-                        }
-                }
-            });
-        });
-        if detect_map_format(&text) == MapFormat::LlvmLld {
-            ui.collapsing("LLVM output section placement", |ui| {
-                // A bounded text preview can end in the middle of any row. Do not
-                // parse that row or the UI's truncation notice as linker output.
-                let placement_text = if let Some(prefix) = text.strip_suffix(PREVIEW_TRUNCATED) {
-                    ui.small("Partial placement preview: only complete rows within the first 1 MiB are shown.");
-                    prefix.rsplit_once('\n').map_or("", |(complete, _)| complete)
-                } else {
-                    &text
-                };
-                match firmware_analysis_core::map::parse_lld_sections(placement_text) {
-                    Ok(sections) => {
-                        ui.small("Output sections from the map, including non-allocated sections; ELF/DWARF remains authoritative for analysis.");
-                        egui::ScrollArea::both().max_height(240.0).id_salt("lld_sections_scroll").show(ui, |ui| {
-                            egui::Grid::new("lld_sections").striped(true).show(ui, |ui| {
-                                for heading in ["Section", "Runtime address", "Load address", "Size (bytes)"] { ui.strong(heading); }
-                                ui.end_row();
-                                for section in sections {
-                                    ui.label(section.name);
-                                    ui.monospace(format!("{:#x}", section.vma));
-                                    ui.monospace(format!("{:#x}", section.lma));
-                                    ui.label(section.size.to_string());
-                                    ui.end_row();
-                                }
-                            });
-                        });
-                    }
-                    Err(error) => { ui.label(format!("Cannot parse the map preview: {error}")); }
-                }
-            });
-        }
-        ui.separator();
-        egui::ScrollArea::both()
-            .id_salt("artifact_text")
-            .show(ui, |ui| {
-                ui.add(egui::Label::new(egui::RichText::new(text).monospace()).selectable(true));
-            });
-        true
     }
 }
 

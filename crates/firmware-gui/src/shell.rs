@@ -3,11 +3,31 @@ use super::{egui, Explorer, View};
 
 pub(super) const MIN_TEXT_SIZE: f32 = 12.0;
 
-// Include the recent-folder popup in the Settings menu hit test between frames.
-fn settings_popup(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
+fn style_popup_menu(ui: &mut egui::Ui) {
+    let style = ui.style_mut();
+    // egui's menu container replaces the application's button padding.
+    style.spacing.button_padding = egui::vec2(10.0, 5.0);
+    style.spacing.interact_size.y = 30.0;
+    style.visuals.widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
+    style.visuals.selection.bg_fill = egui::Color32::from_rgb(23, 53, 47);
+    style.visuals.selection.stroke = egui::Stroke::NONE;
+    for widgets in [
+        &mut style.visuals.widgets.hovered,
+        &mut style.visuals.widgets.active,
+        &mut style.visuals.widgets.open,
+    ] {
+        widgets.weak_bg_fill = egui::Color32::from_rgb(23, 40, 49);
+        widgets.bg_fill = egui::Color32::from_rgb(23, 53, 47);
+        widgets.bg_stroke = egui::Stroke::NONE;
+        widgets.fg_stroke.color = super::views::ACCENT;
+    }
+}
+
+// Include the recent-folder popup in the app menu hit test between frames.
+fn app_menu_popup(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
     let bar_id = ui.id();
     let child_id = bar_id.with("recent_menu_rect");
-    let size_id = bar_id.with("settings_menu_size");
+    let size_id = bar_id.with("app_menu_size");
     let mut state = egui::menu::BarState::load(ui.ctx(), bar_id);
     let button = ui.add(
         egui::Button::new("")
@@ -15,25 +35,26 @@ fn settings_popup(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
             .min_size(egui::vec2(ui.available_width(), 34.0)),
     );
     button.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Settings")
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Menu")
     });
-    // The button owns the full hit area; reserve a separate column for the gear.
+    // The button owns the full hit area; reserve a separate column for the menu icon.
     ui.painter().text(
         button.rect.left_center() + egui::vec2(34.0, 0.0),
         egui::Align2::LEFT_CENTER,
-        "Settings",
+        "Menu",
         egui::FontId::proportional(15.0),
         ui.style().interact(&button).text_color(),
     );
     let center = egui::pos2(button.rect.left() + 17.0, button.rect.center().y);
     let stroke = egui::Stroke::new(1.5_f32, super::overview::MUTED);
-    ui.painter().circle_stroke(center, 5.5, stroke);
-    ui.painter().circle_stroke(center, 2.0, stroke);
-    for tooth in 0..8 {
-        let angle = tooth as f32 * std::f32::consts::TAU / 8.0;
-        let direction = egui::vec2(angle.cos(), angle.sin());
-        ui.painter()
-            .line_segment([center + direction * 5.5, center + direction * 8.0], stroke);
+    for offset in [-5.0, 0.0, 5.0] {
+        ui.painter().line_segment(
+            [
+                center + egui::vec2(-8.0, offset),
+                center + egui::vec2(8.0, offset),
+            ],
+            stroke,
+        );
     }
     if let Some(root) = state.as_ref() {
         if let Some(child) = ui.ctx().data(|data| data.get_temp::<egui::Rect>(child_id)) {
@@ -72,7 +93,10 @@ fn settings_popup(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
             size,
         );
     }
-    state.show(&button, contents);
+    state.show(&button, |ui| {
+        style_popup_menu(ui);
+        contents(ui);
+    });
     if let Some(root) = state.as_ref() {
         ui.ctx().data_mut(|data| {
             data.insert_temp(size_id, root.menu_state.read().rect.size());
@@ -121,19 +145,30 @@ fn right_recent_menu(
             .sense(egui::Sense::hover())
             .show(ui.ctx(), |ui| {
                 egui::Frame::menu(ui.style()).show(ui, |ui| {
+                    style_popup_menu(ui);
                     ui.set_width(width);
-                    ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
-                        for folder in folders {
-                            let path = folder.to_string_lossy();
-                            if ui
-                                .add(egui::Button::new(display_path(&path)).truncate())
-                                .on_hover_text(display_path(&path))
-                                .clicked()
-                            {
-                                selected = Some(folder.clone());
-                            }
-                        }
-                    });
+                    // Wrapped paths can make the history taller than the window.
+                    egui::ScrollArea::vertical()
+                        .max_height(
+                            (ui.ctx().screen_rect().bottom() - anchor.y - margin.sum().y).max(30.0),
+                        )
+                        .show(ui, |ui| {
+                            ui.with_layout(
+                                egui::Layout::top_down_justified(egui::Align::LEFT),
+                                |ui| {
+                                    for folder in folders {
+                                        let path = folder.to_string_lossy();
+                                        if ui
+                                            .add(egui::Button::new(display_path(&path)).wrap())
+                                            .on_hover_text(display_path(&path))
+                                            .clicked()
+                                        {
+                                            selected = Some(folder.clone());
+                                        }
+                                    }
+                                },
+                            );
+                        });
                 });
             });
         ui.ctx()
@@ -163,6 +198,8 @@ pub(super) fn configure_style(ctx: &egui::Context) {
     style.visuals = egui::Visuals::dark();
     style.visuals.panel_fill = egui::Color32::from_rgb(11, 18, 26);
     style.visuals.window_fill = egui::Color32::from_rgb(16, 25, 35);
+    style.visuals.window_stroke = egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(31, 45, 60));
+    style.visuals.menu_rounding = egui::Rounding::same(6.0);
     style.visuals.extreme_bg_color = egui::Color32::from_rgb(8, 14, 21);
     style.visuals.faint_bg_color = egui::Color32::from_white_alpha(4);
     style.visuals.override_text_color = Some(egui::Color32::from_rgb(207, 220, 238));
@@ -221,6 +258,98 @@ fn draw_chip(ui: &mut egui::Ui) {
     }
 }
 
+fn draw_bit_width(ui: &mut egui::Ui) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
+    let center = rect.center();
+    let stroke = egui::Stroke::new(1.0_f32, super::overview::MUTED);
+    let painter = ui.painter();
+    // A divided register above a width arrow distinguishes word size from CPU type.
+    painter.rect_stroke(
+        egui::Rect::from_center_size(center + egui::vec2(0.0, -4.0), egui::vec2(18.0, 8.0)),
+        1.0,
+        stroke,
+    );
+    for x in [-3.0, 3.0] {
+        painter.line_segment(
+            [center + egui::vec2(x, -8.0), center + egui::vec2(x, 0.0)],
+            stroke,
+        );
+    }
+    painter.line_segment(
+        [
+            center + egui::vec2(-9.0, 6.0),
+            center + egui::vec2(9.0, 6.0),
+        ],
+        stroke,
+    );
+    for direction in [-1.0, 1.0] {
+        for y in [3.0, 9.0] {
+            painter.line_segment(
+                [
+                    center + egui::vec2(direction * 6.0, y),
+                    center + egui::vec2(direction * 9.0, 6.0),
+                ],
+                stroke,
+            );
+        }
+    }
+}
+
+fn reload_button(ui: &mut egui::Ui, enabled: bool, changed: bool) -> egui::Response {
+    let response = ui
+        .add_enabled(
+            enabled,
+            egui::Button::new("")
+                .fill(egui::Color32::TRANSPARENT)
+                .min_size(egui::vec2(32.0, 32.0)),
+        )
+        .on_hover_text(if changed {
+            "Firmware file changed. Refresh to update the analysis (F5)."
+        } else {
+            "Refresh build folder (F5)"
+        })
+        .on_disabled_hover_text("Open a build folder to refresh")
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, "Refresh"));
+    let center = response.rect.center();
+    let color = if changed {
+        egui::Color32::from_rgb(245, 184, 75)
+    } else if response.hovered() || response.is_pointer_button_down_on() {
+        super::views::ACCENT
+    } else {
+        ui.style().interact(&response).text_color()
+    };
+    let stroke = egui::Stroke::new(1.8_f32, color);
+    let start = std::f32::consts::PI * 0.2;
+    let end = std::f32::consts::PI * 1.9;
+    let points = (0..=32)
+        .map(|step| {
+            let angle = start + (end - start) * step as f32 / 32.0;
+            center + egui::vec2(angle.cos(), angle.sin()) * 8.0
+        })
+        .collect();
+    ui.painter().add(egui::Shape::line(points, stroke));
+    let tip = center + egui::vec2(end.cos(), end.sin()) * 8.0;
+    let tangent = egui::vec2(-end.sin(), end.cos());
+    let normal = egui::vec2(end.cos(), end.sin());
+    ui.painter().add(egui::Shape::line(
+        vec![
+            tip - tangent * 5.0 + normal * 3.0,
+            tip,
+            tip - tangent * 5.0 - normal * 3.0,
+        ],
+        stroke,
+    ));
+    if changed {
+        let dot = response.rect.right_top() + egui::vec2(-5.0, 5.0);
+        ui.painter()
+            .circle_filled(dot, 4.0, ui.visuals().panel_fill);
+        ui.painter().circle_filled(dot, 2.5, color);
+    }
+    response
+}
+
 fn draw_brand(ui: &mut egui::Ui) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(38.0, 44.0), egui::Sense::hover());
     let center = rect.center();
@@ -258,6 +387,96 @@ fn draw_brand(ui: &mut egui::Ui) {
                 .strong(),
         );
     });
+}
+
+fn firmware_path_galley(ui: &egui::Ui, path: &str, width: f32) -> std::sync::Arc<egui::Galley> {
+    let layout = |text: &str| {
+        ui.painter().layout_no_wrap(
+            text.to_owned(),
+            egui::FontId::proportional(12.0),
+            super::overview::MUTED,
+        )
+    };
+    let full = layout(path);
+    if full.size().x <= width {
+        return full;
+    }
+    if layout("…").size().x > width {
+        return layout("");
+    }
+    // Search character boundaries so non-ASCII folders remain valid UTF-8.
+    // Retain the longest suffix that fits, including the filename at the end.
+    let boundaries: Vec<_> = path
+        .char_indices()
+        .map(|(index, _)| index)
+        .chain(std::iter::once(path.len()))
+        .collect();
+    let mut left = 0;
+    let mut right = boundaries.len() - 1;
+    while left < right {
+        let middle = left + (right - left) / 2;
+        let candidate = layout(&format!("…{}", &path[boundaries[middle]..]));
+        if candidate.size().x <= width {
+            right = middle;
+        } else {
+            left = middle + 1;
+        }
+    }
+    layout(&format!("…{}", &path[boundaries[left]..]))
+}
+
+#[test]
+fn firmware_paths_keep_their_end_when_space_is_limited() {
+    let ctx = egui::Context::default();
+    configure_style(&ctx);
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            for path in [
+                "/home/developer/projects/firmware/build/debug/application.elf",
+                "C:\\Users\\Developer\\Projects\\Firmware\\build\\application.elf",
+                "/home/开发者/项目/固件/调试/application.elf",
+            ] {
+                let full = firmware_path_galley(ui, path, 1000.0);
+                assert_eq!(full.text(), path);
+                for width in [100.0, 180.0, 240.0] {
+                    let shortened = firmware_path_galley(ui, path, width);
+                    assert!(shortened.size().x <= width);
+                    if full.size().x > width {
+                        assert!(shortened.text().starts_with('…'));
+                    } else {
+                        assert_eq!(shortened.text(), path);
+                    }
+                    assert!(shortened.text().ends_with(".elf"));
+                    assert!(path.ends_with(shortened.text().trim_start_matches('…')));
+                    if width >= 180.0 {
+                        assert!(shortened.text().ends_with("application.elf"));
+                    }
+                }
+                assert!(firmware_path_galley(ui, path, 1.0).text().is_empty());
+            }
+        });
+    });
+}
+
+fn draw_firmware_label(
+    ui: &egui::Ui,
+    pos: egui::Pos2,
+    name: &str,
+    path: &str,
+    width: f32,
+    selected: bool,
+) {
+    let color = if selected {
+        super::views::ACCENT
+    } else {
+        ui.visuals().text_color()
+    };
+    super::overview::clipped_text(ui, pos, name, width, 15.0, color);
+    ui.painter().galley(
+        pos + egui::vec2(0.0, 22.0),
+        firmware_path_galley(ui, path, width),
+        super::overview::MUTED,
+    );
 }
 
 impl Explorer {
@@ -328,21 +547,13 @@ impl Explorer {
                     stroke,
                 );
             }
-            super::overview::clipped_text(
+            draw_firmware_label(
                 ui,
                 rect.min + egui::vec2(49.0, 8.0),
                 &name,
-                width - 88.0,
-                15.0,
-                ui.visuals().text_color(),
-            );
-            super::overview::clipped_text(
-                ui,
-                rect.min + egui::vec2(49.0, 30.0),
                 &path,
                 width - 88.0,
-                12.0,
-                super::overview::MUTED,
+                false,
             );
             let arrow = rect.right_center() - egui::vec2(22.0, 0.0);
             ui.painter().line_segment(
@@ -365,6 +576,7 @@ impl Explorer {
                 &response,
                 egui::popup::PopupCloseBehavior::CloseOnClickOutside,
                 |ui| {
+                    style_popup_menu(ui);
                     ui.set_width(width - 16.0);
                     if let Some(build) = &self.build {
                         let firmware: Vec<_> = build
@@ -375,13 +587,9 @@ impl Explorer {
                         if firmware.is_empty() {
                             ui.weak("No firmware images found in this build folder.");
                         }
-                        // Frame-free firmware buttons use the text height or minimum
-                        // interaction height. Virtual rows must use the same stride.
-                        let row_height = ui
-                            .spacing()
-                            .interact_size
-                            .y
-                            .max(ui.text_style_height(&egui::TextStyle::Button));
+                        // Match the header's two-line layout and keep the virtual
+                        // scroll stride equal to the actual button height.
+                        let row_height = 54.0;
                         egui::ScrollArea::vertical().max_height(300.0).show_rows(
                             ui,
                             row_height,
@@ -389,22 +597,45 @@ impl Explorer {
                             |ui, range| {
                                 for index in range {
                                     let artifact = firmware[index];
-                                    let relative = artifact
+                                    let name = artifact
                                         .path
-                                        .strip_prefix(&build.root)
-                                        .unwrap_or(&artifact.path);
-                                    if ui
-                                        .add(
-                                            egui::Button::new(display_path(
-                                                &relative.to_string_lossy(),
-                                            ))
-                                            .frame(false)
-                                            .selected(current.as_ref() == Some(&artifact.path))
-                                            .truncate(),
+                                        .file_name()
+                                        .unwrap_or(artifact.path.as_os_str())
+                                        .to_string_lossy();
+                                    let path = artifact.path.to_string_lossy();
+                                    let path = display_path(&path);
+                                    let active = current.as_ref() == Some(&artifact.path);
+                                    let response = ui.add_sized(
+                                        egui::vec2(ui.available_width(), row_height),
+                                        egui::Button::new("").selected(active).rounding(6.0),
+                                    );
+                                    response.widget_info(|| {
+                                        egui::WidgetInfo::labeled(
+                                            egui::WidgetType::Button,
+                                            ui.is_enabled(),
+                                            format!("{name}\n{path}"),
                                         )
-                                        .on_hover_text(display_path(
-                                            &artifact.path.to_string_lossy(),
-                                        ))
+                                    });
+                                    draw_firmware_label(
+                                        ui,
+                                        response.rect.min + egui::vec2(10.0, 8.0),
+                                        &name,
+                                        &path,
+                                        response.rect.width() - 20.0,
+                                        active,
+                                    );
+                                    if active {
+                                        ui.painter().line_segment(
+                                            [
+                                                response.rect.left_top() + egui::vec2(0.0, 4.0),
+                                                response.rect.left_bottom() - egui::vec2(0.0, 4.0),
+                                            ],
+                                            egui::Stroke::new(2.0_f32, super::views::ACCENT),
+                                        );
+                                    }
+                                    if response
+                                        .on_hover_text(path.as_ref())
+                                        .on_hover_cursor(egui::CursorIcon::PointingHand)
                                         .clicked()
                                     {
                                         selected = Some(artifact.clone());
@@ -424,20 +655,20 @@ impl Explorer {
         if let Some(artifact) = selected {
             if current.as_ref() != Some(&artifact.path) {
                 self.select_artifact(artifact);
-            } else {
-                self.preview = None;
             }
         }
     }
 
-    fn settings_menu(&mut self, ui: &mut egui::Ui) {
+    fn app_menu(&mut self, ui: &mut egui::Ui) {
         ui.add_enabled_ui(self.receiver.is_none(), |ui| {
             let bar_id = ui.id();
-            settings_popup(ui, |ui| {
+            app_menu_popup(ui, |ui| {
                 if ui
-                    .add(egui::Button::new("Open build folder...").shortcut_text(
-                        egui::RichText::new("Ctrl+O").color(egui::Color32::from_gray(145)),
-                    ))
+                    .add(
+                        egui::Button::new("Open build folder...").shortcut_text(
+                            egui::RichText::new("Ctrl+O").color(super::overview::MUTED),
+                        ),
+                    )
                     .clicked()
                 {
                     ui.close_menu();
@@ -449,9 +680,8 @@ impl Explorer {
                 if ui
                     .add_enabled(
                         self.build.is_some(),
-                        egui::Button::new("Refresh").shortcut_text(
-                            egui::RichText::new("F5").color(egui::Color32::from_gray(145)),
-                        ),
+                        egui::Button::new("Refresh")
+                            .shortcut_text(egui::RichText::new("F5").color(super::overview::MUTED)),
                     )
                     .on_hover_text("Rescan and reload selected firmware")
                     .clicked()
@@ -525,9 +755,10 @@ impl Explorer {
                     ui.close_menu();
                 }
                 if ui
-                    .add(egui::Button::new("About").shortcut_text(
-                        egui::RichText::new("F1").color(egui::Color32::from_gray(145)),
-                    ))
+                    .add(
+                        egui::Button::new("About")
+                            .shortcut_text(egui::RichText::new("F1").color(super::overview::MUTED)),
+                    )
                     .clicked()
                 {
                     self.show_about = true;
@@ -602,9 +833,6 @@ impl Explorer {
         if self.view == view {
             return;
         }
-        if self.view == View::BuildFiles && view != View::BuildFiles {
-            self.preview = None;
-        }
         let index = View::ALL.iter().position(|v| *v == self.view).unwrap();
         self.tab_options[index] = super::TabOptions {
             search: std::mem::take(&mut self.search),
@@ -638,6 +866,7 @@ impl Explorer {
     }
 
     pub(super) fn show(&mut self, ctx: &egui::Context) {
+        self.firmware_watch.poll(ctx);
         let snapshot_modal_open = self.snapshot_dialog.is_some();
         self.show_snapshot_dialog(ctx);
         if !snapshot_modal_open {
@@ -700,15 +929,27 @@ impl Explorer {
                     if let Some(analysis) = &self.analysis {
                         ui.horizontal(|ui| {
                             draw_chip(ui);
-                            ui.label("ELF");
-                            ui.add_space(12.0);
-                            draw_chip(ui);
                             ui.label(&analysis.metadata.architecture);
                             ui.add_space(12.0);
-                            ui.label(format!("{}-bit", analysis.metadata.bitness));
+                            draw_bit_width(ui);
+                            ui.label(format!("{}-bit", analysis.metadata.bitness))
+                                .on_hover_text("Firmware word size from the ELF header");
                         });
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // Keep the action at the far right, beside the baseline badge.
+                        if self.receiver.is_some() {
+                            ui.add_sized(egui::vec2(32.0, 32.0), egui::Spinner::new());
+                            ui.label("Analyzing...");
+                        } else if reload_button(
+                            ui,
+                            self.build.is_some(),
+                            self.firmware_watch.changed(),
+                        )
+                        .clicked()
+                        {
+                            self.refresh();
+                        }
                         if let Some(name) = self.snapshot_label().map(str::to_owned) {
                             let label = format!("Baseline: {name}");
                             let text = egui::RichText::new(&label)
@@ -728,10 +969,6 @@ impl Explorer {
                                     self.snapshot_error = Some(error);
                                 }
                             }
-                        }
-                        if self.receiver.is_some() {
-                            ui.spinner();
-                            ui.label("Analyzing...");
                         }
                     });
                 });
@@ -774,7 +1011,7 @@ impl Explorer {
                     egui::ScrollArea::vertical().show(ui, |ui| self.navigation(ui));
                 });
                 ui.scope_builder(egui::UiBuilder::new().max_rect(settings), |ui| {
-                    self.settings_menu(ui);
+                    self.app_menu(ui);
                 });
             });
         if self.tree && matches!(self.view, View::Files | View::Symbols) {
@@ -803,25 +1040,17 @@ impl Explorer {
             }
             if self.view == View::Baselines { self.baselines_view(ui); return; }
             if self.view == View::BuildFiles {
-                ui.horizontal(|ui| {
-                    ui.heading("Build files");
-                    if ui.button("Back to Overview").clicked() { self.change_view(View::Overview); }
-                });
+                ui.heading("Build files");
                 ui.separator();
-                if self.preview.is_some() {
-                    if ui.button("Back to file selection").clicked() { self.preview = None; }
-                    if self.artifact_preview(ui) { return; }
-                }
                 self.build_files(ui);
                 return;
             }
-            if self.view == View::Overview && self.artifact_preview(ui) { return; }
             let Some(a) = self.analysis.clone() else {
                 ui.add_space(24.0); ui.heading("Firmware Explorer");
                 ui.label(if self.build.is_some() { "Choose firmware from the ELF dropdown in the header, or open Build files." } else { "Select a build folder to discover firmware, maps and stack reports." });
                 ui.add_space(8.0);
                 if ui.add_enabled(self.receiver.is_none(), egui::Button::new("Open build folder...")).clicked() { self.pick_build(); }
-                ui.collapsing("Which files are supported?", |ui| { ui.label("The folder and its subfolders are scanned for linked ELF images (including .elf, .axf and .out), .map and .su. Select firmware to analyze it; supporting files can be previewed. A unique same-name GNU linker map supplies memory capacities automatically. HEX and BIN lack the required metadata."); });
+                ui.collapsing("Which files are supported?", |ui| { ui.label("The folder and its subfolders are scanned for linked ELF images (including .elf, .axf and .out), .map and .su. Select firmware to analyze it; choose map and stack reports in Build files. Automatic map matching compares output sections with the ELF. HEX and BIN lack the required metadata."); });
                 return;
             };
             if !matches!(self.view, View::Overview | View::Memory) {
