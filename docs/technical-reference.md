@@ -78,7 +78,7 @@ Executables are `target/release/firmware-gui` and `target/release/firmware-explo
 
 ## Releases and updates
 
-The [build workflow](../.github/workflows/build.yml) follows Pigtail's Windows/Linux release workflow. Run it manually on a branch, or label a PR `build`, `build-linux`, or `build-windows` to produce downloadable artifacts. Pushing `v<workspace-version>` publishes a GitHub release; the workflow rejects tags that do not match `Cargo.toml`.
+The [build workflow](../.github/workflows/build.yml) follows Pigtail's Windows/Linux release workflow. Run it manually on a branch, or label a PR `build`, `build-linux`, or `build-windows` to produce downloadable artifacts. Pushing `v<workspace-version>` publishes a GitHub release only after both Windows and Linux pass formatting, Clippy, tests, release builds, packaging, and artifact uploads. A separate release job downloads both platforms’ assets before publishing; a failed or canceled platform prevents release creation. The workflow rejects tags that do not match `Cargo.toml`.
 
 Release assets include portable archives containing the GUI and CLI, standalone GUI executables for the updater, Windows MSI and Setup installers, a Debian package, and an AppImage. Linux builds also capture `snout-screenshot.png` using the regular app with `fixtures/build/cortex-m.elf` selected. There is no demo build. The screenshot runs in an isolated Xvfb session with fresh preferences and update checks disabled.
 

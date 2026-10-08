@@ -65,7 +65,7 @@ jobs:
   build:
     needs: verify-version
     permissions:
-      contents: write
+      contents: read
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.verify-version.outputs.matrix) }}
@@ -239,11 +239,13 @@ jobs:
             "target/${{ matrix.target }}/release/firmware-gui" "$SCREENSHOT" fixtures/build/cortex-m.elf
           echo "SCREENSHOT_ASSET=$SCREENSHOT" >> "$GITHUB_ENV"
 
-      - name: Upload build artifacts (non-release builds)
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: snout-v${{ env.VERSION }}-${{ matrix.target }}-build-${{ github.run_id }}-${{ github.run_attempt }}
+          name: snout-v${{ env.VERSION }}-${{ matrix.target }}-build-${{ github.run_id }}
+          # Rerunning a platform replaces its assets while retaining successful
+          # platforms from earlier attempts of this workflow run.
+          overwrite: true
           if-no-files-found: error
           path: |
             ${{ env.ASSET }}
@@ -254,9 +256,30 @@ jobs:
             ${{ env.APPIMAGE_ASSET }}
             ${{ env.SCREENSHOT_ASSET }}
 
+  # A dependent job waits for every matrix build to succeed before publishing.
+  release:
+    needs: [verify-version, build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ needs.verify-version.outputs.version }}
+    steps:
+      - name: Download Linux release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: snout-v${{ env.VERSION }}-x86_64-unknown-linux-gnu-build-${{ github.run_id }}
+          path: release-assets
+
+      - name: Download Windows release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: snout-v${{ env.VERSION }}-x86_64-pc-windows-msvc-build-${{ github.run_id }}
+          path: release-assets
+
       - name: Release
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/v')
         with:
           tag_name: v${{ env.VERSION }}
           name: "Rusty's Snout - Firmware Explorer v${{ env.VERSION }}"
@@ -264,13 +287,5 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: false
-          # Unset variables expand to nothing, so each platform uploads only the
-          # assets it actually produced.
-          files: |
-            ${{ env.ASSET }}
-            ${{ env.UPDATE_ASSET }}
-            ${{ env.SETUP_ASSET }}
-            ${{ env.MSI_ASSET }}
-            ${{ env.DEB_ASSET }}
-            ${{ env.APPIMAGE_ASSET }}
-            ${{ env.SCREENSHOT_ASSET }}
+          fail_on_unmatched_files: true
+          files: release-assets/**/*

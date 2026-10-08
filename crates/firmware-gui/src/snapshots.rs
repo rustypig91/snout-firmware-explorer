@@ -1580,7 +1580,7 @@ mod tests {
         finish(&mut app);
         app
     }
-    fn fixture(root: &std::path::Path) {
+    fn fixture(root: &std::path::Path) -> PathBuf {
         std::fs::create_dir_all(root).unwrap();
         std::fs::write(
             root.join("app.elf"),
@@ -1588,12 +1588,15 @@ mod tests {
         )
         .unwrap();
         std::fs::write(root.join("app.su"), "diag.c:22:36:diagnose\t24\tstatic\n").unwrap();
+        // Folder scans canonicalize paths. Use the same identity for opening ELF
+        // files and computing snapshot IDs, including Windows verbatim prefixes.
+        root.canonicalize().unwrap()
     }
     #[test]
     fn snapshot_paths_fit_the_windows_path_budget_with_long_display_names() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         app.take_snapshot(&"baseline".repeat(20)).unwrap();
         let mut snapshot = app.snapshots.snapshots[0].clone();
@@ -1617,7 +1620,7 @@ mod tests {
             .join("long-config-directory-".repeat(5))
             .join("nested-config-directory-".repeat(5));
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let preferences = config.join("workspace.json");
         let mut app = open(&root);
         app.preferences_file = Some(preferences.clone());
@@ -1677,7 +1680,7 @@ mod tests {
     fn snapshots_survive_restart_but_baseline_selection_is_session_only() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         app.select_stack_reports(vec![root.join("app.su")]);
         finish(&mut app);
@@ -1782,7 +1785,7 @@ mod tests {
     fn moved_symbols_match_by_identity_and_duplicate_baseline_symbols_are_unknown() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         let symbol = app
             .analysis
@@ -1826,7 +1829,7 @@ mod tests {
     fn duplicate_section_tls_range_and_stack_identities_do_not_produce_false_deltas() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         app.select_stack_reports(vec![root.join("app.su")]);
         finish(&mut app);
@@ -1911,7 +1914,7 @@ mod tests {
     fn duplicate_region_names_do_not_compare_against_the_last_region() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         let mut analysis = (**app.analysis.as_ref().unwrap()).clone();
         let symbol = analysis
@@ -1977,7 +1980,7 @@ mod tests {
     fn failed_snapshot_save_does_not_change_baseline_or_snapshot_list() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         app.take_snapshot("original").unwrap();
         app.select_snapshot(Some("original".into())).unwrap();
@@ -2001,8 +2004,8 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
         let other = directory.path().join("other-build");
-        fixture(&root);
-        fixture(&other);
+        let root = fixture(&root);
+        let other = fixture(&other);
         let mut app = open(&root);
         app.take_snapshot("a/b").unwrap();
         app.take_snapshot("a?b").unwrap();
@@ -2010,7 +2013,7 @@ mod tests {
         let first = snapshot_path(&preferences, &root, &app.snapshots.snapshots[0]).unwrap();
         let second = snapshot_path(&preferences, &root, &app.snapshots.snapshots[1]).unwrap();
         assert_ne!(first, second);
-        assert!(first.starts_with(directory.path().join("snapshots")));
+        assert!(first.starts_with(preferences.parent().unwrap().join("snapshots")));
         let saved = std::fs::read(&first).unwrap();
         app.select_snapshot(Some("a/b".into())).unwrap();
         assert_eq!(std::fs::read(&first).unwrap(), saved);
@@ -2110,7 +2113,7 @@ mod tests {
     fn deleting_the_last_snapshot_prunes_empty_folders_and_allows_saving_again() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         app.take_snapshot("first").unwrap();
         app.take_snapshot("second").unwrap();
@@ -2198,7 +2201,7 @@ mod tests {
     fn snapshot_manager_stays_stationary_at_fractional_display_scales() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         app.take_snapshot("Before adding Bluetooth and enabling the diagnostics subsystem")
             .unwrap();
@@ -2312,7 +2315,7 @@ mod tests {
     fn enter_in_snapshot_name_field_saves_a_named_snapshot() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         app.open_snapshot_manager();
         let ctx = egui::Context::default();
@@ -2429,7 +2432,7 @@ mod tests {
     fn duplicate_names_ask_before_overwriting_and_replace_the_active_baseline_after_confirmation() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         app.take_snapshot("baseline").unwrap();
         app.select_snapshot(Some("baseline".into())).unwrap();
@@ -2476,7 +2479,7 @@ mod tests {
     fn manager_compares_deletes_and_clears_the_deleted_baseline_across_restart() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         app.take_snapshot("baseline").unwrap();
         let path = snapshot_path(
@@ -2528,8 +2531,8 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
         let other_root = directory.path().join("other-build");
-        fixture(&root);
-        fixture(&other_root);
+        let root = fixture(&root);
+        let other_root = fixture(&other_root);
         std::fs::copy(root.join("app.elf"), root.join("other.elf")).unwrap();
         let mut app = open(&root);
         app.open(root.join("other.elf"));
@@ -2592,7 +2595,7 @@ mod tests {
     fn delete_all_snapshots_keeps_failed_deletions_and_reports_partial_success() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         app.take_snapshot("blocked").unwrap();
         app.take_snapshot("deletable").unwrap();
@@ -2617,7 +2620,7 @@ mod tests {
     fn failed_background_saves_show_errors_inside_the_snapshot_manager() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         app.take_snapshot("baseline").unwrap();
         let mut blocked = app.snapshots.snapshots[0].clone();
@@ -2643,7 +2646,7 @@ mod tests {
     fn snapshot_modal_blocks_background_shortcuts_and_dragged_firmware() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         app.open_snapshot_manager();
         let ctx = egui::Context::default();
@@ -2677,7 +2680,7 @@ mod tests {
     fn snapshot_capture_time_and_elf_are_persisted_and_visible_in_the_manager() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         app.take_snapshot("baseline").unwrap();
         let time = app.snapshots.snapshots[0].taken_at;
@@ -2724,7 +2727,7 @@ mod tests {
         };
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         let original = (**app.analysis.as_ref().unwrap()).clone();
         let mut old = original.clone();
@@ -3061,7 +3064,7 @@ mod tests {
         use super::super::{pie::UnitKey, View};
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         let current = app.analysis.clone().unwrap();
         let mut old = (*current).clone();
@@ -3120,7 +3123,7 @@ mod tests {
     fn overview_keeps_zero_byte_current_symbols_present_in_baseline_drilldowns() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         app.take_snapshot("baseline").unwrap();
         app.select_snapshot(Some("baseline".into())).unwrap();
@@ -3223,7 +3226,7 @@ mod tests {
         use super::super::View;
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         app.take_snapshot("baseline").unwrap();
         let ctx = egui::Context::default();
@@ -3251,7 +3254,7 @@ mod tests {
         use super::super::View;
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         app.take_snapshot("saved baseline").unwrap();
         app.change_view(View::Symbols);
@@ -3348,7 +3351,7 @@ mod tests {
     fn baselines_tab_saves_and_confirms_overwrite_without_selecting_a_baseline() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         let ctx = egui::Context::default();
         click_shell_text(&ctx, &mut app, "Baselines");
@@ -3392,7 +3395,7 @@ mod tests {
         use super::super::View;
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         app.take_snapshot("baseline").unwrap();
         assert!(app.snapshots.snapshots[0].analysis.memory_image.is_none());
@@ -3453,7 +3456,7 @@ mod tests {
         use super::super::View;
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         let mut current = (**app.analysis.as_ref().unwrap()).clone();
         // Move an unused region so its occupancy remains unchanged.
@@ -3507,7 +3510,7 @@ mod tests {
         use super::super::View;
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         let mut current = (**app.analysis.as_ref().unwrap()).clone();
         let mut symbol = current
@@ -3555,7 +3558,7 @@ mod tests {
         use super::super::View;
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         app.take_snapshot("baseline").unwrap();
         app.select_snapshot(Some("baseline".into())).unwrap();
@@ -3582,7 +3585,7 @@ mod tests {
     fn overview_keeps_drilldown_to_symbol_changes_with_unchanged_section_totals() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         app.take_snapshot("baseline").unwrap();
         app.select_snapshot(Some("baseline".into())).unwrap();
@@ -3644,7 +3647,7 @@ mod tests {
         use super::super::View;
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         app.take_snapshot("baseline").unwrap();
         app.select_snapshot(Some("baseline".into())).unwrap();
@@ -3694,7 +3697,7 @@ mod tests {
     fn default_tabs_share_the_snapshot_baseline() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");
-        fixture(&root);
+        let root = fixture(&root);
         let mut app = open(&root);
         app.take_snapshot("baseline").unwrap();
         app.select_snapshot(Some("baseline".into())).unwrap();
