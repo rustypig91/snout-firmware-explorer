@@ -1126,7 +1126,7 @@ checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 
 [[package]]
 name = "firmware-analysis-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "addr2line",
  "cpp_demangle",
@@ -1140,7 +1140,7 @@ dependencies = [
 
 [[package]]
 name = "firmware-cli"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "clap",
  "firmware-analysis-core",
@@ -1150,7 +1150,7 @@ dependencies = [
 
 [[package]]
 name = "firmware-gui"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "ashpd",
  "chrono",
