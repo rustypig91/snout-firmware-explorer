@@ -305,6 +305,10 @@ impl Explorer {
             );
             response.on_hover_text(format!("{label}: {value}"));
         }
+        if a.tls.is_some() && ui.link("Thread-local storage details").clicked() {
+            self.change_view(View::Sections);
+            self.search.clear();
+        }
     }
 
     pub(super) fn select_overview_region(&mut self, a: &Analysis, slot: usize, name: String) {
@@ -451,7 +455,8 @@ impl Explorer {
     }
 
     fn compact_ranking(&mut self, ui: &mut egui::Ui, a: &Analysis, functions: bool) {
-        let paths = self.source_paths(a);
+        let display = self.baseline_display_analysis();
+        let paths = self.source_paths(display.as_deref().unwrap_or(a));
         let indices = if functions {
             self.top_functions.clone()
         } else {

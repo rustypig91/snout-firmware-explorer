@@ -848,6 +848,39 @@ impl Explorer {
     pub(super) fn sections(&mut self, ui: &mut egui::Ui, a: &Analysis) {
         let display = self.baseline_display_analysis();
         let a = display.as_deref().unwrap_or(a);
+        if let Some(tls) = &a.tls {
+            egui::CollapsingHeader::new("Thread-local storage (TLS)")
+                .default_open(true)
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("tls_details")
+                        .max_height(160.0)
+                        .show(ui, |ui| {
+                            ui.label(format!(
+                                "Template per thread: {} — {} initialized, {} zero-initialized; alignment {}",
+                                self.snapshot_bytes("tls", "", "template_size", tls.template_size),
+                                self.snapshot_bytes("tls", "", "initialized_size", tls.initialized_size),
+                                self.snapshot_bytes("tls", "", "zero_initialized_size", tls.zero_initialized_size),
+                                self.snapshot_bytes("tls", "", "alignment", tls.alignment),
+                            ));
+                            ui.label("Total TLS RAM is unknown. Static RAM excludes TLS templates; allocation may be inside existing stack reservations.");
+                            ui.small("Variable offsets are within the per-thread template, not physical runtime addresses.");
+                            for symbol in &tls.symbols {
+                                if !self.diff_visible("tls_symbol", &symbol.name) {
+                                    continue;
+                                }
+                                ui.monospace(format!(
+                                    "{}  {}  {} [{}]",
+                                    self.snapshot_address("tls_symbol", &symbol.name, "offset", symbol.offset),
+                                    self.snapshot_bytes("tls_symbol", &symbol.name, "size", symbol.size),
+                                    symbol.name,
+                                    symbol.section,
+                                ));
+                            }
+                        });
+                });
+            ui.separator();
+        }
         let rows = self.cached_rows(a as *const Analysis as usize, || { a.sections.iter().filter(|s| self.diff_visible("section", &s.name)).map(|s| Row::new(vec![s.name.clone(), self.snapshot_bytes("section", &s.name, "size", s.size), self.snapshot_bytes("section", &s.name, "usage.flash", s.usage.flash), self.snapshot_bytes("section", &s.name, "usage.ram", s.usage.ram), self.snapshot_address("section", &s.name, "address", s.address), s.load_address.map(|v| self.snapshot_address("section", &s.name, "load_address", v)).unwrap_or_else(|| load_address(None, s.load_size)), classification(s.classification).into()], &[(1,s.size.into()),(2,s.usage.flash.into()),(3,s.usage.ram.into()),(4,s.address.into()),(5,s.load_address.unwrap_or(0).into())],
             format!("Load size: {} / runtime size: {}\nAlignment: {} / flags: {:#x}\nAllocated: {} / writable: {} / executable: {}\n{}", self.snapshot_bytes("section", &s.name, "load_size", s.load_size),self.snapshot_bytes("section", &s.name, "runtime_size", s.runtime_size),self.snapshot_bytes("section", &s.name, "alignment", s.alignment),s.flags,s.allocated,s.writable,s.executable,s.evidence)).with_bars(&[1, 2, 3])).collect() });
         self.table(

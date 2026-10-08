@@ -4728,3 +4728,159 @@ fn dashboard_rankings_show_ten_functions_and_refresh_after_report_replacement() 
     });
     assert_eq!(first, Some("ranked_function_00"));
 }
+
+#[test]
+fn dashboard_file_labels_match_baseline_tables_and_reuse_path_cache() {
+    let mut current = firmware_analysis_core::analyze_bytes(
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        "fixture.elf",
+        &Default::default(),
+    )
+    .unwrap();
+    current.symbols.truncate(1);
+    current.symbols[0].source_file = Some("/project/app/src/main.c".into());
+    current.symbols[0].dwarf_compilation_unit = current.symbols[0].source_file.clone();
+    current.symbols[0].compilation_unit = None;
+    current.files = vec![firmware_analysis_core::FileUsage {
+        path: "/project/app/src/main.c".into(),
+        attribution: "DWARF".into(),
+        usage: firmware_analysis_core::Usage { flash: 4, ram: 0 },
+        symbol_count: 1,
+    }];
+    current.dependencies.nodes.clear();
+    let mut old = current.clone();
+    old.files[0].path = "/project/lib/src/main.c".into();
+    old.symbols[0].source_file = Some(old.files[0].path.clone());
+    old.symbols[0].dwarf_compilation_unit = old.symbols[0].source_file.clone();
+    let mut app = Explorer {
+        baseline_display: Some(baseline_display::BaselineDisplay::new(
+            &current, &old, None, None,
+        )),
+        analysis: Some(Arc::new(current)),
+        ..Default::default()
+    };
+    let display = app.baseline_display_analysis().unwrap();
+    let paths = app.source_paths(&display);
+    assert_eq!(paths.short(&display.files[0].path), "app/src/main.c");
+    let ctx = egui::Context::default();
+    shell::configure_style(&ctx);
+    for _ in 0..2 {
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1920.0, 1200.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| app.show(ctx),
+        );
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.text() == "app/src/main.c")));
+        assert!(std::rc::Rc::ptr_eq(&paths, &app.source_paths(&display)));
+    }
+}
+
+#[test]
+fn sections_expose_tls_template_and_variable_details_without_inventing_total_ram() {
+    let mut analysis = firmware_analysis_core::analyze_bytes(
+        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        "fixture.elf",
+        &Default::default(),
+    )
+    .unwrap();
+    analysis.tls = Some(firmware_analysis_core::TlsReport {
+        source: "PT_TLS".into(),
+        initialized_size: 8,
+        zero_initialized_size: 24,
+        template_size: 32,
+        alignment: 8,
+        total_runtime_ram: None,
+        symbols: vec![firmware_analysis_core::TlsSymbol {
+            name: "thread_counter".into(),
+            offset: 8,
+            size: 4,
+            section: ".tbss".into(),
+        }],
+    });
+    let totals = analysis.totals;
+    let mut app = Explorer {
+        analysis: Some(Arc::new(analysis)),
+        view: View::Sections,
+        ..Default::default()
+    };
+    let ctx = egui::Context::default();
+    shell::configure_style(&ctx);
+    let frame = |app: &mut Explorer, events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 820.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.show(ctx),
+        )
+    };
+    app.search = "stale section filter".into();
+    app.change_view(View::Overview);
+    frame(&mut app, vec![]);
+    let output = frame(&mut app, vec![]);
+    let link = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "Thread-local storage details" => {
+                Some(text.pos + text.galley.size() * 0.5)
+            }
+            _ => None,
+        })
+        .expect("TLS details must be reachable from the dashboard");
+    for pressed in [true, false] {
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(link),
+                egui::Event::PointerButton {
+                    pos: link,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    assert!(app.view == View::Sections);
+    assert!(app.search.is_empty());
+    let mut output = egui::FullOutput::default();
+    for _ in 0..3 {
+        output = frame(&mut app, vec![]);
+    }
+    let texts: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.contains("Template per thread: 32 B")),
+        "{texts:?}"
+    );
+    assert!(texts.iter().any(|text| text.contains("8 B initialized")
+        && text.contains("24 B zero-initialized")
+        && text.contains("alignment 8 B")));
+    assert!(texts
+        .iter()
+        .any(|text| text.contains("Total TLS RAM is unknown")));
+    assert!(texts.iter().any(|text| text.contains("thread_counter")
+        && text.contains("0x00000008")
+        && text.contains("4 B")
+        && text.contains(".tbss")));
+    assert_eq!(app.analysis.as_ref().unwrap().totals, totals);
+}
