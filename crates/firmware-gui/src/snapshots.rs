@@ -3449,6 +3449,60 @@ mod tests {
     }
 
     #[test]
+    fn dashboard_memory_links_open_address_only_baseline_changes() {
+        use super::super::View;
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("build");
+        fixture(&root);
+        let mut app = open(&root);
+        let mut current = (**app.analysis.as_ref().unwrap()).clone();
+        // Move an unused region so its occupancy remains unchanged.
+        current
+            .options
+            .regions
+            .push(firmware_analysis_core::MemoryRegion {
+                name: "unused".into(),
+                start: 0x60000000,
+                size: 4096,
+                kind: firmware_analysis_core::MemoryKind::Ram,
+            });
+        app.analysis = Some(Arc::new(current));
+        app.take_snapshot("with unused region").unwrap();
+        app.select_snapshot(Some("with unused region".into()))
+            .unwrap();
+        let mut current = (**app.analysis.as_ref().unwrap()).clone();
+        current
+            .sections
+            .iter_mut()
+            .find(|s| s.name == ".text")
+            .unwrap()
+            .address += 16;
+        current.options.regions.last_mut().unwrap().start += 4096;
+        app.analysis = Some(Arc::new(current));
+        app.sync_snapshot_comparison();
+        let ctx = egui::Context::default();
+        super::super::shell::configure_style(&ctx);
+        for (label, view, id) in [
+            (".text".to_owned(), View::Sections, ".text"),
+            (
+                format!(
+                    "View all regions ({})",
+                    app.analysis.as_ref().unwrap().options.regions.len()
+                ),
+                View::MemoryMap,
+                "unused",
+            ),
+        ] {
+            app.change_view(View::Overview);
+            app.show_address_changes[view as usize] = false;
+            click_shell_text(&ctx, &mut app, &label);
+            assert!(app.view == view);
+            shell_frame(&ctx, &mut app, vec![]);
+            assert_eq!(app.visible_rows, 1, "Drilldown from {label} hides {id}");
+        }
+    }
+
+    #[test]
     fn dashboard_rankings_open_address_only_symbol_changes() {
         use super::super::View;
         let directory = tempfile::tempdir().unwrap();

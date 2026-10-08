@@ -159,6 +159,9 @@ impl Explorer {
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .clicked()
             {
+                if self.diffs_active() {
+                    self.show_address_changes[View::Sections as usize] = true;
+                }
                 self.change_view(View::Sections);
                 self.search = if name == "Other" {
                     String::new()

@@ -448,6 +448,9 @@ impl Explorer {
             .link(format!("View all regions ({})", a.options.regions.len()))
             .clicked()
         {
+            if self.diffs_active() {
+                self.show_address_changes[View::MemoryMap as usize] = true;
+            }
             self.change_view(View::MemoryMap);
             self.search.clear();
             self.selected_region = None;
