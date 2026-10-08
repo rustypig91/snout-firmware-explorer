@@ -3365,6 +3365,7 @@ fn recent_build_folders_sanitize_saved_history() {
 #[test]
 fn recent_folder_submenu_opens_right_and_remains_clickable() {
     check_recent_folder_submenu(1280.0, "build");
+    check_recent_folder_submenu(1280.0, &"long-build-folder-".repeat(3));
 }
 
 #[test]
@@ -3489,11 +3490,23 @@ fn check_recent_folder_submenu(width: f32, folder_name: &str) {
         !path_text.galley.elided,
         "Recent folder paths must be shown in full"
     );
-    assert!(
-        child.right() <= width,
-        "Full path must fit within the window"
+    assert_eq!(
+        path_text.galley.rows.len(),
+        1,
+        "Paths must stay on one line"
     );
-    assert!(child.intersect(path_shape.clip_rect).contains_rect(child));
+    let visible_child = child.intersect(path_shape.clip_rect);
+    assert!(
+        visible_child.right() <= width,
+        "Submenu must fit within the window"
+    );
+    assert!(visible_child.width() > 0.0);
+    if width >= 1280.0 {
+        assert!(
+            path_shape.clip_rect.contains_rect(child),
+            "Path must be fully visible when space permits"
+        );
+    }
     let parent = text_rect(&output, "Open build folder...");
     assert!(
         child.left() > parent.right(),
@@ -3532,7 +3545,10 @@ fn check_recent_folder_submenu(width: f32, folder_name: &str) {
     let output = frame(&mut app, vec![]);
     // The bounding rectangle of both menus includes empty space below the
     // shorter submenu. Clicking there must dismiss the menu hierarchy.
-    let outside = egui::pos2(child.center().x, text_rect(&output, "About").center().y);
+    let outside = egui::pos2(
+        visible_child.center().x,
+        text_rect(&output, "About").center().y,
+    );
     for pressed in [true, false] {
         frame(
             &mut app,
@@ -3572,9 +3588,9 @@ fn check_recent_folder_submenu(width: f32, folder_name: &str) {
         frame(
             &mut app,
             vec![
-                egui::Event::PointerMoved(child.center()),
+                egui::Event::PointerMoved(visible_child.center()),
                 egui::Event::PointerButton {
-                    pos: child.center(),
+                    pos: visible_child.center(),
                     button: egui::PointerButton::Primary,
                     pressed,
                     modifiers: egui::Modifiers::NONE,

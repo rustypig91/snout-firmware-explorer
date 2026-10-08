@@ -136,7 +136,22 @@ fn right_recent_menu(
         );
         // Bound the popup to the space right of its parent. Otherwise long
         // paths make Area's screen constraint move it over the parent menu.
-        let width = (ui.ctx().screen_rect().right() - anchor.x - margin.sum().x).clamp(1.0, 400.0);
+        let available_width = (ui.ctx().screen_rect().right() - anchor.x - margin.sum().x).max(1.0);
+        let path_width = folders
+            .iter()
+            .map(|folder| {
+                egui::WidgetText::from(display_path(&folder.to_string_lossy()).into_owned())
+                    .into_galley(
+                        ui,
+                        Some(egui::TextWrapMode::Extend),
+                        f32::INFINITY,
+                        egui::TextStyle::Button,
+                    )
+                    .size()
+                    .x
+            })
+            .fold(0.0_f32, f32::max);
+        let width = (path_width + 20.0).min(available_width);
         let popup = egui::Area::new(id)
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::LEFT_TOP)
@@ -147,8 +162,9 @@ fn right_recent_menu(
                 egui::Frame::menu(ui.style()).show(ui, |ui| {
                     style_popup_menu(ui);
                     ui.set_width(width);
-                    // Wrapped paths can make the history taller than the window.
-                    egui::ScrollArea::vertical()
+                    // Keep paths on one line; oversized paths can scroll horizontally.
+                    egui::ScrollArea::both()
+                        .max_width(width)
                         .max_height(
                             (ui.ctx().screen_rect().bottom() - anchor.y - margin.sum().y).max(30.0),
                         )
@@ -159,7 +175,10 @@ fn right_recent_menu(
                                     for folder in folders {
                                         let path = folder.to_string_lossy();
                                         if ui
-                                            .add(egui::Button::new(display_path(&path)).wrap())
+                                            .add(
+                                                egui::Button::new(display_path(&path))
+                                                    .wrap_mode(egui::TextWrapMode::Extend),
+                                            )
                                             .on_hover_text(display_path(&path))
                                             .clicked()
                                         {
@@ -238,8 +257,6 @@ pub(super) fn configure_style(ctx: &egui::Context) {
     ctx.set_style(style);
 }
 
-// Use the application's existing snout motif as vector geometry so the header
-// remains crisp at every display scale and needs no external image assets.
 fn draw_chip(ui: &mut egui::Ui) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
     let stroke = egui::Stroke::new(1.0_f32, super::overview::MUTED);
@@ -350,43 +367,106 @@ fn reload_button(ui: &mut egui::Ui, enabled: bool, changed: bool) -> egui::Respo
     response
 }
 
-fn draw_brand(ui: &mut egui::Ui) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(38.0, 44.0), egui::Sense::hover());
-    let center = rect.center();
-    let stroke = egui::Stroke::new(1.8_f32, super::views::ACCENT);
-    ui.painter().rect_stroke(
-        egui::Rect::from_center_size(center, egui::vec2(33.0, 29.0)),
-        12.0,
-        stroke,
-    );
-    ui.painter().rect_stroke(
-        egui::Rect::from_center_size(center + egui::vec2(0.0, 5.0), egui::vec2(19.0, 12.0)),
-        6.0,
-        stroke,
-    );
-    for x in [-7.0, 7.0] {
-        ui.painter()
-            .circle_filled(center + egui::vec2(x, -5.0), 2.0, super::views::ACCENT);
-        ui.painter().line_segment(
-            [
-                center + egui::vec2(x * 1.8, -10.0),
-                center + egui::vec2(x * 2.0, -20.0),
-            ],
-            stroke,
+// Cache the embedded artwork once per egui context for the header and About dialog.
+fn draw_app_icon(ui: &mut egui::Ui, size: f32) {
+    let id = egui::Id::new("snout_app_icon");
+    let cached = ui
+        .ctx()
+        .data(|data| data.get_temp::<egui::TextureHandle>(id));
+    let texture = cached.unwrap_or_else(|| {
+        let icon =
+            eframe::icon_data::from_png_bytes(include_bytes!("../packaging/icons/snout.png"))
+                .expect("bundled Snout icon");
+        let image = egui::ColorImage::from_rgba_unmultiplied(
+            [icon.width as usize, icon.height as usize],
+            &icon.rgba,
         );
-    }
-    for x in [-4.0, 4.0] {
-        ui.painter()
-            .circle_filled(center + egui::vec2(x, 5.0), 1.5, super::views::ACCENT);
-    }
-    ui.vertical(|ui| {
-        ui.label(egui::RichText::new("Rusty's Snout").size(21.0).strong());
-        ui.label(
-            egui::RichText::new("Firmware Explorer")
-                .color(super::views::ACCENT)
-                .strong(),
-        );
+        let texture = ui
+            .ctx()
+            .load_texture("snout_app_icon", image, egui::TextureOptions::LINEAR);
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(id, texture.clone()));
+        texture
     });
+    ui.add(egui::Image::new((texture.id(), egui::vec2(size, size))));
+}
+
+fn draw_brand(ui: &mut egui::Ui) {
+    const ICON_SIZE: f32 = 64.0;
+    draw_app_icon(ui, ICON_SIZE);
+    let title = egui::WidgetText::from(egui::RichText::new("Rusty's Snout").size(21.0).strong())
+        .into_galley(
+            ui,
+            Some(egui::TextWrapMode::Extend),
+            f32::INFINITY,
+            egui::TextStyle::Body,
+        );
+    let subtitle = egui::WidgetText::from(
+        egui::RichText::new("Firmware Explorer")
+            .color(super::views::ACCENT)
+            .strong(),
+    )
+    .into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Body,
+    );
+    let text_height = title.size().y + ui.spacing().item_spacing.y + subtitle.size().y;
+    ui.vertical(|ui| {
+        ui.set_min_height(ICON_SIZE);
+        // A vertical child starts at the top of the icon's row. Center the
+        // complete two-line title using its measured height.
+        ui.add_space(((ICON_SIZE - text_height) * 0.5).max(0.0));
+        ui.label(title);
+        ui.label(subtitle);
+    });
+}
+
+#[test]
+fn header_title_is_vertically_centered_beside_the_icon() {
+    let ctx = egui::Context::default();
+    configure_style(&ctx);
+    let mut output = egui::FullOutput::default();
+    for _ in 0..3 {
+        output = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.horizontal(draw_brand);
+            });
+        });
+    }
+    let text_rect = |label: &str| {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => {
+                    Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    let texture_id = ctx.data(|data| {
+        data.get_temp::<egui::TextureHandle>(egui::Id::new("snout_app_icon"))
+            .unwrap()
+            .id()
+    });
+    let icon = ctx
+        .tessellate(output.shapes.clone(), output.pixels_per_point)
+        .iter()
+        .find_map(|primitive| match &primitive.primitive {
+            egui::epaint::Primitive::Mesh(mesh) if mesh.texture_id == texture_id => {
+                Some(mesh.calc_bounds())
+            }
+            _ => None,
+        })
+        .expect("header icon must be drawn");
+    let text = text_rect("Rusty's Snout").union(text_rect("Firmware Explorer"));
+    assert!(
+        (text.center().y - icon.center().y).abs() < 1.0,
+        "title block and icon must share a vertical center: {text:?}, {icon:?}"
+    );
 }
 
 fn firmware_path_galley(ui: &egui::Ui, path: &str, width: f32) -> std::sync::Arc<egui::Galley> {
@@ -1088,25 +1168,7 @@ impl Explorer {
             .resizable(false)
             .show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
-                    // Vector geometry from packaging/icons/snout.svg, scaled for the dialog.
-                    let (rect, _) =
-                        ui.allocate_exact_size(egui::vec2(80.0, 80.0), egui::Sense::hover());
-                    let scale = rect.width() / 256.0;
-                    let point = |x, y| rect.min + egui::vec2(x, y) * scale;
-                    let background = egui::Color32::from_rgb(24, 33, 43);
-                    ui.painter().rect_filled(rect, 48.0 * scale, background);
-                    ui.painter().rect_filled(
-                        egui::Rect::from_min_max(point(48.0, 60.0), point(208.0, 196.0)),
-                        56.0 * scale,
-                        egui::Color32::from_rgb(236, 146, 157),
-                    );
-                    for x in [95.0, 161.0] {
-                        ui.painter().add(egui::Shape::ellipse_filled(
-                            point(x, 128.0),
-                            egui::vec2(18.0, 28.0) * scale,
-                            background,
-                        ));
-                    }
+                    draw_app_icon(ui, 80.0);
                     ui.add_space(8.0);
                     ui.heading("Rusty's Snout - Firmware Explorer");
                     ui.label(concat!("Version ", env!("CARGO_PKG_VERSION")));
