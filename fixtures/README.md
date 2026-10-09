@@ -13,9 +13,11 @@ The input is a deterministic pseudo-random ADC signal. The output is an observab
 | [telemetry.c](src/telemetry.c) | Calibration, packet construction, checksum calculation |
 | [transport.c](src/transport.c) | Four-packet ring queue, checksum validation, simulated transmission |
 | [app.h](src/app.h) | Shared structures, fault flags, module interfaces |
-| [cortex-m.ld](src/cortex-m.ld) | Flash/RAM layout, copied RAM code, initialized data, BSS, reservation |
+| [cortex-m.ld](src/cortex-m.ld) | GNU/LLVM Flash/RAM layout, copied RAM code, initialized data, BSS, reservation |
+| [cortex-m-ti.cmd](src/cortex-m-ti.cmd) | TI linker layout with separate load and run addresses |
+| [custom_sections.c](src/custom_sections.c) | Additional LLVM/TI RAM code in `.sensor_calibration_code` |
 
-The **Dependencies** tab shows six source units and sixteen directed connections. Arrows below point toward the dependency; reciprocal unit connections do not imply recursive function calls. For example, diagnostics uses the pure telemetry calibration helper, while packet creation invokes diagnostics. Queue inspection and fault recording are leaf operations.
+The GCC fixture's **Dependencies** tab shows six source units and sixteen directed connections. Arrows below point toward the dependency; reciprocal unit connections do not imply recursive function calls. For example, diagnostics uses the pure telemetry calibration helper, while packet creation invokes diagnostics. Queue inspection and fault recording are leaf operations.
 
 ```mermaid
 flowchart LR
@@ -37,69 +39,88 @@ flowchart LR
     Transport --> Config
 ```
 
-Open `fixtures/build/cortex-m.elf` from the build folder to explore the graph. Rescan or press F5 after rebuilding. The stripped variant retains object dependencies with unknown source ownership and sizes.
+Open `fixtures/build/gcc/cortex-m.elf` to explore the reference firmware. Each compiler folder contains baseline, grown and stripped variants. Rescan or press F5 after rebuilding.
 
-## Formatting and regeneration
+## Compiler environment
 
-The C files use four-space indentation, braces on separate lines for functions, and an 88-column limit. [`.clang-format`](.clang-format) records the style:
+[Dockerfile](Dockerfile) installs these **Cortex-M3/Thumb** toolchains:
+
+| Folder | Compiler/linker | Map information |
+|---|---|---|
+| `gcc` | Arm GNU Toolchain 14.2.rel1 (GCC 14.2.1 / GNU ld) | Capacities, placements and cross references |
+| `llvm` | Ubuntu Clang/lld 21 | Placements and cross references; no physical capacities |
+| `ti-cgt` | Classic TI Arm CGT 20.2.7.LTS (`armcl`) | Capacities and separate load/run placements |
+| `ti-clang` | TI Arm Clang 4.0.3.LTS (`tiarmclang` / TI linker) | Capacities and separate load/run placements |
+
+GCC and TI downloads use fixed versions and SHA-256 verification against vendor checksums. LLVM 21 comes from Ubuntu 26.04 packages, whose patch versions may change with package updates. TI installers retain their bundled license/manifest files: [TI Arm CGT](https://www.ti.com/tool/download/ARM-CGT/20.2.7.LTS), [TI Arm Clang](https://www.ti.com/tool/download/ARM-CGT-CLANG/4.0.3.LTS). Compilers are installed inside the image and are not committed to this repository.
+
+Build and regenerate from the fixture directory:
+
+```sh
+cd fixtures
+docker build --platform linux/amd64 -t snout-fixtures .
+mkdir -p build
+docker run --rm --platform linux/amd64 \
+    --user "$(id -u):$(id -g)" \
+    -v "$PWD/build:/output" snout-fixtures
+```
+
+The image smoke-builds all four compilers during construction and includes the fixture sources; rebuild it after changing sources. Classic TI CGT requires an x86_64 Linux host environment, so Arm hosts need Docker's `linux/amd64` emulation. Omit `--user` on hosts without `id` and manage generated-file ownership as appropriate for that host.
+
+The container builds in a temporary directory and exports only `.elf`, `.map` and `.su` artifacts into `/output/<toolchain>`. The bind mount places them in `fixtures/build/<toolchain>`. Temporary CMake caches, object files, compilation databases and Ninja bookkeeping are removed. Each selected compiler subfolder is replaced after that compiler builds successfully, removing stale artifacts. Other compiler subfolders are left intact. The root `.gitignore` independently allows only ELF, map and stack-report files under `fixtures/build`. The Docker context is only `fixtures/`; its `.dockerignore` excludes build output and local caches.
+
+```text
+fixtures/build/
+├── gcc/
+│   ├── cortex-m.elf
+│   ├── cortex-m.map
+│   ├── cortex-m-grown.elf
+│   ├── cortex-m-grown.map
+│   ├── cortex-m-stripped.elf
+│   ├── cortex-m-stripped.map
+│   └── CMakeFiles/
+│       ├── cortex-m-objects.dir/src/*.su
+│       └── cortex-m-grown-objects.dir/src/*.su
+├── llvm/       # Same image variants, maps and Clang stack reports
+├── ti-cgt/     # Same image variants and TI maps
+└── ti-clang/   # Same image variants and TI maps
+```
+
+Generate just one compiler from the same `fixtures/` directory by overriding the image's default arguments:
+
+```sh
+docker run --rm --platform linux/amd64 \
+    --user "$(id -u):$(id -g)" \
+    -v "$PWD/build:/output" snout-fixtures \
+    --toolchain ti-cgt --output-dir /output
+```
+
+## Local regeneration and formatting
+
+From the repository root, the same generator supports locally installed compilers. CMake 3.29+, Ninja and the selected compiler are required:
+
+```sh
+python3 fixtures/generate.py --toolchain all
+python3 fixtures/generate.py --gcc arm-none-eabi-gcc
+python3 fixtures/generate.py --toolchain llvm --clang clang
+python3 fixtures/generate.py --toolchain ti-cgt --armcl /path/to/armcl
+python3 fixtures/generate.py --toolchain ti-clang --tiarmclang /path/to/tiarmclang
+```
+
+The default is GCC, exported into `fixtures/build/gcc`. `--output-dir DIR` changes the artifact root, retaining compiler subfolders. `all` checks that every requested compiler is available before starting and fails rather than silently skipping tools. Upstream Clang requires `ld.lld`; TI stripped variants also require GNU `arm-none-eabi-strip` on `PATH`.
+
+The C files use four-space indentation, braces on separate lines for functions, and an 88-column limit, as specified in [`.clang-format`](.clang-format):
 
 ```sh
 clang-format -i fixtures/src/*.c fixtures/src/*.h
 clang-format --dry-run --Werror fixtures/src/*.c fixtures/src/*.h
 ```
 
-The committed ELF files were generated with GNU Arm GCC 14.2.1 for Cortex-M3, Thumb, `-O0 -g -gdwarf-4 -fstack-usage`. Warnings are enabled and treated as errors. Run from the repository root:
+## Artifact semantics and testing
 
-```sh
-python fixtures/generate.py --gcc arm-none-eabi-gcc
-```
+The generated ELF/map/stack files in `fixtures/build` are committed so routine Rust tests require neither Docker nor cross compilers. Earlier loose artifacts and the duplicate `maps/` and `toolchains/` snapshots have been consolidated into these compiler folders.
 
-The generator defaults to `arm-none-eabi-gcc`, so the same build can be run with:
-
-```sh
-python fixtures/generate.py
-```
-
-The generator configures an actual out-of-source CMake/Ninja build using [CMakeLists.txt](CMakeLists.txt) and the [ARM toolchain file](cmake/arm-none-eabi.cmake). Regeneration requires CMake 3.20 or newer, Ninja, and GNU Arm GCC. CMake rejects other compilers: these reference fixtures need GNU ld memory capacities and cross references, plus GCC's `file:line:column:function` stack records. LLVM lld coverage uses the separate fixtures in `maps/`. The committed artifact snapshot has the same target layout that CMake generates:
-
-```text
-fixtures/
-├── CMakeLists.txt
-├── cmake/arm-none-eabi.cmake
-├── src/                         # C sources, headers, linker script
-└── build/
-    ├── compile_commands.json
-    ├── cortex-m.elf
-    ├── cortex-m.map
-    ├── cortex-m-grown.elf
-    ├── cortex-m-grown.map
-    ├── cortex-m-stripped.elf
-    ├── cortex-m-stripped.map
-    └── CMakeFiles/
-        ├── cortex-m-objects.dir/src/
-        │   ├── main.c.obj
-        │   ├── main.c.su
-        │   └── ...              # Six object files and six stack reports
-        └── cortex-m-grown-objects.dir/src/
-            ├── main.c.obj
-            ├── main.c.su
-            └── ...              # The grown configuration's objects/reports
-```
-
-Baseline and stripped images share the baseline objects. Each configuration's stack reports cover 24 functions. To inspect only the baseline reports, use:
-
-```sh
-cargo run -p snout-cli -- stack fixtures/build/cortex-m.elf \
-    --stack-usage fixtures/build/CMakeFiles/cortex-m-objects.dir/src
-```
-
-Scanning the whole build folder also discovers the grown configuration's reports. CMake's machine-specific cache, compiler probes, Ninja rules, and build bookkeeping are recreated locally and ignored by Git; ELF, map, object, stack-report, and compilation-database artifacts are committed. Tests use these artifacts and need no ARM toolchain. Debug paths and compilation-database commands reflect the generation machine.
-
-GNU ld maps include the 256 KiB Flash / 64 KiB RAM capacities and raw-symbol cross references (`--cref --no-demangle`). LLVM lld ELF maps support section-placement previews and cross-reference imports, but do not provide physical memory capacities. Toolchains may produce different code sizes; test totals refer to the stated GCC version.
-
-## Memory layout
-
-GNU `arm-none-eabi-size -A` / `arm-none-eabi-readelf -l -S` reference for the baseline:
+GCC uses `-O0 -g -gdwarf-4 -fstack-usage` with warnings treated as errors. Its six-source reference layout retains these totals:
 
 | Section | Bytes | Flash | RAM |
 |---|---:|---:|---:|
@@ -112,13 +133,17 @@ GNU `arm-none-eabi-size -A` / `arm-none-eabi-readelf -l -S` reference for the ba
 | `.reserved` | 128 | 0 | 128 |
 | **Total** | | **1484** | **356** |
 
-`cortex-m-grown.elf` reserves eight additional 32-bit sample slots. Flash stays 1484 bytes; RAM grows by 32 to 388 bytes. Scheduling uses the fixed sixteen-slot window so the comparison isolates storage growth. `cortex-m-stripped.elf` has the baseline layout without symbols or debug information. A weak callback alias and a deliberately mangled function remain explicit analyzer test cases. Shared alias storage must not be counted twice.
+Each grown image adds eight 32-bit sample slots, increasing static RAM by 32 bytes. Baseline and stripped variants share compiled objects; stripping removes symbols and DWARF without changing section usage. Compiler code sizes differ, so matrix tests compare placement/accounting relationships rather than applying GCC totals to every compiler.
 
+LLVM and TI builds include the additional RAM function in `.sensor_calibration_code`. This long custom name exercises real TI continuation rows prefixed with `*`, `RUN ADDR` annotations, and the following `MODULE SUMMARY` boundary. GCC can include it explicitly with `--custom-sections`; that changes its reference totals and source-unit count.
 
-## LLVM lld map fixture
+GCC and upstream Clang emit `.su` reports. Clang's record syntax differs from GCC's currently supported stack-report syntax; TI builds do not emit GCC `.su` reports. TI uses DWARF 4 for classic CGT and DWARF 3 for TI Clang. ELF/DWARF remains authoritative for accounting and attribution. TI maps do not currently supply dependency graphs, while GNU and LLVM maps provide symbol cross references. LLVM maps do not establish physical capacities.
 
-`maps/llvm-lld.elf` and `maps/llvm-lld.map` were linked with lld 21.0.0 from the committed Cortex-M objects. They exercise actual lld section placement, distinct load/runtime addresses, DWARF precedence, and cross references. Tests use the committed outputs and do not require an LLVM installation. Regenerate from the repository root (quote the map option in PowerShell):
+For GCC's baseline stack report:
 
 ```sh
-ld.lld -T fixtures/src/cortex-m.ld --cref --no-demangle "-Map=fixtures/maps/llvm-lld.map" -o fixtures/maps/llvm-lld.elf fixtures/build/CMakeFiles/cortex-m-objects.dir/src/main.c.obj fixtures/build/CMakeFiles/cortex-m-objects.dir/src/config.c.obj fixtures/build/CMakeFiles/cortex-m-objects.dir/src/sensor.c.obj fixtures/build/CMakeFiles/cortex-m-objects.dir/src/diag.c.obj fixtures/build/CMakeFiles/cortex-m-objects.dir/src/telemetry.c.obj fixtures/build/CMakeFiles/cortex-m-objects.dir/src/transport.c.obj
+cargo run -p snout-cli -- stack fixtures/build/gcc/cortex-m.elf \
+    --stack-usage fixtures/build/gcc/CMakeFiles/cortex-m-objects.dir/src
 ```
+
+Debug paths, map timestamps and some compiler output reflect the generation environment. Outputs are not promised to be byte-identical across machines or package updates.

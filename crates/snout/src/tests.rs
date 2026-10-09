@@ -32,7 +32,7 @@ fn interface_text_respects_minimum_size_except_zoomable_graph_labels() {
     assert_eq!(ctx.style().text_styles[&egui::TextStyle::Small].size, 12.0);
     assert_eq!(ctx.style().text_styles[&egui::TextStyle::Body].size, 14.0);
     let analysis = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "test.elf",
         &Default::default(),
     )
@@ -93,14 +93,18 @@ fn changing_layout_reloads_stack_reports_against_the_current_elf() {
         let elf = root.join("app.elf");
         let report = root.join("app.su");
         let layout = root.join(if use_map { "app.map" } else { "layout.map" });
-        std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+        std::fs::write(
+            &elf,
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
+        )
+        .unwrap();
         std::fs::write(&report, "diag.c:22:36:diagnose\t24\tstatic\n").unwrap();
         std::fs::write(
             &layout,
             if use_map {
                 "Memory Configuration\nName Origin Length Attributes\nFLASH 0x08000000 0x10000 xr\nRAM 0x20000000 0x10000 xrw\nLinker script and memory map\n"
             } else {
-                include_str!("../../../fixtures/build/cortex-m.map")
+                include_str!("../../../fixtures/build/gcc/cortex-m.map")
             },
         )
         .unwrap();
@@ -121,7 +125,7 @@ fn changing_layout_reloads_stack_reports_against_the_current_elf() {
         // A build has changed on disk before the user applies a memory layout.
         std::fs::write(
             &elf,
-            include_bytes!("../../../fixtures/build/cortex-m-stripped.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m-stripped.elf"),
         )
         .unwrap();
         std::fs::write(&report, "diag.c:22:36:diagnose\t96\tstatic\n").unwrap();
@@ -165,14 +169,18 @@ fn changing_layout_rescans_stack_reports_after_a_rebuild() {
             let old_report = reports.join("old.su");
             let new_report = reports.join("new.su");
             let layout = root.join(if use_map { "app.map" } else { "layout.map" });
-            std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+            std::fs::write(
+                &elf,
+                include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
+            )
+            .unwrap();
             std::fs::write(&old_report, "diag.c:22:36:diagnose\t24\tstatic\n").unwrap();
             std::fs::write(
                 &layout,
                 if use_map {
                     "Memory Configuration\nName Origin Length Attributes\nFLASH 0x08000000 0x10000 xr\nRAM 0x20000000 0x10000 xrw\nLinker script and memory map\n"
                 } else {
-                    include_str!("../../../fixtures/build/cortex-m.map")
+                    include_str!("../../../fixtures/build/gcc/cortex-m.map")
                 },
             )
             .unwrap();
@@ -235,7 +243,7 @@ fn symbol_navigation_clears_filters_even_when_already_in_symbols() {
 #[test]
 fn same_named_symbols_at_different_addresses_expand_independently() {
     let mut analysis = analyze_path(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/cortex-m.elf"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc/cortex-m.elf"),
         &Default::default(),
     )
     .unwrap();
@@ -299,13 +307,21 @@ fn same_named_symbols_at_different_addresses_expand_independently() {
 fn refresh_reloads_uppercase_maps_and_selected_maps_and_keeps_comparison() {
     let folder = tempfile::tempdir().unwrap();
     let elf = folder.path().join("app.elf");
-    std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+    std::fs::write(
+        &elf,
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
+    )
+    .unwrap();
     let map = folder.path().join("manual.MAP");
-    std::fs::write(&map, include_bytes!("../../../fixtures/build/cortex-m.map")).unwrap();
+    std::fs::write(
+        &map,
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.map"),
+    )
+    .unwrap();
     let layout = folder.path().join("memory.MAP");
     std::fs::write(
         &layout,
-        include_bytes!("../../../fixtures/build/cortex-m.map"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.map"),
     )
     .unwrap();
     let mut app = Explorer {
@@ -329,7 +345,7 @@ fn refresh_reloads_uppercase_maps_and_selected_maps_and_keeps_comparison() {
         if source == &map {
             std::fs::write(
                 source,
-                include_str!("../../../fixtures/build/cortex-m-grown.map").replacen(
+                include_str!("../../../fixtures/build/gcc/cortex-m-grown.map").replacen(
                     "0x00040000",
                     "0x00080000",
                     1,
@@ -339,7 +355,7 @@ fn refresh_reloads_uppercase_maps_and_selected_maps_and_keeps_comparison() {
         } else {
             std::fs::write(
                 source,
-                include_str!("../../../fixtures/build/cortex-m.map").replacen(
+                include_str!("../../../fixtures/build/gcc/cortex-m.map").replacen(
                     "0x00040000",
                     "0x00080000",
                     1,
@@ -350,7 +366,7 @@ fn refresh_reloads_uppercase_maps_and_selected_maps_and_keeps_comparison() {
         let previous = app.options.clone();
         std::fs::write(
             &elf,
-            include_bytes!("../../../fixtures/build/cortex-m-grown.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m-grown.elf"),
         )
         .unwrap();
         app.refresh();
@@ -378,12 +394,12 @@ fn stripped_firmware_shows_unresolved_uppercase_stack_reports() {
     let path = folder.path().join("report.SU");
     std::fs::write(
         &path,
-        include_bytes!("../../../fixtures/build/CMakeFiles/cortex-m-objects.dir/src/main.c.su"),
+        include_bytes!("../../../fixtures/build/gcc/CMakeFiles/cortex-m-objects.dir/src/main.c.su"),
     )
     .unwrap();
     let analysis = analyze_path(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../fixtures/build/cortex-m-stripped.elf"),
+            .join("../../fixtures/build/gcc/cortex-m-stripped.elf"),
         &Default::default(),
     )
     .unwrap();
@@ -404,7 +420,7 @@ fn stripped_firmware_shows_unresolved_uppercase_stack_reports() {
 #[test]
 fn dropping_an_elf_opens_its_folder_and_selects_it() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/build/cortex-m-grown.elf")
+        .join("../../fixtures/build/gcc/cortex-m-grown.elf")
         .canonicalize()
         .unwrap();
     let mut app = Explorer::default();
@@ -428,7 +444,7 @@ fn dropping_an_elf_opens_its_folder_and_selects_it() {
 #[test]
 fn active_map_follows_successful_map_selection() {
     let mut app = Explorer::default();
-    let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build");
+    let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc");
     app.scan_build(folder);
     finish_job(&mut app);
     let root = app.build.as_ref().unwrap().root.clone();
@@ -458,7 +474,7 @@ fn active_map_follows_successful_map_selection() {
     finish_job(&mut restored);
     assert!(restored.map_in_use(&other_map));
     app.configure(Some(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/cortex-m.map"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc/cortex-m.map"),
     ));
     finish_map_job(&mut app);
     assert!(!app.map_in_use(&map));
@@ -479,7 +495,7 @@ fn active_map_follows_successful_map_selection() {
 #[test]
 fn memory_regions_links_to_build_files_and_no_map_choice_survives_restart() {
     let mut app = Explorer::default();
-    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build"));
+    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc"));
     finish_job(&mut app);
     let root = app.build.as_ref().unwrap().root.clone();
     app.open(root.join("cortex-m.elf"));
@@ -600,7 +616,7 @@ fn unsupported_matching_map_is_not_marked_in_use() {
     let folder = tempfile::tempdir().unwrap();
     std::fs::write(
         folder.path().join("app.elf"),
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
     )
     .unwrap();
     std::fs::write(folder.path().join("app.map"), "unsupported map").unwrap();
@@ -619,7 +635,7 @@ fn map_rediscovery_commits_layout_only_after_successful_analysis() {
     let mut app = Explorer::default();
     app.scan_build(PathBuf::from(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../fixtures/build"
+        "/../../fixtures/build/gcc"
     )));
     finish_job(&mut app);
     let path = app.build.as_ref().unwrap().root.join("cortex-m.elf");
@@ -627,7 +643,7 @@ fn map_rediscovery_commits_layout_only_after_successful_analysis() {
     finish_job(&mut app);
     app.configure(Some(PathBuf::from(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../fixtures/build/cortex-m.map"
+        "/../../fixtures/build/gcc/cortex-m.map"
     ))));
     finish_job(&mut app);
     assert!(app.error.is_none());
@@ -660,18 +676,18 @@ fn folder_reset_preserves_saved_choices_and_report_when_reanalysis_fails() {
     for name in ["app.elf", "other.elf"] {
         std::fs::write(
             folder.path().join(name),
-            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         )
         .unwrap();
     }
     std::fs::write(
         folder.path().join("app.map"),
-        include_bytes!("../../../fixtures/build/cortex-m.map"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.map"),
     )
     .unwrap();
     std::fs::write(
         folder.path().join("manual.map"),
-        include_bytes!("../../../fixtures/build/cortex-m-grown.map"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m-grown.map"),
     )
     .unwrap();
     let mut app = Explorer::default();
@@ -696,7 +712,7 @@ fn folder_reset_preserves_saved_choices_and_report_when_reanalysis_fails() {
 
     std::fs::write(
         root.join("app.elf"),
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
     )
     .unwrap();
     app.reset_build_settings();
@@ -711,7 +727,7 @@ fn folder_workflow_selects_firmware_and_loads_stack_automatically() {
     let mut app = Explorer::default();
     app.scan_build(PathBuf::from(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../fixtures/build"
+        "/../../fixtures/build/gcc"
     )));
     finish_job(&mut app);
     assert!(app.error.is_none());
@@ -774,7 +790,7 @@ fn folder_workflow_selects_firmware_and_loads_stack_automatically() {
     assert!(output.viewport_output[&egui::ViewportId::ROOT]
         .commands
         .iter()
-        .any(|command| matches!(command, egui::ViewportCommand::Title(title) if title.ends_with("build - Rusty's Snout - Firmware Explorer"))));
+        .any(|command| matches!(command, egui::ViewportCommand::Title(title) if title.ends_with("gcc - Rusty's Snout - Firmware Explorer"))));
     assert!(output
         .shapes
         .iter()
@@ -791,7 +807,7 @@ fn folder_workflow_selects_firmware_and_loads_stack_automatically() {
 #[test]
 fn arrow_keys_navigate_visible_rows_and_respect_text_focus() {
     let analysis = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture.elf",
         &Default::default(),
     )
@@ -894,7 +910,7 @@ fn arrow_keys_navigate_visible_rows_and_respect_text_focus() {
 #[test]
 fn all_data_views_render_headlessly() {
     let analysis = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture.elf",
         &Default::default(),
     )
@@ -910,7 +926,7 @@ fn all_data_views_render_headlessly() {
             &analysis,
             concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../fixtures/build/CMakeFiles/cortex-m-objects.dir/src/main.c.su"
+                "/../../fixtures/build/gcc/CMakeFiles/cortex-m-objects.dir/src/main.c.su"
             ),
         )
         .unwrap(),
@@ -950,7 +966,7 @@ fn all_data_views_render_headlessly() {
 #[test]
 fn compact_shell_renders_all_views_with_optional_panes() {
     let analysis = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture.elf",
         &Default::default(),
     )
@@ -989,7 +1005,7 @@ fn tabs_row_selection_and_escape_work_in_the_shell() {
     let ctx = egui::Context::default();
     shell::configure_style(&ctx);
     let analysis = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture.elf",
         &Default::default(),
     )
@@ -1223,7 +1239,7 @@ fn build_folder_scan_finds_adjacent_and_nested_reports() {
     )
     .unwrap();
     let mut analysis = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture.elf",
         &Default::default(),
     )
@@ -1259,11 +1275,12 @@ fn build_folder_scan_finds_adjacent_and_nested_reports() {
 }
 #[test]
 fn configured_regions_render_bars_and_search_without_symbols() {
-    let options =
-        snout_core::map::parse_map_regions(include_str!("../../../fixtures/build/cortex-m.map"))
-            .unwrap();
+    let options = snout_core::map::parse_map_regions(include_str!(
+        "../../../fixtures/build/gcc/cortex-m.map"
+    ))
+    .unwrap();
     let analysis = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture",
         &options,
     )
@@ -1376,7 +1393,7 @@ fn header_reload_is_right_aligned_clickable_and_replaced_while_loading() {
         "Refresh is disabled without a build folder"
     );
 
-    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build"));
+    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc"));
     finish_job(&mut app);
     app.open(app.build.as_ref().unwrap().root.join("cortex-m.elf"));
     finish_job(&mut app);
@@ -1414,7 +1431,7 @@ fn changed_firmware_indicator_survives_failed_reload_and_clears_on_success() {
     let directory = tempfile::tempdir().unwrap();
     let elf = directory.path().join("zephyr.elf");
     let fixture =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/cortex-m.elf");
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc/cortex-m.elf");
     std::fs::copy(&fixture, &elf).unwrap();
     let mut app = Explorer::default();
     app.scan_build(directory.path().to_owned());
@@ -1465,13 +1482,13 @@ fn changed_firmware_indicator_survives_failed_reload_and_clears_on_success() {
 #[test]
 fn refresh_restores_selection_and_layout_and_preserves_report_on_failure() {
     let mut app = Explorer::default();
-    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build"));
+    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc"));
     finish_job(&mut app);
     let path = app.build.as_ref().unwrap().root.join("cortex-m.elf");
     app.open(path.clone());
     finish_job(&mut app);
     app.configure(Some(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/cortex-m.map"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc/cortex-m.map"),
     ));
     finish_job(&mut app);
     app.view = View::MemoryMap;
@@ -1505,7 +1522,11 @@ fn startup_folder_restores_saved_elf_unless_another_is_explicitly_selected() {
     let first = root.join("first.elf");
     let second = root.join("second.elf");
     for path in [&first, &second] {
-        std::fs::write(path, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+        std::fs::write(
+            path,
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
+        )
+        .unwrap();
     }
     let value = serde_json::json!({
         "version": 1, "folder": root,
@@ -1539,9 +1560,17 @@ fn explicit_startup_selection_restores_its_saved_layout_and_reloads_the_source()
     let second = root.join("second.elf");
     let map = root.join("manual.map");
     for path in [&first, &second] {
-        std::fs::write(path, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+        std::fs::write(
+            path,
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
+        )
+        .unwrap();
     }
-    std::fs::write(&map, include_bytes!("../../../fixtures/build/cortex-m.map")).unwrap();
+    std::fs::write(
+        &map,
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.map"),
+    )
+    .unwrap();
     let mut original = Explorer::default();
     original.scan_build(root.clone());
     finish_job(&mut original);
@@ -1552,7 +1581,7 @@ fn explicit_startup_selection_restores_its_saved_layout_and_reloads_the_source()
     original.open(first);
     finish_job(&mut original);
 
-    let updated_map = include_str!("../../../fixtures/build/cortex-m.map").replacen(
+    let updated_map = include_str!("../../../fixtures/build/gcc/cortex-m.map").replacen(
         "0x00040000",
         "0x00080000",
         1,
@@ -1596,14 +1625,14 @@ fn startup_without_a_path_restores_last_folder_even_without_saved_firmware() {
 #[test]
 fn reopening_same_folder_restores_firmware_and_layout() {
     let mut app = Explorer::default();
-    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build"));
+    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc"));
     finish_job(&mut app);
     let folder = app.build.as_ref().unwrap().root.clone();
     let elf = folder.join("cortex-m.elf");
     app.open(elf.clone());
     finish_job(&mut app);
     app.configure(Some(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/cortex-m.map"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc/cortex-m.map"),
     ));
     finish_job(&mut app);
     let layout = app.options.clone();
@@ -1632,7 +1661,11 @@ fn reopening_folder_with_missing_saved_elf_leaves_firmware_unselected() {
     // Match the canonical paths produced by startup parsing and build discovery.
     let root = folder.path().canonicalize().unwrap();
     let elf = root.join("firmware.elf");
-    std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+    std::fs::write(
+        &elf,
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
+    )
+    .unwrap();
     let value = serde_json::json!({"version": 1, "folder": root,
         "build_settings": {root.to_string_lossy(): {"firmware": elf, "layouts": {}}},
     });
@@ -1653,12 +1686,12 @@ fn reopening_folder_with_missing_saved_elf_leaves_firmware_unselected() {
 #[test]
 fn preferences_restore_selected_firmware_layout_and_view() {
     let mut original = Explorer::default();
-    original.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build"));
+    original.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc"));
     finish_job(&mut original);
     original.open(original.build.as_ref().unwrap().root.join("cortex-m.elf"));
     finish_job(&mut original);
     original.configure(Some(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/cortex-m.map"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc/cortex-m.map"),
     ));
     finish_job(&mut original);
     original.view = View::Symbols;
@@ -1684,7 +1717,7 @@ fn preferences_restore_selected_firmware_layout_and_view() {
 #[test]
 fn notes_and_cached_rankings_follow_the_report_and_view() {
     let mut app = Explorer::default();
-    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build"));
+    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc"));
     finish_job(&mut app);
     app.open(app.build.as_ref().unwrap().root.join("cortex-m.elf"));
     finish_job(&mut app);
@@ -1706,7 +1739,7 @@ fn notes_and_cached_rankings_follow_the_report_and_view() {
             .all(|w| metric.value(a.symbols[w[0]].usage) >= metric.value(a.symbols[w[1]].usage)));
     }
     app.configure(Some(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/cortex-m.map"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc/cortex-m.map"),
     ));
     finish_job(&mut app);
     let a = app.analysis.clone().unwrap();
@@ -1723,7 +1756,7 @@ fn notes_and_cached_rankings_follow_the_report_and_view() {
 
 #[test]
 fn startup_elf_is_selected_after_scan_with_map_and_stack_reports() {
-    let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build");
+    let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc");
     let startup = startup::parse([
         folder.into_os_string(),
         "--elf".into(),
@@ -1763,7 +1796,7 @@ fn update_preferences_round_trip_without_an_open_workspace() {
 #[test]
 fn local_frame_bars_compare_visible_memory_without_covering_the_numbers() {
     let analysis = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture.elf",
         &Default::default(),
     )
@@ -1772,7 +1805,7 @@ fn local_frame_bars_compare_visible_memory_without_covering_the_numbers() {
         &analysis,
         concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/build/CMakeFiles/cortex-m-objects.dir/src/main.c.su"
+            "/../../fixtures/build/gcc/CMakeFiles/cortex-m-objects.dir/src/main.c.su"
         ),
     )
     .unwrap();
@@ -1855,7 +1888,7 @@ fn local_frame_bars_compare_visible_memory_without_covering_the_numbers() {
 #[test]
 fn memory_bars_scale_size_flash_and_ram_independently_in_each_table() {
     let mut analysis = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture.elf",
         &Default::default(),
     )
@@ -1952,7 +1985,7 @@ fn memory_bars_scale_size_flash_and_ram_independently_in_each_table() {
 #[test]
 fn stack_view_scopes_rows_to_selected_elf_and_keeps_unresolved_available() {
     let analysis = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture.elf",
         &Default::default(),
     )
@@ -1961,7 +1994,7 @@ fn stack_view_scopes_rows_to_selected_elf_and_keeps_unresolved_available() {
         &analysis,
         concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/build/CMakeFiles/cortex-m-objects.dir/src/main.c.su"
+            "/../../fixtures/build/gcc/CMakeFiles/cortex-m-objects.dir/src/main.c.su"
         ),
     )
     .unwrap();
@@ -1992,7 +2025,7 @@ fn stack_view_scopes_rows_to_selected_elf_and_keeps_unresolved_available() {
 #[test]
 fn map_choices_survive_elf_folder_switching_restart_and_folder_reset() {
     let mut app = Explorer::default();
-    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build"));
+    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc"));
     finish_job(&mut app);
     let root = app.build.as_ref().unwrap().root.clone();
     let elf = root.join("cortex-m.elf");
@@ -2014,12 +2047,12 @@ fn map_choices_survive_elf_folder_switching_restart_and_folder_reset() {
     let folder = tempfile::tempdir().unwrap();
     std::fs::write(
         folder.path().join("app.elf"),
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
     )
     .unwrap();
     std::fs::write(
         folder.path().join("manual.map"),
-        include_bytes!("../../../fixtures/build/cortex-m.map"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.map"),
     )
     .unwrap();
     app.scan_build(folder.path().to_owned());
@@ -2042,13 +2075,13 @@ fn map_choices_survive_elf_folder_switching_restart_and_folder_reset() {
     // Refresh reads the chosen map again after a rebuild, rather than using stale capacities.
     std::fs::write(
         &second_map,
-        include_bytes!("../../../fixtures/build/cortex-m-grown.map"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m-grown.map"),
     )
     .unwrap();
     restored.refresh();
     finish_job(&mut restored);
     let expected = snout_core::build::parse_map_regions(include_str!(
-        "../../../fixtures/build/cortex-m-grown.map"
+        "../../../fixtures/build/gcc/cortex-m-grown.map"
     ))
     .unwrap();
     assert_eq!(
@@ -2083,7 +2116,7 @@ fn selected_map_supplies_dependencies_across_refresh_restart_and_failure() {
     let firmware = root.join("app.elf");
     std::fs::write(
         &firmware,
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
     )
     .unwrap();
     let map = root.join("manual.map");
@@ -2187,7 +2220,7 @@ fn selected_map_supplies_dependencies_across_refresh_restart_and_failure() {
 #[test]
 fn committed_fixture_renders_six_boxes_and_sixteen_dependency_arrowheads() {
     let mut app = Explorer::default();
-    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build"));
+    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc"));
     finish_job(&mut app);
     app.open(app.build.as_ref().unwrap().root.join("cortex-m.elf"));
     finish_job(&mut app);
@@ -2268,7 +2301,7 @@ fn stack_selection_is_build_independent_persisted_per_elf_and_refreshed() {
     let root = dir.path().canonicalize().unwrap();
     let elf = root.join("app.elf");
     let other = root.join("other.elf");
-    let bytes = include_bytes!("../../../fixtures/build/cortex-m.elf");
+    let bytes = include_bytes!("../../../fixtures/build/gcc/cortex-m.elf");
     std::fs::write(&elf, bytes).unwrap();
     std::fs::write(&other, bytes).unwrap();
     let first = root.join("arbitrary-one.su");
@@ -2311,7 +2344,11 @@ fn selected_report_folder_remains_recursive_and_discovers_new_reports_on_refresh
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     let elf = root.join("app.elf");
-    std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+    std::fs::write(
+        &elf,
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
+    )
+    .unwrap();
     let reports = root.join("reports");
     std::fs::create_dir_all(reports.join("nested")).unwrap();
     std::fs::write(
@@ -2361,7 +2398,7 @@ fn sidebar_scrolls_past_long_supporting_lists_to_the_next_firmware() {
     let root = std::env::temp_dir().join("snout-continuous-sidebar/build");
     let elf = root.join("app.elf");
     let analysis = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         &elf.to_string_lossy(),
         &Default::default(),
     )
@@ -2557,7 +2594,11 @@ fn sidebar_expands_firmware_loaded_outside_the_sidebar() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     let elf = root.join("app.elf");
-    std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+    std::fs::write(
+        &elf,
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
+    )
+    .unwrap();
     let other_elf = root.join("second.elf");
     std::fs::copy(&elf, &other_elf).unwrap();
     let mut app = Explorer::default();
@@ -2747,13 +2788,17 @@ fn sidebar_checkboxes_and_map_radios_apply_choices_to_current_elf() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     let elf = root.join("app.elf");
-    std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+    std::fs::write(
+        &elf,
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
+    )
+    .unwrap();
     let other_elf = root.join("second.elf");
     std::fs::copy(&elf, &other_elf).unwrap();
     for name in ["app.map", "other.map"] {
         std::fs::write(
             root.join(name),
-            include_bytes!("../../../fixtures/build/cortex-m.map"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.map"),
         )
         .unwrap();
     }
@@ -2929,7 +2974,11 @@ fn stack_folder_rules_save_immediately_and_survive_disk_restart_and_file_changes
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         let elf = root.join("app.elf");
-        std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+        std::fs::write(
+            &elf,
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
+        )
+        .unwrap();
         let reports = root.join("reports");
         std::fs::create_dir(&reports).unwrap();
         let first = reports.join("a.su");
@@ -3022,7 +3071,11 @@ fn automatic_stack_choices_are_saved_per_elf_and_manual_choices_take_precedence(
     let first_elf = root.join("app.elf");
     let second_elf = root.join("other.elf");
     for elf in [&first_elf, &second_elf] {
-        std::fs::write(elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+        std::fs::write(
+            elf,
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
+        )
+        .unwrap();
     }
     let first_dir = root.join("CMakeFiles/app.dir/src");
     let second_dir = root.join("CMakeFiles/other.dir/src");
@@ -3097,7 +3150,11 @@ fn failed_stack_selection_does_not_display_the_previous_selection_report() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     let elf = root.join("app.elf");
-    std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+    std::fs::write(
+        &elf,
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
+    )
+    .unwrap();
     let valid = root.join("diag.su");
     std::fs::write(&valid, "diag.c:22:36:diagnose\t56\tstatic\n").unwrap();
     let mut app = Explorer::default();
@@ -3116,16 +3173,16 @@ fn failed_stack_selection_does_not_display_the_previous_selection_report() {
 
 #[test]
 fn llvm_map_selection_imports_dependencies_and_keeps_capacity_unknown() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/maps");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/llvm");
     let mut app = Explorer::default();
     app.scan_build(root.clone());
     finish_job(&mut app);
     let root = app.build.as_ref().unwrap().root.clone();
-    let map = root.join("llvm-lld.map");
-    app.open(root.join("llvm-lld.elf"));
+    let map = root.join("cortex-m.map");
+    app.open(root.join("cortex-m.elf"));
     finish_job(&mut app);
     app.configure(Some(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/cortex-m.map"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc/cortex-m.map"),
     ));
     finish_map_job(&mut app);
     let analysis = app.analysis.clone().unwrap();
@@ -3227,7 +3284,7 @@ fn tab_controls_are_independent_and_remembered_for_the_session() {
 fn replacing_data_invalidates_filters_in_inactive_tabs() {
     for replacement in ["build", "firmware", "refresh", "layout", "failure"] {
         let mut app = Explorer::default();
-        let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build");
+        let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc");
         app.scan_build(folder.clone());
         finish_job(&mut app);
         let elf = app.build.as_ref().unwrap().root.join("cortex-m.elf");
@@ -3331,7 +3388,11 @@ fn preferences_do_not_convert_obsolete_workspace_fields() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let elf = root.join("firmware.elf");
-    std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+    std::fs::write(
+        &elf,
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
+    )
+    .unwrap();
     let mut app = Explorer::default();
     app.apply_preferences_with_workspace(
         &serde_json::json!({
@@ -3618,7 +3679,7 @@ fn check_recent_folder_submenu(width: f32, folder_name: &str) {
 #[test]
 fn dashboard_cards_fit_and_navigation_remains_visible_at_both_widths() {
     let analysis = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture.elf",
         &Default::default(),
     )
@@ -3758,7 +3819,7 @@ fn dashboard_cards_fit_and_navigation_remains_visible_at_both_widths() {
 #[test]
 fn distribution_legend_opens_sections_without_resetting_overview_filters() {
     let analysis = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture.elf",
         &Default::default(),
     )
@@ -3827,7 +3888,7 @@ fn distribution_legend_opens_sections_without_resetting_overview_filters() {
 #[test]
 fn build_files_scan_notes_remain_accessible_after_loading_firmware() {
     let analysis = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture.elf",
         &Default::default(),
     )
@@ -3898,14 +3959,14 @@ fn header_switches_elf_and_build_files_selects_support_without_leaving_the_tab()
     for name in ["app.elf", "second.elf"] {
         std::fs::write(
             root.join(name),
-            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         )
         .unwrap();
     }
     for name in ["app.map", "other.map"] {
         std::fs::write(
             root.join(name),
-            include_bytes!("../../../fixtures/build/cortex-m.map"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.map"),
         )
         .unwrap();
     }
@@ -4034,7 +4095,7 @@ fn header_switches_elf_and_build_files_selects_support_without_leaving_the_tab()
 
 #[test]
 fn overview_matches_reference_column_and_memory_bar_alignment() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc");
     let options = snout_core::map::parse_map_regions(
         &std::fs::read_to_string(root.join("cortex-m.map")).unwrap(),
     )
@@ -4154,7 +4215,7 @@ fn overview_matches_reference_column_and_memory_bar_alignment() {
 fn overview_region_defaults_use_percentage_and_validate_saved_names() {
     use snout_core::{MemoryKind, MemoryRegion};
     let mut a = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture",
         &Default::default(),
     )
@@ -4210,11 +4271,12 @@ fn overview_region_defaults_use_percentage_and_validate_saved_names() {
 
 #[test]
 fn overview_memory_keeps_totals_and_bars_visible_with_many_regions() {
-    let options =
-        snout_core::map::parse_map_regions(include_str!("../../../fixtures/build/cortex-m.map"))
-            .unwrap();
+    let options = snout_core::map::parse_map_regions(include_str!(
+        "../../../fixtures/build/gcc/cortex-m.map"
+    ))
+    .unwrap();
     let mut analysis = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture",
         &options,
     )
@@ -4268,11 +4330,12 @@ fn overview_memory_keeps_totals_and_bars_visible_with_many_regions() {
 #[test]
 fn overview_memory_dropdown_and_regions_link_work_and_unknown_capacity_has_no_bar() {
     use snout_core::{MemoryKind, MemoryRegion};
-    let options =
-        snout_core::map::parse_map_regions(include_str!("../../../fixtures/build/cortex-m.map"))
-            .unwrap();
+    let options = snout_core::map::parse_map_regions(include_str!(
+        "../../../fixtures/build/gcc/cortex-m.map"
+    ))
+    .unwrap();
     let mut a = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture",
         &options,
     )
@@ -4395,12 +4458,12 @@ fn overview_region_choices_survive_disk_restart_and_are_scoped_to_elf_and_build(
     for name in ["first", "second"] {
         std::fs::write(
             folder.join(format!("{name}.elf")),
-            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         )
         .unwrap();
         std::fs::write(
             folder.join(format!("{name}.map")),
-            include_str!("../../../fixtures/build/cortex-m.map"),
+            include_str!("../../../fixtures/build/gcc/cortex-m.map"),
         )
         .unwrap();
     }
@@ -4484,7 +4547,11 @@ fn preferences_without_overview_regions_load_without_migration() {
     let directory = tempfile::tempdir().unwrap();
     let folder = directory.path().canonicalize().unwrap();
     let elf = folder.join("firmware.elf");
-    std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+    std::fs::write(
+        &elf,
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
+    )
+    .unwrap();
     let value = serde_json::json!({"version": 1, "folder": folder,
         "build_settings": {folder.to_string_lossy(): {"firmware": elf, "layouts": {}}}
     });
@@ -4501,7 +4568,7 @@ fn preferences_without_overview_regions_load_without_migration() {
 #[test]
 fn distribution_colors_are_distinct_match_legend_and_ignore_section_names() {
     let mut a = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture",
         &Default::default(),
     )
@@ -4582,7 +4649,7 @@ fn distribution_colors_are_distinct_match_legend_and_ignore_section_names() {
 #[test]
 fn section_distributions_use_separate_flash_and_static_ram_sizes() {
     let mut analysis = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture",
         &Default::default(),
     )
@@ -4679,7 +4746,7 @@ fn section_distributions_use_separate_flash_and_static_ram_sizes() {
 #[test]
 fn dashboard_distribution_legends_remain_readable_at_minimum_window_size() {
     let mut analysis = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture.elf",
         &Default::default(),
     )
@@ -4748,11 +4815,12 @@ fn dashboard_distribution_legends_remain_readable_at_minimum_window_size() {
 
 #[test]
 fn dashboard_memory_controls_fit_at_minimum_window_size() {
-    let options =
-        snout_core::map::parse_map_regions(include_str!("../../../fixtures/build/cortex-m.map"))
-            .unwrap();
+    let options = snout_core::map::parse_map_regions(include_str!(
+        "../../../fixtures/build/gcc/cortex-m.map"
+    ))
+    .unwrap();
     let analysis = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture.elf",
         &options,
     )
@@ -4928,7 +4996,7 @@ fn firmware_dropdown_scrolling_keeps_the_last_row_at_the_bottom() {
 #[test]
 fn dashboard_rankings_show_ten_functions_and_refresh_after_report_replacement() {
     let mut analysis = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture.elf",
         &Default::default(),
     )
@@ -5010,7 +5078,7 @@ fn dashboard_rankings_show_ten_functions_and_refresh_after_report_replacement() 
 #[test]
 fn dashboard_file_labels_match_baseline_tables_and_reuse_path_cache() {
     let mut current = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture.elf",
         &Default::default(),
     )
@@ -5062,7 +5130,7 @@ fn dashboard_file_labels_match_baseline_tables_and_reuse_path_cache() {
 #[test]
 fn sections_expose_tls_template_and_variable_details_without_inventing_total_ram() {
     let mut analysis = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture.elf",
         &Default::default(),
     )
@@ -5198,7 +5266,7 @@ fn sections_expose_tls_template_and_variable_details_without_inventing_total_ram
 fn build_files_selection_panels_fit_small_and_large_windows() {
     for size in [egui::vec2(900.0, 600.0), egui::vec2(1280.0, 820.0)] {
         let mut app = Explorer::default();
-        app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build"));
+        app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc"));
         finish_job(&mut app);
         app.open(app.build.as_ref().unwrap().root.join("cortex-m.elf"));
         finish_job(&mut app);
@@ -5252,7 +5320,7 @@ fn build_files_selection_panels_fit_small_and_large_windows() {
 #[test]
 fn overview_no_map_warning_and_build_files_link_fit_and_navigate() {
     let analysis = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture.elf",
         &Default::default(),
     )
@@ -5340,7 +5408,7 @@ fn finish_map_job(app: &mut Explorer) {
 #[test]
 fn map_warning_blocks_background_and_reverts_or_ignores_without_losing_report() {
     let mut app = Explorer::default();
-    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build"));
+    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc"));
     finish_job(&mut app);
     let root = app.build.as_ref().unwrap().root.clone();
     let elf = root.join("cortex-m.elf");

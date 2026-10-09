@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn dynamic_tls_symbols_use_the_dynamic_string_table() {
-        let bytes = include_bytes!("../../../fixtures/build/cortex-m.elf");
+        let bytes = include_bytes!("../../../fixtures/build/gcc/cortex-m.elf");
         let mut elf = Elf::parse(bytes).unwrap();
         let raw = elf
             .syms

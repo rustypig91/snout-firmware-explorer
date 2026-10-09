@@ -236,7 +236,7 @@ jobs:
           set -euo pipefail
           SCREENSHOT="snout-screenshot.png"
           bash scripts/capture-screenshot.sh \
-            "target/${{ matrix.target }}/release/snout" "$SCREENSHOT" fixtures/build/cortex-m.elf
+            "target/${{ matrix.target }}/release/snout" "$SCREENSHOT" fixtures/build/gcc/cortex-m.elf
           echo "SCREENSHOT_ASSET=$SCREENSHOT" >> "$GITHUB_ENV"
 
       - name: Upload build artifacts

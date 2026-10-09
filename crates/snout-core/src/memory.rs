@@ -106,7 +106,7 @@ mod tests {
     #[test]
     fn startup_contents_keep_copied_code_data_bss_and_reservations_distinct() {
         let report = crate::analyze_bytes(
-            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
             "fixture",
             &Default::default(),
         )

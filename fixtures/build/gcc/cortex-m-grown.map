@@ -1,0 +1,256 @@
+
+Discarded input sections
+
+ .comment       0x00000000       0x46 CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+ .comment       0x00000000       0x46 CMakeFiles/cortex-m-grown-objects.dir/src/config.c.obj
+ .comment       0x00000000       0x46 CMakeFiles/cortex-m-grown-objects.dir/src/sensor.c.obj
+ .comment       0x00000000       0x46 CMakeFiles/cortex-m-grown-objects.dir/src/diag.c.obj
+ .comment       0x00000000       0x46 CMakeFiles/cortex-m-grown-objects.dir/src/telemetry.c.obj
+ .comment       0x00000000       0x46 CMakeFiles/cortex-m-grown-objects.dir/src/transport.c.obj
+
+Memory Configuration
+
+Name             Origin             Length             Attributes
+FLASH            0x08000000         0x00040000         xr
+RAM              0x20000000         0x00010000         xrw
+*default*        0x00000000         0xffffffff
+
+Linker script and memory map
+
+
+.text           0x08000000      0x540
+ *(.text*)
+ .text          0x08000000      0x13c CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+                0x08000000                weak_callback
+                0x08000000                callback_alias
+                0x0800001c                _Z12cpp_functionj
+                0x08000120                main
+                0x0800012e                Reset_Handler
+ .text          0x0800013c       0x60 CMakeFiles/cortex-m-grown-objects.dir/src/config.c.obj
+                0x0800013c                config_get
+                0x08000150                config_baudrate
+                0x08000160                config_alarm_threshold
+                0x08000188                config_checksum_seed
+ .text          0x0800019c       0xfc CMakeFiles/cortex-m-grown-objects.dir/src/sensor.c.obj
+                0x0800019c                sensor_init
+                0x08000238                sensor_sample
+ .text          0x08000298       0xb8 CMakeFiles/cortex-m-grown-objects.dir/src/diag.c.obj
+                0x08000298                diagnostics_record_fault
+                0x080002c8                diagnostics_status
+                0x080002dc                diagnose
+ .text          0x08000350       0xd8 CMakeFiles/cortex-m-grown-objects.dir/src/telemetry.c.obj
+                0x08000350                telemetry_scale
+                0x0800037c                telemetry_checksum
+                0x080003be                telemetry_collect
+ .text          0x08000428      0x110 CMakeFiles/cortex-m-grown-objects.dir/src/transport.c.obj
+                0x08000428                transport_init
+                0x0800045c                transport_pending
+                0x08000470                transport_enqueue
+                0x080004c8                transport_flush
+ .text.__stub   0x08000538        0x8 linker stubs
+
+.glue_7         0x08000540        0x0
+ .glue_7        0x08000540        0x0 linker stubs
+
+.glue_7t        0x08000540        0x0
+ .glue_7t       0x08000540        0x0 linker stubs
+
+.vfp11_veneer   0x08000540        0x0
+ .vfp11_veneer  0x08000540        0x0 linker stubs
+
+.v4_bx          0x08000540        0x0
+ .v4_bx         0x08000540        0x0 linker stubs
+
+.iplt           0x08000540        0x0
+ .iplt          0x08000540        0x0 CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+
+.rodata         0x08000540       0x50
+ *(.rodata*)
+ .rodata        0x08000540       0x30 CMakeFiles/cortex-m-grown-objects.dir/src/config.c.obj
+                0x08000550                baudrate_table
+ .rodata        0x08000570       0x10 CMakeFiles/cortex-m-grown-objects.dir/src/diag.c.obj
+ .rodata        0x08000580       0x10 CMakeFiles/cortex-m-grown-objects.dir/src/telemetry.c.obj
+
+.unusual_constants
+                0x08000590        0x8
+ *(.unusual_constants*)
+ .unusual_constants
+                0x08000590        0x8 CMakeFiles/cortex-m-grown-objects.dir/src/diag.c.obj
+                0x08000590                signature
+
+.ARM.exidx
+ *(.ARM.exidx*)
+
+.sensor_calibration_code
+ *(.sensor_calibration_code*)
+
+.ram_code       0x20000000       0x1c load address 0x08000598
+ *(.ram_code*)
+ .ram_code      0x20000000       0x1c CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+                0x20000000                ram_function
+
+.rel.dyn        0x2000001c        0x0 load address 0x080005b4
+ .rel.iplt      0x2000001c        0x0 CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+
+.data           0x2000001c       0x18 load address 0x080005b4
+ *(.data*)
+ .data          0x2000001c        0x4 CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+                0x2000001c                initialized
+ .data          0x20000020        0x0 CMakeFiles/cortex-m-grown-objects.dir/src/config.c.obj
+ .data          0x20000020       0x10 CMakeFiles/cortex-m-grown-objects.dir/src/sensor.c.obj
+ .data          0x20000030        0x4 CMakeFiles/cortex-m-grown-objects.dir/src/diag.c.obj
+ .data          0x20000034        0x0 CMakeFiles/cortex-m-grown-objects.dir/src/telemetry.c.obj
+ .data          0x20000034        0x0 CMakeFiles/cortex-m-grown-objects.dir/src/transport.c.obj
+
+.igot.plt       0x20000034        0x0 load address 0x080005cc
+ .igot.plt      0x20000034        0x0 CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+
+.bss            0x20000034       0xd0 load address 0x080005cc
+ *(.bss*)
+ .bss           0x20000034       0x6c CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+                0x20000034                samples
+ .bss           0x200000a0        0x0 CMakeFiles/cortex-m-grown-objects.dir/src/config.c.obj
+ .bss           0x200000a0        0xc CMakeFiles/cortex-m-grown-objects.dir/src/sensor.c.obj
+ .bss           0x200000ac        0x4 CMakeFiles/cortex-m-grown-objects.dir/src/diag.c.obj
+ .bss           0x200000b0        0x4 CMakeFiles/cortex-m-grown-objects.dir/src/telemetry.c.obj
+ .bss           0x200000b4       0x50 CMakeFiles/cortex-m-grown-objects.dir/src/transport.c.obj
+ *(COMMON)
+
+.reserved       0x20000108       0x80
+                0x20000188                        . = (. + 0x80)
+ *fill*         0x20000108       0x80
+
+/DISCARD/
+ *(.comment)
+ *(.note*)
+LOAD CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+LOAD CMakeFiles/cortex-m-grown-objects.dir/src/config.c.obj
+LOAD CMakeFiles/cortex-m-grown-objects.dir/src/sensor.c.obj
+LOAD CMakeFiles/cortex-m-grown-objects.dir/src/diag.c.obj
+LOAD CMakeFiles/cortex-m-grown-objects.dir/src/telemetry.c.obj
+LOAD CMakeFiles/cortex-m-grown-objects.dir/src/transport.c.obj
+OUTPUT(cortex-m-grown.elf elf32-littlearm)
+LOAD linker stubs
+
+.ARM.attributes
+                0x00000000       0x2d
+ .ARM.attributes
+                0x00000000       0x2d CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+ .ARM.attributes
+                0x0000002d       0x2d CMakeFiles/cortex-m-grown-objects.dir/src/config.c.obj
+ .ARM.attributes
+                0x0000005a       0x2d CMakeFiles/cortex-m-grown-objects.dir/src/sensor.c.obj
+ .ARM.attributes
+                0x00000087       0x2d CMakeFiles/cortex-m-grown-objects.dir/src/diag.c.obj
+ .ARM.attributes
+                0x000000b4       0x2d CMakeFiles/cortex-m-grown-objects.dir/src/telemetry.c.obj
+ .ARM.attributes
+                0x000000e1       0x2d CMakeFiles/cortex-m-grown-objects.dir/src/transport.c.obj
+
+.debug_info     0x00000000      0xb3f
+ .debug_info    0x00000000      0x2a4 CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+ .debug_info    0x000002a4      0x145 CMakeFiles/cortex-m-grown-objects.dir/src/config.c.obj
+ .debug_info    0x000003e9      0x1b8 CMakeFiles/cortex-m-grown-objects.dir/src/sensor.c.obj
+ .debug_info    0x000005a1      0x1bf CMakeFiles/cortex-m-grown-objects.dir/src/diag.c.obj
+ .debug_info    0x00000760      0x1fe CMakeFiles/cortex-m-grown-objects.dir/src/telemetry.c.obj
+ .debug_info    0x0000095e      0x1e1 CMakeFiles/cortex-m-grown-objects.dir/src/transport.c.obj
+
+.debug_abbrev   0x00000000      0x784
+ .debug_abbrev  0x00000000      0x1dd CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+ .debug_abbrev  0x000001dd       0xdf CMakeFiles/cortex-m-grown-objects.dir/src/config.c.obj
+ .debug_abbrev  0x000002bc      0x10b CMakeFiles/cortex-m-grown-objects.dir/src/sensor.c.obj
+ .debug_abbrev  0x000003c7      0x117 CMakeFiles/cortex-m-grown-objects.dir/src/diag.c.obj
+ .debug_abbrev  0x000004de      0x130 CMakeFiles/cortex-m-grown-objects.dir/src/telemetry.c.obj
+ .debug_abbrev  0x0000060e      0x176 CMakeFiles/cortex-m-grown-objects.dir/src/transport.c.obj
+
+.debug_aranges  0x00000000       0xc8
+ .debug_aranges
+                0x00000000       0x28 CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+ .debug_aranges
+                0x00000028       0x20 CMakeFiles/cortex-m-grown-objects.dir/src/config.c.obj
+ .debug_aranges
+                0x00000048       0x20 CMakeFiles/cortex-m-grown-objects.dir/src/sensor.c.obj
+ .debug_aranges
+                0x00000068       0x20 CMakeFiles/cortex-m-grown-objects.dir/src/diag.c.obj
+ .debug_aranges
+                0x00000088       0x20 CMakeFiles/cortex-m-grown-objects.dir/src/telemetry.c.obj
+ .debug_aranges
+                0x000000a8       0x20 CMakeFiles/cortex-m-grown-objects.dir/src/transport.c.obj
+
+.debug_ranges   0x00000000       0x18
+ .debug_ranges  0x00000000       0x18 CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+
+.debug_line     0x00000000      0x4bf
+ .debug_line    0x00000000      0x100 CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+ .debug_line    0x00000100       0x7f CMakeFiles/cortex-m-grown-objects.dir/src/config.c.obj
+ .debug_line    0x0000017f       0xd3 CMakeFiles/cortex-m-grown-objects.dir/src/sensor.c.obj
+ .debug_line    0x00000252       0xb1 CMakeFiles/cortex-m-grown-objects.dir/src/diag.c.obj
+ .debug_line    0x00000303       0xe5 CMakeFiles/cortex-m-grown-objects.dir/src/telemetry.c.obj
+ .debug_line    0x000003e8       0xd7 CMakeFiles/cortex-m-grown-objects.dir/src/transport.c.obj
+
+.debug_str      0x00000000      0x57c
+ .debug_str     0x00000000      0x57c CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+                                0x314 (size before relaxing)
+ .debug_str     0x0000057c      0x1ff CMakeFiles/cortex-m-grown-objects.dir/src/config.c.obj
+ .debug_str     0x0000057c      0x212 CMakeFiles/cortex-m-grown-objects.dir/src/sensor.c.obj
+ .debug_str     0x0000057c      0x25e CMakeFiles/cortex-m-grown-objects.dir/src/diag.c.obj
+ .debug_str     0x0000057c      0x29c CMakeFiles/cortex-m-grown-objects.dir/src/telemetry.c.obj
+ .debug_str     0x0000057c      0x2a6 CMakeFiles/cortex-m-grown-objects.dir/src/transport.c.obj
+
+.debug_frame    0x00000000      0x3b0
+ .debug_frame   0x00000000      0x100 CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+ .debug_frame   0x00000100       0x98 CMakeFiles/cortex-m-grown-objects.dir/src/config.c.obj
+ .debug_frame   0x00000198       0x84 CMakeFiles/cortex-m-grown-objects.dir/src/sensor.c.obj
+ .debug_frame   0x0000021c       0x7c CMakeFiles/cortex-m-grown-objects.dir/src/diag.c.obj
+ .debug_frame   0x00000298       0x80 CMakeFiles/cortex-m-grown-objects.dir/src/telemetry.c.obj
+ .debug_frame   0x00000318       0x98 CMakeFiles/cortex-m-grown-objects.dir/src/transport.c.obj
+
+Cross Reference Table
+
+Symbol                                            File
+Reset_Handler                                     CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+_Z12cpp_functionj                                 CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+baudrate_table                                    CMakeFiles/cortex-m-grown-objects.dir/src/config.c.obj
+callback_alias                                    CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+config_alarm_threshold                            CMakeFiles/cortex-m-grown-objects.dir/src/config.c.obj
+                                                  CMakeFiles/cortex-m-grown-objects.dir/src/diag.c.obj
+config_baudrate                                   CMakeFiles/cortex-m-grown-objects.dir/src/config.c.obj
+                                                  CMakeFiles/cortex-m-grown-objects.dir/src/transport.c.obj
+config_checksum_seed                              CMakeFiles/cortex-m-grown-objects.dir/src/config.c.obj
+                                                  CMakeFiles/cortex-m-grown-objects.dir/src/telemetry.c.obj
+config_get                                        CMakeFiles/cortex-m-grown-objects.dir/src/config.c.obj
+                                                  CMakeFiles/cortex-m-grown-objects.dir/src/sensor.c.obj
+                                                  CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+diagnose                                          CMakeFiles/cortex-m-grown-objects.dir/src/diag.c.obj
+                                                  CMakeFiles/cortex-m-grown-objects.dir/src/telemetry.c.obj
+                                                  CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+diagnostics_record_fault                          CMakeFiles/cortex-m-grown-objects.dir/src/diag.c.obj
+                                                  CMakeFiles/cortex-m-grown-objects.dir/src/transport.c.obj
+                                                  CMakeFiles/cortex-m-grown-objects.dir/src/telemetry.c.obj
+diagnostics_status                                CMakeFiles/cortex-m-grown-objects.dir/src/diag.c.obj
+                                                  CMakeFiles/cortex-m-grown-objects.dir/src/telemetry.c.obj
+initialized                                       CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+main                                              CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+ram_function                                      CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+                                                  CMakeFiles/cortex-m-grown-objects.dir/src/telemetry.c.obj
+samples                                           CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+sensor_init                                       CMakeFiles/cortex-m-grown-objects.dir/src/sensor.c.obj
+                                                  CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+sensor_sample                                     CMakeFiles/cortex-m-grown-objects.dir/src/sensor.c.obj
+                                                  CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+signature                                         CMakeFiles/cortex-m-grown-objects.dir/src/diag.c.obj
+telemetry_checksum                                CMakeFiles/cortex-m-grown-objects.dir/src/telemetry.c.obj
+                                                  CMakeFiles/cortex-m-grown-objects.dir/src/transport.c.obj
+telemetry_collect                                 CMakeFiles/cortex-m-grown-objects.dir/src/telemetry.c.obj
+                                                  CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+telemetry_scale                                   CMakeFiles/cortex-m-grown-objects.dir/src/telemetry.c.obj
+                                                  CMakeFiles/cortex-m-grown-objects.dir/src/diag.c.obj
+transport_enqueue                                 CMakeFiles/cortex-m-grown-objects.dir/src/transport.c.obj
+                                                  CMakeFiles/cortex-m-grown-objects.dir/src/telemetry.c.obj
+transport_flush                                   CMakeFiles/cortex-m-grown-objects.dir/src/transport.c.obj
+                                                  CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+transport_init                                    CMakeFiles/cortex-m-grown-objects.dir/src/transport.c.obj
+                                                  CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj
+transport_pending                                 CMakeFiles/cortex-m-grown-objects.dir/src/transport.c.obj
+                                                  CMakeFiles/cortex-m-grown-objects.dir/src/diag.c.obj
+weak_callback                                     CMakeFiles/cortex-m-grown-objects.dir/src/main.c.obj

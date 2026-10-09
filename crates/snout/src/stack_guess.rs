@@ -339,7 +339,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         let elf = root.join("app.elf");
-        std::fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+        std::fs::write(
+            &elf,
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
+        )
+        .unwrap();
         let analysis = analyze_path(elf, &Default::default()).unwrap();
         (dir, root, analysis)
     }

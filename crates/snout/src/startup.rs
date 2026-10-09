@@ -105,7 +105,7 @@ mod tests {
     use super::*;
     fn fixtures() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../fixtures/build")
+            .join("../../fixtures/build/gcc")
             .canonicalize()
             .unwrap()
     }
@@ -142,7 +142,7 @@ mod tests {
             assert!(parse(args).is_err());
         }
         assert!(parse([
-            fixtures().join("../src").into_os_string(),
+            fixtures().join("../../src").into_os_string(),
             "--elf".into(),
             fixtures().join("cortex-m.elf").into_os_string()
         ])

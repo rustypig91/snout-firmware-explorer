@@ -1,0 +1,4 @@
+/workspace/fixtures/src/config.c:14:config_get	0	static
+/workspace/fixtures/src/config.c:19:config_baudrate	0	static
+/workspace/fixtures/src/config.c:24:config_alarm_threshold	4	static
+/workspace/fixtures/src/config.c:29:config_checksum_seed	0	static

@@ -648,7 +648,7 @@ mod legacy {
         fn baseline_slices_match_symbol_and_unit_identities_instead_of_display_labels() {
             let mut analysis = snout_core::analyze_path(
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../fixtures/build/cortex-m.elf"),
+                    .join("../../fixtures/build/gcc/cortex-m.elf"),
                 &Default::default(),
             )
             .unwrap();
@@ -716,7 +716,7 @@ mod legacy {
         fn drilldown_does_not_choose_an_arbitrary_duplicate_baseline_section() {
             let current = snout_core::analyze_path(
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../fixtures/build/cortex-m.elf"),
+                    .join("../../fixtures/build/gcc/cortex-m.elf"),
                 &Default::default(),
             )
             .unwrap();
@@ -791,7 +791,7 @@ mod legacy {
             for fixture in ["cortex-m.elf", "cortex-m-stripped.elf"] {
                 let a = snout_core::analyze_path(
                     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                        .join("../../fixtures/build")
+                        .join("../../fixtures/build/gcc")
                         .join(fixture),
                     &Default::default(),
                 )
@@ -832,7 +832,7 @@ mod legacy {
             ] {
                 let a = snout_core::analyze_path(
                     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                        .join("../../fixtures/build")
+                        .join("../../fixtures/build/gcc")
                         .join(fixture),
                     &Default::default(),
                 )
@@ -870,7 +870,7 @@ mod legacy {
         fn unknown_ownership_is_not_inferred_from_source_filename() {
             let mut a = snout_core::analyze_path(
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../fixtures/build/cortex-m.elf"),
+                    .join("../../fixtures/build/gcc/cortex-m.elf"),
                 &Default::default(),
             )
             .unwrap();

@@ -1358,7 +1358,7 @@ mod cache_tests {
     #[test]
     fn growth_link_search_finds_mangled_symbols_without_formatting_details() {
         let mut analysis = snout_core::analyze_bytes(
-            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
             "fixture.elf",
             &Default::default(),
         )
@@ -1528,7 +1528,7 @@ mod cache_tests {
     #[test]
     fn file_rows_keep_absolute_hover_search_and_selection_with_short_labels() {
         let mut a = snout_core::analyze_bytes(
-            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
             "fixture.elf",
             &Default::default(),
         )
@@ -1574,7 +1574,7 @@ mod cache_tests {
     #[test]
     fn file_search_keeps_recorded_paths_after_resolution() {
         let mut a = snout_core::analyze_bytes(
-            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
             "fixture.elf",
             &Default::default(),
         )
@@ -1623,7 +1623,7 @@ mod cache_tests {
     fn symbol_details_are_formatted_only_when_opened() {
         let analysis = std::sync::Arc::new(
             snout_core::analyze_bytes(
-                include_bytes!("../../../fixtures/build/cortex-m.elf"),
+                include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
                 "fixture.elf",
                 &Default::default(),
             )

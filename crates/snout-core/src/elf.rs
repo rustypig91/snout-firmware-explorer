@@ -565,7 +565,7 @@ mod tests {
 
     #[test]
     fn ordinary_dollar_prefixed_symbols_survive_firmware_analysis() {
-        let mut data = include_bytes!("../../../fixtures/build/cortex-m.elf").to_vec();
+        let mut data = include_bytes!("../../../fixtures/build/gcc/cortex-m.elf").to_vec();
         let original = analyze_bytes(&data, "fixture", &AnalysisOptions::default()).unwrap();
         let original_name = "_Z12cpp_functionj";
         let name_offset = {

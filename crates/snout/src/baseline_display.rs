@@ -534,7 +534,7 @@ mod tests {
 
     fn fixture() -> Analysis {
         snout_core::analyze_bytes(
-            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
             "fixture.elf",
             &Default::default(),
         )

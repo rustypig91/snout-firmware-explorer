@@ -150,7 +150,7 @@ fn relocatable_objects_are_not_reported_as_final_firmware() {
 #[test]
 fn overlapping_load_payloads_are_rejected_even_in_configured_ram() {
     use snout_core::{MemoryKind, MemoryRegion};
-    let mut data = include_bytes!("../../../fixtures/build/cortex-m.elf").to_vec();
+    let mut data = include_bytes!("../../../fixtures/build/gcc/cortex-m.elf").to_vec();
     let elf = goblin::elf::Elf::parse(&data).unwrap();
     let second = elf.header.e_phoff as usize + elf.header.e_phentsize as usize;
     // Keep disjoint runtime sections, but overlap the first segment's load image.
@@ -354,7 +354,7 @@ fn pt_tls_includes_padding_and_validates_file_and_memory_ranges() {
 #[test]
 fn tls_symbol_values_are_offsets_not_runtime_addresses() {
     use goblin::elf::{section_header::SHT_SYMTAB, sym, Elf};
-    let mut data = include_bytes!("../../../fixtures/build/cortex-m.elf").to_vec();
+    let mut data = include_bytes!("../../../fixtures/build/gcc/cortex-m.elf").to_vec();
     let elf = Elf::parse(&data).unwrap();
     let (symbol_index, raw) = elf
         .syms

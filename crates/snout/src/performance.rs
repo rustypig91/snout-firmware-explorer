@@ -6,7 +6,7 @@ use super::*;
 #[ignore = "manual performance measurement"]
 fn large_report_latency() {
     let mut analysis = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "large.elf",
         &Default::default(),
     )
@@ -78,7 +78,7 @@ fn large_report_latency() {
 fn dense_graph_latency() {
     use snout_core::dependencies::{DependencyEdge, DependencyNode};
     let mut analysis = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "dense.elf",
         &Default::default(),
     )
@@ -159,7 +159,7 @@ fn large_build_scrolling_latency() {
     use snout_core::build::{Artifact, ArtifactKind, BuildFolder};
     let root = std::env::temp_dir().join("snout-large-ui/build");
     let mut analysis = snout_core::analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         &root.join("zephyr.elf").display().to_string(),
         &Default::default(),
     )
