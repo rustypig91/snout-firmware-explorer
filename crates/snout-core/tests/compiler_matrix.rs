@@ -111,16 +111,26 @@ fn real_compiler_matrix_matches_sections_and_preserves_memory_semantics() {
 fn ti_marked_wrapped_rows_keep_load_run_placements_and_stop_at_module_summary() {
     for toolchain in ["ti-cgt", "ti-clang"] {
         let text = fs::read_to_string(fixture_dir(toolchain).join("cortex-m.map")).unwrap();
-        assert!(text.contains(".sensor_calibration_code\n*"));
+        assert!(text
+            .lines()
+            .zip(text.lines().skip(1))
+            .any(|(name, placement)| {
+                name == ".sensor_calibration_code" && placement.starts_with('*')
+            }));
         assert!(text.contains("MODULE SUMMARY"));
-        let rows = parse_map_sections(&text).unwrap().unwrap();
-        let custom = rows
-            .iter()
-            .find(|row| row.name == ".sensor_calibration_code")
-            .unwrap();
-        assert_ne!(Some(custom.address), custom.load_address);
-        assert!(!rows.iter().any(|row| row.name == "MODULE"));
-        let malformed = text.replacen("*          0", "*          invalid", 1);
-        assert!(parse_map_sections(&malformed).is_err());
+        // Exercise both checkout styles, regardless of the host's line endings.
+        let lf = text.replace("\r\n", "\n");
+        let crlf = lf.replace('\n', "\r\n");
+        for text in [&lf, &crlf] {
+            let rows = parse_map_sections(text).unwrap().unwrap();
+            let custom = rows
+                .iter()
+                .find(|row| row.name == ".sensor_calibration_code")
+                .unwrap();
+            assert_ne!(Some(custom.address), custom.load_address);
+            assert!(!rows.iter().any(|row| row.name == "MODULE"));
+            let malformed = text.replacen("*          0", "*          invalid", 1);
+            assert!(parse_map_sections(&malformed).is_err());
+        }
     }
 }
