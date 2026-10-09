@@ -29,6 +29,10 @@ SECTIONS {
         *(.ARM.exidx*)
     } > FLASH :code
 
+    .sensor_calibration_code : {
+        *(.sensor_calibration_code*)
+    } > RAM AT> FLASH :copied
+
     .ram_code : {
         *(.ram_code*)
     } > RAM AT> FLASH :copied

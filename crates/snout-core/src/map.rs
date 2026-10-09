@@ -481,6 +481,9 @@ fn parse_gnu_sections(text: &str) -> Result<Option<Vec<MapOutputSection>>, Error
 }
 
 fn ti_section_row(name: &str, fields: &[&str]) -> Result<MapOutputSection, Error> {
+    // TI uses a leading '*' on continuation placement rows for wrapped output
+    // names. It is a formatting marker, not the page number.
+    let fields = fields.strip_prefix(&["*"]).unwrap_or(fields);
     if fields.len() < 3 || fields[0].parse::<u32>().is_err() {
         return Err(Error::Configuration(format!(
             "Invalid TI CGT output section: {name}"
@@ -532,6 +535,7 @@ fn parse_ti_sections(text: &str) -> Result<Option<Vec<MapOutputSection>>, Error>
         }
         if line.trim().starts_with("GLOBAL SYMBOLS")
             || line.trim().starts_with("SEGMENT ALLOCATION MAP")
+            || line.trim() == "MODULE SUMMARY"
         {
             break;
         }

@@ -1,4 +1,0 @@
-/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/config.c:14:21:config_get	4	static
-/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/config.c:19:10:config_baudrate	4	static
-/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/config.c:24:10:config_alarm_threshold	16	static
-/home/christoffer/repos/rustypig91/snout-firmware-explorer/fixtures/src/config.c:29:10:config_checksum_seed	4	static

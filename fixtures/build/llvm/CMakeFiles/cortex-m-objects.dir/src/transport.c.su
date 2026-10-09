@@ -1,0 +1,4 @@
+/workspace/fixtures/src/transport.c:9:transport_init	8	static
+/workspace/fixtures/src/transport.c:17:transport_pending	0	static
+/workspace/fixtures/src/transport.c:22:transport_enqueue	24	static
+/workspace/fixtures/src/transport.c:34:transport_flush	16	static

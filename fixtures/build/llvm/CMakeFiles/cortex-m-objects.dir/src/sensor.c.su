@@ -1,0 +1,3 @@
+/workspace/fixtures/src/sensor.c:9:sensor_init	24	static
+/workspace/fixtures/src/sensor.c:27:sensor_sample	24	static
+/workspace/fixtures/src/sensor.c:20:sensor_read_raw	4	static

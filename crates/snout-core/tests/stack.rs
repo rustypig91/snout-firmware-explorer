@@ -13,7 +13,7 @@ impl Drop for ReportFile {
 fn reusable_index_preserves_duplicates_source_fallback_and_overload_ambiguity() {
     use snout_core::stack::StackAnalyzer;
     let mut analysis = analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture",
         &Default::default(),
     )
@@ -80,7 +80,7 @@ fn reusable_index_preserves_duplicates_source_fallback_and_overload_ambiguity() 
 #[test]
 fn parent_relative_sources_keep_stack_candidates_without_matching_other_absolute_sources() {
     let analysis = analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture",
         &AnalysisOptions::default(),
     )
@@ -122,7 +122,7 @@ fn parent_relative_sources_keep_stack_candidates_without_matching_other_absolute
 #[ignore = "manual startup performance measurement"]
 fn large_stack_analysis_latency() {
     let mut analysis = analyze_bytes(
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "fixture",
         &Default::default(),
     )

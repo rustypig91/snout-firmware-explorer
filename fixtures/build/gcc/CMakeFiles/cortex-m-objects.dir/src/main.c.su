@@ -1,0 +1,7 @@
+/workspace/fixtures/src/main.c:15:58:ram_function	16	static
+/workspace/fixtures/src/main.c:20:38:weak_callback	4	static
+/workspace/fixtures/src/main.c:29:10:cpp_function	16	static
+/workspace/fixtures/src/main.c:34:13:application_init	16	static
+/workspace/fixtures/src/main.c:46:13:application_step	16	static
+/workspace/fixtures/src/main.c:69:5:main	8	static
+/workspace/fixtures/src/main.c:79:6:Reset_Handler	8	static

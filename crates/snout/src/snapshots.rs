@@ -1584,7 +1584,7 @@ mod tests {
         std::fs::create_dir_all(root).unwrap();
         std::fs::write(
             root.join("app.elf"),
-            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         )
         .unwrap();
         std::fs::write(root.join("app.su"), "diag.c:22:36:diagnose\t24\tstatic\n").unwrap();
@@ -1694,7 +1694,7 @@ mod tests {
         app.take_snapshot("second baseline").unwrap();
         std::fs::write(
             root.join("app.elf"),
-            include_bytes!("../../../fixtures/build/cortex-m-grown.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m-grown.elf"),
         )
         .unwrap();
         std::fs::write(root.join("app.su"), "diag.c:99:36:diagnose\t96\tstatic\n").unwrap();

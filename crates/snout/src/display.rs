@@ -464,7 +464,7 @@ mod tests {
     #[test]
     fn normalized_dependency_units_share_dwarf_labels_and_tooltips() {
         let mut a = snout_core::analyze_bytes(
-            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
             "fixture.elf",
             &Default::default(),
         )
@@ -491,7 +491,7 @@ mod tests {
     #[test]
     fn equivalent_dwarf_source_spellings_do_not_make_stack_aliases_ambiguous() {
         let mut a = snout_core::analyze_bytes(
-            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
             "fixture.elf",
             &Default::default(),
         )
@@ -549,7 +549,7 @@ mod tests {
     #[test]
     fn report_labels_distinguish_files_and_share_stack_aliases() {
         let mut a = snout_core::analyze_bytes(
-            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
             "fixture.elf",
             &Default::default(),
         )
@@ -597,7 +597,7 @@ mod tests {
     #[test]
     fn elf_labels_with_directories_are_not_resolved_as_source_locations() {
         let mut a = snout_core::analyze_bytes(
-            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
             "fixture.elf",
             &Default::default(),
         )
@@ -647,7 +647,7 @@ mod tests {
     #[test]
     fn baseline_only_stack_sources_share_the_display_report_labels() {
         let mut old = snout_core::analyze_bytes(
-            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
             "fixture.elf",
             &Default::default(),
         )

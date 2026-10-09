@@ -6,7 +6,7 @@ const MAP: &str = "Memory Configuration\n\nName             Origin             L
 #[test]
 fn committed_fixtures_import_matching_map_capacities() {
     let dir = Temp::new();
-    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build");
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc");
     for name in ["cortex-m", "cortex-m-grown", "cortex-m-stripped"] {
         for extension in ["elf", "map"] {
             let file = format!("{name}.{extension}");
@@ -64,7 +64,7 @@ fn scans_nested_artifacts_and_uses_map_capacities() {
     fs::create_dir_all(dir.0.join("objects")).unwrap();
     fs::write(
         dir.0.join("app.elf"),
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
     )
     .unwrap();
     fs::write(dir.0.join("app.map"), MAP).unwrap();
@@ -135,7 +135,7 @@ fn unsupported_or_invalid_maps_do_not_block_firmware() {
     let dir = Temp::new();
     fs::write(
         dir.0.join("app.elf"),
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
     )
     .unwrap();
     fs::write(dir.0.join("app.map"), "unsupported map").unwrap();
@@ -153,7 +153,7 @@ fn matching_cross_references_load_even_with_explicit_memory_layout() {
     let dir = Temp::new();
     fs::write(
         dir.0.join("app.elf"),
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
     )
     .unwrap();
     fs::write(dir.0.join("app.map"), format!("{MAP}\nCross Reference Table\nSymbol File\nReset_Handler  main.o\ndiagnose  diag.o\n  main.o\n")).unwrap();
@@ -184,8 +184,9 @@ fn matching_cross_references_load_even_with_explicit_memory_layout() {
 
 #[test]
 fn committed_fixtures_have_six_units_and_real_cross_dependencies() {
-    let build = scan_folder(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build"))
-        .unwrap();
+    let build =
+        scan_folder(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc"))
+            .unwrap();
     for name in ["cortex-m", "cortex-m-grown"] {
         let analysis =
             analyze_build_firmware(&build, &build.root.join(format!("{name}.elf")), None).unwrap();
@@ -337,7 +338,7 @@ fn ti_automatic_import_preserves_elf_and_dwarf_information() {
     let firmware = dir.0.join("app.out");
     fs::write(
         &firmware,
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
     )
     .unwrap();
     fs::write(dir.0.join("app.map"), TI_MAP).unwrap();
@@ -375,18 +376,18 @@ fn section_evidence_selects_a_renamed_map_over_a_stale_same_name_map() {
     let dir = Temp::new();
     fs::write(
         dir.0.join("app.elf"),
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
     )
     .unwrap();
     fs::write(
         dir.0.join("app.map"),
-        include_str!("../../../fixtures/build/cortex-m-grown.map"),
+        include_str!("../../../fixtures/build/gcc/cortex-m-grown.map"),
     )
     .unwrap();
     fs::create_dir(dir.0.join("reports")).unwrap();
     fs::write(
         dir.0.join("reports/linker-output.map"),
-        include_str!("../../../fixtures/build/cortex-m.map"),
+        include_str!("../../../fixtures/build/gcc/cortex-m.map"),
     )
     .unwrap();
     let build = scan_folder(&dir.0).unwrap();
@@ -407,13 +408,13 @@ fn stale_named_map_is_rejected_and_changes_are_reread() {
     let dir = Temp::new();
     fs::write(
         dir.0.join("app.elf"),
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
     )
     .unwrap();
     let map = dir.0.join("app.map");
     fs::write(
         &map,
-        include_str!("../../../fixtures/build/cortex-m-grown.map"),
+        include_str!("../../../fixtures/build/gcc/cortex-m-grown.map"),
     )
     .unwrap();
     let build = scan_folder(&dir.0).unwrap();
@@ -424,7 +425,11 @@ fn stale_named_map_is_rejected_and_changes_are_reread() {
         .options
         .regions
         .is_empty());
-    fs::write(&map, include_str!("../../../fixtures/build/cortex-m.map")).unwrap();
+    fs::write(
+        &map,
+        include_str!("../../../fixtures/build/gcc/cortex-m.map"),
+    )
+    .unwrap();
     assert_eq!(
         build.matching_map(&elf),
         Some(build.root.join("app.map").as_path())
@@ -436,13 +441,13 @@ fn identical_unnamed_content_matches_remain_ambiguous() {
     let dir = Temp::new();
     fs::write(
         dir.0.join("app.elf"),
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
     )
     .unwrap();
     for name in ["one.map", "two.map"] {
         fs::write(
             dir.0.join(name),
-            include_str!("../../../fixtures/build/cortex-m.map"),
+            include_str!("../../../fixtures/build/gcc/cortex-m.map"),
         )
         .unwrap();
     }
@@ -462,7 +467,7 @@ fn region_coverage_and_partial_sections_do_not_identify_a_map() {
     let dir = Temp::new();
     fs::write(
         dir.0.join("app.elf"),
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
     )
     .unwrap();
     fs::write(dir.0.join("unrelated.map"), MAP).unwrap();
@@ -480,10 +485,10 @@ fn gnu_wrapped_output_names_and_input_sections_are_distinguished() {
     let dir = Temp::new();
     fs::write(
         dir.0.join("app.elf"),
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
     )
     .unwrap();
-    let text = include_str!("../../../fixtures/build/cortex-m.map").replace(
+    let text = include_str!("../../../fixtures/build/gcc/cortex-m.map").replace(
         ".text           0x08000000      0x540",
         ".text\n                0x08000000      0x540",
     );
@@ -504,7 +509,7 @@ fn lld_section_content_can_select_dependency_map_without_capacities() {
     let dir = Temp::new();
     fs::write(
         dir.0.join("app.elf"),
-        include_bytes!("../../../fixtures/build/cortex-m.elf"),
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
     )
     .unwrap();
     let mut text = matching_section_map(snout_core::map::MapFormat::LlvmLld);
@@ -525,10 +530,11 @@ fn lld_section_content_can_select_dependency_map_without_capacities() {
 
 #[test]
 fn common_sections_parse_committed_gnu_map() {
-    let rows =
-        snout_core::map::parse_map_sections(include_str!("../../../fixtures/build/cortex-m.map"))
-            .unwrap()
-            .unwrap();
+    let rows = snout_core::map::parse_map_sections(include_str!(
+        "../../../fixtures/build/gcc/cortex-m.map"
+    ))
+    .unwrap()
+    .unwrap();
     assert!(rows
         .iter()
         .any(|row| row.name == ".text" && row.size == 0x540));
@@ -536,7 +542,7 @@ fn common_sections_parse_committed_gnu_map() {
 
 fn matching_section_map(format: snout_core::map::MapFormat) -> String {
     use snout_core::map::{parse_map_sections, MapFormat};
-    let sections = parse_map_sections(include_str!("../../../fixtures/build/cortex-m.map"))
+    let sections = parse_map_sections(include_str!("../../../fixtures/build/gcc/cortex-m.map"))
         .unwrap()
         .unwrap();
     let mut text = match format {
@@ -626,7 +632,7 @@ fn generic_matching_selects_rejects_and_disambiguates_each_format() {
         let elf = dir.0.join("app.elf");
         fs::write(
             &elf,
-            include_bytes!("../../../fixtures/build/cortex-m-stripped.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m-stripped.elf"),
         )
         .unwrap();
         let map = dir.0.join("renamed.map");
@@ -646,7 +652,7 @@ fn generic_matching_selects_rejects_and_disambiguates_each_format() {
         // The same generic matcher rejects stale layouts even with matching names.
         fs::write(
             &elf,
-            include_bytes!("../../../fixtures/build/cortex-m-grown.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m-grown.elf"),
         )
         .unwrap();
         let build = scan_folder(&dir.0).unwrap();
@@ -668,7 +674,7 @@ fn malformed_ti_section_rows_and_unsupported_targets_are_not_filename_fallbacks(
         let dir = Temp::new();
         fs::write(
             dir.0.join("app.elf"),
-            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         )
         .unwrap();
         fs::write(dir.0.join("app.map"), text).unwrap();
@@ -704,7 +710,11 @@ fn conflicting_load_addresses_reject_maps_with_matching_runtime_sections() {
     for format in [MapFormat::GnuLd, MapFormat::TexasCgt, MapFormat::LlvmLld] {
         let dir = Temp::new();
         let elf = dir.0.join("app.elf");
-        fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+        fs::write(
+            &elf,
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
+        )
+        .unwrap();
         let map = dir.0.join("app.map");
         let text = matching_section_map(format);
         fs::write(&map, &text).unwrap();
@@ -735,7 +745,11 @@ fn implicit_load_addresses_reject_stale_maps_for_copied_sections() {
     for format in [MapFormat::GnuLd, MapFormat::TexasCgt] {
         let dir = Temp::new();
         let elf = dir.0.join("app.elf");
-        fs::write(&elf, include_bytes!("../../../fixtures/build/cortex-m.elf")).unwrap();
+        fs::write(
+            &elf,
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
+        )
+        .unwrap();
         let map = dir.0.join("app.map");
         let text = matching_section_map(format);
         // The stale map places .ram_code directly in RAM, with no separate Flash
@@ -761,7 +775,7 @@ fn implicit_load_addresses_reject_stale_maps_for_copied_sections() {
 #[test]
 fn manual_map_diagnostics_explain_section_evidence_for_all_formats() {
     use snout_core::{build::map_match_issues, map::MapFormat};
-    let elf = include_bytes!("../../../fixtures/build/cortex-m.elf");
+    let elf = include_bytes!("../../../fixtures/build/gcc/cortex-m.elf");
     for format in [MapFormat::GnuLd, MapFormat::TexasCgt, MapFormat::LlvmLld] {
         let text = matching_section_map(format);
         assert!(map_match_issues(elf, &text).is_empty(), "{format:?}");
@@ -781,7 +795,7 @@ fn manual_map_diagnostics_explain_section_evidence_for_all_formats() {
             "{format:?}: {issues:?}"
         );
         let issues = map_match_issues(
-            include_bytes!("../../../fixtures/build/cortex-m-grown.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m-grown.elf"),
             &text,
         );
         assert!(

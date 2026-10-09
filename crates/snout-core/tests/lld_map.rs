@@ -6,14 +6,14 @@ use snout_core::{
 };
 use std::path::PathBuf;
 
-const MAP: &str = include_str!("../../../fixtures/maps/llvm-lld.map");
-const ELF: &[u8] = include_bytes!("../../../fixtures/maps/llvm-lld.elf");
+const MAP: &str = include_str!("../../../fixtures/build/llvm/cortex-m.map");
+const ELF: &[u8] = include_bytes!("../../../fixtures/build/llvm/cortex-m.elf");
 
 #[test]
 fn real_lld_map_sections_match_linked_elf_without_inventing_capacity() {
     assert_eq!(detect_map_format(MAP), MapFormat::LlvmLld);
     let sections = parse_lld_sections(MAP).unwrap();
-    let analysis = analyze_bytes(ELF, "llvm-lld.elf", &Default::default()).unwrap();
+    let analysis = analyze_bytes(ELF, "cortex-m.elf", &Default::default()).unwrap();
     for section in &sections {
         let elf = analysis
             .sections
@@ -111,17 +111,24 @@ fn malformed_lld_placement_returns_errors_without_panicking() {
 
 #[test]
 fn lld_cref_preserves_dwarf_and_elf_information() {
-    let mut analysis = analyze_bytes(ELF, "llvm-lld.elf", &Default::default()).unwrap();
+    let mut analysis = analyze_bytes(ELF, "cortex-m.elf", &Default::default()).unwrap();
     let symbols = serde_json::to_value(&analysis.symbols).unwrap();
     let files = serde_json::to_value(&analysis.files).unwrap();
     // Misleading object names cannot replace source ownership from DWARF.
     let map = MAP.replace("diag.c.obj", "wrong-source.c.obj");
-    import_map(&mut analysis, &map, "llvm-lld.map");
+    import_map(&mut analysis, &map, "cortex-m.map");
     assert_eq!(serde_json::to_value(&analysis.symbols).unwrap(), symbols);
     assert_eq!(serde_json::to_value(&analysis.files).unwrap(), files);
     let graph = &analysis.dependencies;
     assert_eq!(graph.edges.len(), 16);
-    assert_eq!(graph.nodes.len(), 6);
+    assert_eq!(
+        graph
+            .nodes
+            .iter()
+            .filter(|node| node.id.starts_with("dwarf:"))
+            .count(),
+        7
+    );
     let diag = graph
         .nodes
         .iter()
@@ -142,14 +149,15 @@ fn lld_cref_preserves_dwarf_and_elf_information() {
 
 #[test]
 fn matching_lld_map_loads_dependencies_with_or_without_explicit_capacity() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/maps");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/llvm");
     let build = scan_folder(root).unwrap();
-    let layout =
-        snout_core::map::parse_map_regions(include_str!("../../../fixtures/build/cortex-m.map"))
-            .unwrap();
+    let layout = snout_core::map::parse_map_regions(include_str!(
+        "../../../fixtures/build/gcc/cortex-m.map"
+    ))
+    .unwrap();
     for options in [None, Some(&layout)] {
         let analysis =
-            analyze_build_firmware(&build, &build.root.join("llvm-lld.elf"), options).unwrap();
+            analyze_build_firmware(&build, &build.root.join("cortex-m.elf"), options).unwrap();
         assert_eq!(analysis.dependencies.edges.len(), 16);
         if options.is_none() {
             assert!(analysis.options.regions.is_empty());

@@ -776,7 +776,7 @@ mod tests {
     #[test]
     fn dependency_search_matches_resolved_hover_paths_and_recorded_labels() {
         let mut a = snout_core::analyze_bytes(
-            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
             "fixture.elf",
             &Default::default(),
         )
@@ -837,7 +837,7 @@ mod tests {
     #[test]
     fn filter_changes_refit_even_when_the_visible_graph_is_unchanged() {
         let mut analysis = snout_core::analyze_bytes(
-            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
             "test.elf",
             &Default::default(),
         )
@@ -910,7 +910,7 @@ mod tests {
     #[test]
     fn graph_nodes_arrows_and_zoom_respond_to_pointer_input() {
         let mut analysis = snout_core::analyze_bytes(
-            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
             "test.elf",
             &Default::default(),
         )

@@ -1,6 +1,9 @@
 use std::process::{Command, Output, Stdio};
 fn fixture(name: &str) -> String {
-    format!("{}/../../fixtures/build/{name}", env!("CARGO_MANIFEST_DIR"))
+    format!(
+        "{}/../../fixtures/build/gcc/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
 }
 fn run(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_snout-cli"))
@@ -55,7 +58,7 @@ fn stack_command_exposes_uncertainty() {
 }
 #[test]
 fn bad_input_exits_with_an_actionable_error() {
-    let output = run(&["analyze", &fixture("../src/main.c")]);
+    let output = run(&["analyze", &fixture("../../src/main.c")]);
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     let error = String::from_utf8_lossy(&output.stderr);
@@ -85,7 +88,7 @@ fn closed_output_pipes_exit_successfully_for_text_and_json() {
 #[test]
 fn configured_layout_and_text_output_work() {
     let config = format!(
-        "{}/../../fixtures/build/cortex-m.map",
+        "{}/../../fixtures/build/gcc/cortex-m.map",
         env!("CARGO_MANIFEST_DIR")
     );
     let output = run(&["analyze", &fixture("cortex-m.elf"), "--map", &config]);
@@ -148,9 +151,9 @@ fn elf_only_does_not_automatically_import_a_sibling_map() {
 fn llvm_map_imports_connections_with_unknown_capacity() {
     let output = run(&[
         "analyze",
-        &fixture("../maps/llvm-lld.elf"),
+        &fixture("../llvm/cortex-m.elf"),
         "--map",
-        &fixture("../maps/llvm-lld.map"),
+        &fixture("../llvm/cortex-m.map"),
         "--format",
         "json",
     ]);
@@ -172,7 +175,7 @@ fn llvm_map_imports_connections_with_unknown_capacity() {
 fn invalid_maps_fail_without_emitting_a_partial_report() {
     for (map, diagnostic) in [
         ("missing.map", "Cannot read linker map"),
-        ("../src/main.c", "Unknown or ambiguous linker map format"),
+        ("../../src/main.c", "Unknown or ambiguous linker map format"),
     ] {
         let output = run(&["analyze", &fixture("cortex-m.elf"), "--map", &fixture(map)]);
         assert_eq!(output.status.code(), Some(1));

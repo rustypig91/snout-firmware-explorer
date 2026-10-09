@@ -5,9 +5,9 @@ use snout_core::{
     Analysis, AnalysisOptions, Classification, MemoryKind, MemoryRegion,
 };
 
-const ELF: &[u8] = include_bytes!("../../../fixtures/build/cortex-m.elf");
-const GROWN: &[u8] = include_bytes!("../../../fixtures/build/cortex-m-grown.elf");
-const STRIPPED: &[u8] = include_bytes!("../../../fixtures/build/cortex-m-stripped.elf");
+const ELF: &[u8] = include_bytes!("../../../fixtures/build/gcc/cortex-m.elf");
+const GROWN: &[u8] = include_bytes!("../../../fixtures/build/gcc/cortex-m-grown.elf");
+const STRIPPED: &[u8] = include_bytes!("../../../fixtures/build/gcc/cortex-m-stripped.elf");
 fn analyze(data: &[u8]) -> Analysis {
     analyze_bytes(data, "fixture.elf", &AnalysisOptions::default()).unwrap()
 }
@@ -382,7 +382,7 @@ fn compiler_stack_reports_are_matched_without_invented_call_edges() {
         &a,
         concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/build/CMakeFiles/cortex-m-objects.dir/src/main.c.su"
+            "/../../fixtures/build/gcc/CMakeFiles/cortex-m-objects.dir/src/main.c.su"
         ),
     )
     .unwrap();
@@ -418,7 +418,7 @@ fn stack_matching_preserves_overload_ambiguity_and_rejects_conflicting_sources()
     a.symbols.push(overload);
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../fixtures/build/CMakeFiles/cortex-m-objects.dir/src/main.c.su"
+        "/../../fixtures/build/gcc/CMakeFiles/cortex-m-objects.dir/src/main.c.su"
     );
     let report = analyze_stack(&a, path).unwrap();
     let cpp = report

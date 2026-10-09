@@ -1,0 +1,207 @@
+******************************************************************************
+                  TI ARM Linker Unix v20.2.7
+******************************************************************************
+>> Linked Fri Oct  9 05:30:54 2026
+
+OUTPUT FILE NAME:   <cortex-m-grown.elf>
+ENTRY POINT SYMBOL: "Reset_Handler"  address: 080000cd
+
+
+MEMORY CONFIGURATION
+
+         name            origin    length      used     unused   attr    fill
+----------------------  --------  ---------  --------  --------  ----  --------
+  FLASH                 08000000   00040000  00000490  0003fb70  R  X
+  RAM                   20000000   00010000  00000188  0000fe78  RW X
+
+
+SEGMENT ALLOCATION MAP
+
+run origin  load origin   length   init length attrs members
+----------  ----------- ---------- ----------- ----- -------
+08000000    08000000    00000400   00000400    r-x
+  08000000    08000000    00000400   00000400    r-x .text
+08000418    08000418    00000050   00000050    r--
+  08000418    08000418    00000050   00000050    r-- .const
+08000488    08000488    00000008   00000008    r--
+  08000488    08000488    00000008   00000008    r-- .unusual_constants
+20000000    20000000    000000d0   00000000    rw-
+  20000000    20000000    000000d0   00000000    rw- .bss
+200000d0    200000d0    00000080   00000000    r--
+  200000d0    200000d0    00000080   00000000    r-- .reserved
+20000150    08000400    00000018   00000018    rw-
+  20000150    08000400    00000018   00000018    rw- .data
+20000168    08000468    00000020   00000020    r-x
+  20000168    08000468    00000012   00000012    r-x .ram_code
+  2000017a    0800047a    0000000e   0000000e    r-x .sensor_calibration_code
+
+
+SECTION ALLOCATION MAP
+
+ output                                  attributes/
+section   page    origin      length       input sections
+--------  ----  ----------  ----------   ----------------
+.text      0    08000000    00000400
+                  08000000    000000e8     main.c.obj (.text)
+                  080000e8    000000d0     sensor.c.obj (.text)
+                  080001b8    000000c8     transport.c.obj (.text)
+                  08000280    000000a8     telemetry.c.obj (.text)
+                  08000328    00000090     diag.c.obj (.text)
+                  080003b8    00000040     config.c.obj (.text)
+                  080003f8    00000008     main.c.obj (.tramp.ram_function.1)
+
+.data      0    08000400    00000018     RUN ADDR = 20000150
+                  08000400    00000010     sensor.c.obj (.data:filter_history)
+                  08000410    00000004     diag.c.obj (.data)
+                  08000414    00000004     main.c.obj (.data)
+
+.const     0    08000418    00000050
+                  08000418    00000010     config.c.obj (.const:app_config)
+                  08000428    00000010     config.c.obj (.const:baudrate_table)
+                  08000438    00000010     diag.c.obj (.const:limits)
+                  08000448    00000010     config.c.obj (.const:profile_margin)
+                  08000458    00000010     telemetry.c.obj (.const:telemetry_bias)
+
+.ram_code
+*          0    08000468    00000012     RUN ADDR = 20000168
+                  08000468    00000012     main.c.obj (.ram_code)
+
+.unusual_constants
+*          0    08000488    00000008
+                  08000488    00000008     diag.c.obj (.unusual_constants)
+
+.sensor_calibration_code
+*          0    0800047a    0000000e     RUN ADDR = 2000017a
+                  0800047a    0000000e     custom_sections.c.obj (.sensor_calibration_code)
+
+.bss       0    20000000    000000d0     UNINITIALIZED
+                  20000000    00000060     (.common:samples)
+                  20000060    00000040     transport.c.obj (.bss:pending_packets)
+                  200000a0    00000010     transport.c.obj (.bss)
+                  200000b0    0000000c     main.c.obj (.bss)
+                  200000bc    0000000c     sensor.c.obj (.bss)
+                  200000c8    00000004     diag.c.obj (.bss)
+                  200000cc    00000004     telemetry.c.obj (.bss)
+
+.reserved
+*          0    200000d0    00000080     UNINITIALIZED
+                  200000d0    00000080     --HOLE--
+
+__llvm_prf_cnts
+*          0    20000000    00000000     UNINITIALIZED
+
+MODULE SUMMARY
+
+       Module                  code   ro data   rw data
+       ------                  ----   -------   -------
+    CMakeFiles/cortex-m-grown-objects.dir/src/
+       main.c.obj              276    0         116
+       transport.c.obj         200    0         80
+       sensor.c.obj            208    0         44
+       telemetry.c.obj         168    16        4
+       diag.c.obj              144    24        12
+       config.c.obj            64     48        0
+       custom_sections.c.obj   28     0         0
+    +--+-----------------------+------+---------+---------+
+       Total:                  1088   88        256
+
+    +--+-----------------------+------+---------+---------+
+       Grand Total:            1088   88        256
+
+
+FAR CALL TRAMPOLINES
+
+callee name               trampoline name
+   callee addr  tramp addr   call addr  call info
+--------------  -----------  ---------  ----------------
+ram_function              $Tramp$TT$L$PI$$ram_function
+   20000169     080003f8     08000286   telemetry.c.obj (.text)
+
+[1 trampolines]
+[1 trampoline calls]
+
+
+GLOBAL SYMBOLS: SORTED ALPHABETICALLY BY Name
+
+address   name
+-------   ----
+080000cd  Reset_Handler
+0800000b  _Z12cpp_functionj
+ffffffff  __TI_pprof_out_hndl
+ffffffff  __TI_prof_data_size
+ffffffff  __TI_prof_data_start
+08000000  __TI_static_base__
+ffffffff  __binit__
+ffffffff  __c_args__
+20000000  __start___llvm_prf_cnts
+20000000  __stop___llvm_prf_cnts
+08000428  baudrate_table
+ffffffff  binit
+08000001  callback_alias
+080003c3  config_alarm_threshold
+080003bd  config_baudrate
+080003df  config_checksum_seed
+080003b9  config_get
+0800034b  diagnose
+08000329  diagnostics_record_fault
+08000345  diagnostics_status
+20000164  initialized
+080000c1  main
+20000169  ram_function
+20000000  samples
+2000017b  sensor_calibration_bias
+080000e9  sensor_init
+0800014f  sensor_sample
+08000488  signature
+0800029d  telemetry_checksum
+080002d5  telemetry_collect
+08000281  telemetry_scale
+080001dd  transport_enqueue
+08000219  transport_flush
+080001b9  transport_init
+080001d7  transport_pending
+08000001  weak_callback
+
+
+GLOBAL SYMBOLS: SORTED BY Symbol Address
+
+address   name
+-------   ----
+08000000  __TI_static_base__
+08000001  callback_alias
+08000001  weak_callback
+0800000b  _Z12cpp_functionj
+080000c1  main
+080000cd  Reset_Handler
+080000e9  sensor_init
+0800014f  sensor_sample
+080001b9  transport_init
+080001d7  transport_pending
+080001dd  transport_enqueue
+08000219  transport_flush
+08000281  telemetry_scale
+0800029d  telemetry_checksum
+080002d5  telemetry_collect
+08000329  diagnostics_record_fault
+08000345  diagnostics_status
+0800034b  diagnose
+080003b9  config_get
+080003bd  config_baudrate
+080003c3  config_alarm_threshold
+080003df  config_checksum_seed
+08000428  baudrate_table
+08000488  signature
+20000000  __start___llvm_prf_cnts
+20000000  __stop___llvm_prf_cnts
+20000000  samples
+20000164  initialized
+20000169  ram_function
+2000017b  sensor_calibration_bias
+ffffffff  __TI_pprof_out_hndl
+ffffffff  __TI_prof_data_size
+ffffffff  __TI_prof_data_start
+ffffffff  __binit__
+ffffffff  __c_args__
+ffffffff  binit
+
+[36 symbols]

@@ -516,7 +516,7 @@ impl Explorer {
                 ui.separator();
                 for (label, path) in [("Map", warning.path.display().to_string()), ("ELF", warning.firmware.clone())] {
                     let filename = std::path::Path::new(&path).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| display_path(&path).into_owned());
-                    ui.label(egui::RichText::new(format!("{label}: {filename}")).strong()).on_hover_text(path);
+                    ui.add(egui::Label::new(egui::RichText::new(format!("{label}: {filename}")).strong()).truncate()).on_hover_text(path);
                 }
                 let color = ui.visuals().warn_fg_color;
                 egui::Frame::none()

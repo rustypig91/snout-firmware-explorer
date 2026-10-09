@@ -50,7 +50,7 @@ mod tests {
         for name in ["cortex-m-grown.elf", "cortex-m-stripped.elf"] {
             let a = snout_core::analyze_path(
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../fixtures/build")
+                    .join("../../fixtures/build/gcc")
                     .join(name),
                 &Default::default(),
             )

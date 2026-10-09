@@ -2,9 +2,9 @@ use snout_core::{analyze_bytes, regions::region_usage, AnalysisOptions, MemoryKi
 
 fn fixture(stripped: bool) -> snout_core::Analysis {
     let data: &[u8] = if stripped {
-        include_bytes!("../../../fixtures/build/cortex-m-stripped.elf")
+        include_bytes!("../../../fixtures/build/gcc/cortex-m-stripped.elf")
     } else {
-        include_bytes!("../../../fixtures/build/cortex-m.elf")
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf")
     };
     analyze_bytes(data, "fixture", &AnalysisOptions::default()).unwrap()
 }

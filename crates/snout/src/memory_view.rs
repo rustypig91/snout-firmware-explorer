@@ -845,7 +845,7 @@ mod tests {
     #[test]
     fn byte_tooltips_resolve_aliases_extents_and_both_load_and_runtime_addresses() {
         let mut analysis = snout_core::analyze_bytes(
-            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
             "fixture",
             &Default::default(),
         )
@@ -898,7 +898,7 @@ mod tests {
     fn hovering_hex_pairs_shows_the_exact_address_for_all_groupings_and_byte_orders() {
         let analysis = Arc::new(
             snout_core::analyze_bytes(
-                include_bytes!("../../../fixtures/build/cortex-m.elf"),
+                include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
                 "fixture",
                 &Default::default(),
             )
@@ -1077,7 +1077,7 @@ mod tests {
     #[test]
     fn individual_symbol_hover_highlights_all_visible_bytes_and_clears_on_leave() {
         let mut analysis = snout_core::analyze_bytes(
-            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
             "fixture",
             &Default::default(),
         )
@@ -1238,7 +1238,7 @@ mod tests {
     #[test]
     fn wheel_scroll_rebases_continuously_and_only_renders_viewport_rows() {
         let mut analysis = snout_core::analyze_bytes(
-            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
             "fixture",
             &Default::default(),
         )
@@ -1323,7 +1323,7 @@ mod tests {
     #[test]
     fn sparse_64_bit_ranges_render_unknown_tail_without_overflow_or_full_range_allocation() {
         let mut analysis = snout_core::analyze_bytes(
-            include_bytes!("../../../fixtures/build/cortex-m-stripped.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m-stripped.elf"),
             "fixture",
             &Default::default(),
         )
@@ -1379,7 +1379,7 @@ mod tests {
     #[test]
     fn hexadecimal_symbol_names_can_be_jumped_to_without_losing_address_navigation() {
         let mut analysis = snout_core::analyze_bytes(
-            include_bytes!("../../../fixtures/build/cortex-m.elf"),
+            include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
             "fixture",
             &Default::default(),
         )
@@ -1429,7 +1429,7 @@ mod tests {
     fn defaults_and_navigation_follow_firmware_and_load_addresses() {
         let analysis = Arc::new(
             snout_core::analyze_bytes(
-                include_bytes!("../../../fixtures/build/cortex-m.elf"),
+                include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
                 "fixture",
                 &Default::default(),
             )
