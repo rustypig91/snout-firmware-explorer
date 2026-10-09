@@ -378,6 +378,8 @@ impl Explorer {
             .memory(|m| m.focused())
             .is_some_and(|id| egui::TextEdit::load_state(ui.ctx(), id).is_some());
         let navigate = if self.snapshot_dialog.is_none()
+            && self.map_warning.is_none()
+            && ui.memory(|m| m.allows_interaction(ui.layer_id()))
             && !editing_text
             && !ui.memory(|m| m.any_popup_open())
         {

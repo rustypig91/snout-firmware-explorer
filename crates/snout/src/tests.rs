@@ -5406,6 +5406,88 @@ fn finish_map_job(app: &mut Explorer) {
 }
 
 #[test]
+fn map_warning_with_long_filenames_fits_minimum_window() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc");
+    let mut app = Explorer::default();
+    app.scan_build(root.clone());
+    finish_job(&mut app);
+    app.open(root.join("cortex-m.elf"));
+    finish_job(&mut app);
+    app.apply_map(root.join("cortex-m-grown.map"));
+    finish_job(&mut app);
+    let warning = app.map_warning.as_mut().unwrap();
+    warning.path = root.join(format!("{}.map", "firmware_".repeat(28)));
+    warning.firmware = root
+        .join(format!("{}.elf", "firmware_".repeat(28)))
+        .display()
+        .to_string();
+    warning.reasons = vec!["Section .text is missing from the map.".into(); 30];
+    let ctx = egui::Context::default();
+    shell::configure_style(&ctx);
+    for _ in 0..10 {
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| app.show_map_warning(ctx),
+        );
+    }
+    let rect = ctx
+        .memory(|m| m.area_rect(egui::Id::new("map_mismatch")))
+        .unwrap();
+    assert!(rect.min.y >= 0.0 && rect.max.y <= 600.0, "{rect:?}");
+}
+
+#[test]
+fn map_warning_stays_stationary_at_fractional_display_scales() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc");
+    let mut app = Explorer::default();
+    app.scan_build(root.clone());
+    finish_job(&mut app);
+    app.open(root.join("cortex-m.elf"));
+    finish_job(&mut app);
+    app.apply_map(root.join("cortex-m-grown.map"));
+    finish_job(&mut app);
+    assert!(app.map_warning.is_some());
+    for scale in [1.0, 1.1, 1.25, 1.5, 1.75, 2.0] {
+        let ctx = egui::Context::default();
+        shell::configure_style(&ctx);
+        ctx.set_pixels_per_point(scale);
+        for height in [600.0, 601.0, 773.0, 801.0, 843.0] {
+            let mut settled = None;
+            for frame in 0..20 {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(901.0, height),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| app.show_map_warning(ctx),
+                );
+                let rect = ctx
+                    .memory(|m| m.area_rect(egui::Id::new("map_mismatch")))
+                    .unwrap();
+                if frame >= 10 {
+                    if let Some(previous) = settled {
+                        assert_eq!(
+                            rect, previous,
+                            "Map warning moved at scale {scale}, height {height}, frame {frame}"
+                        );
+                    }
+                    settled = Some(rect);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn map_warning_blocks_background_and_reverts_or_ignores_without_losing_report() {
     let mut app = Explorer::default();
     app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/gcc"));
@@ -5515,12 +5597,60 @@ fn map_warning_blocks_background_and_reverts_or_ignores_without_losing_report() 
     assert!(app.receiver.is_none());
     assert!(app.map_warning.is_some());
     assert!(Arc::ptr_eq(&original, app.analysis.as_ref().unwrap()));
+    app.change_view(View::Sections);
+    app.details = None;
+    for key in [egui::Key::ArrowDown, egui::Key::ArrowUp] {
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            vec![],
+        );
+        assert!(app.details.is_none(), "Warning must block table navigation");
+    }
+    app.change_view(View::Overview);
     let output = frame(&ctx, &mut app, vec![], vec![]);
     click(&ctx, &mut app, text_center(&output, "Revert"));
     assert!(app.map_warning.is_none());
     assert!(app.receiver.is_none());
     assert_eq!(preferences, app.preference_value());
     assert!(Arc::ptr_eq(&original, app.analysis.as_ref().unwrap()));
+
+    app.apply_map(stale.clone());
+    finish_job(&mut app);
+    app.change_view(View::Sections);
+    app.details = None;
+    frame(&ctx, &mut app, vec![], vec![]);
+    frame(
+        &ctx,
+        &mut app,
+        [egui::Key::Escape, egui::Key::ArrowDown]
+            .into_iter()
+            .map(|key| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+            .collect(),
+        vec![],
+    );
+    assert!(app.map_warning.is_none());
+    assert!(app.receiver.is_none());
+    assert!(
+        app.details.is_none(),
+        "Dismissal must not navigate the background table"
+    );
+    assert!(Arc::ptr_eq(&original, app.analysis.as_ref().unwrap()));
+    app.change_view(View::Overview);
+    assert_eq!(preferences, app.preference_value());
 
     app.apply_map(stale.clone());
     finish_job(&mut app);
