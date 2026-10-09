@@ -24,6 +24,8 @@
 
 ## Validation
 
+Linux and Windows are supported targets. Keep code and tests portable across both. Account for LF/CRLF line endings, platform-specific paths, file locking, and shell/tool differences. Tests must pass on both platforms.
+
 Run checks appropriate to the change. For Rust changes, check formatting and relevant tests. For broader core or cross-crate changes, use the workspace checks:
 
 ```sh
