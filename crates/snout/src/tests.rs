@@ -5338,6 +5338,51 @@ fn finish_map_job(app: &mut Explorer) {
 }
 
 #[test]
+fn map_warning_stays_stationary_at_fractional_display_scales() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build");
+    let mut app = Explorer::default();
+    app.scan_build(root.clone());
+    finish_job(&mut app);
+    app.open(root.join("cortex-m.elf"));
+    finish_job(&mut app);
+    app.apply_map(root.join("cortex-m-grown.map"));
+    finish_job(&mut app);
+    assert!(app.map_warning.is_some());
+    for scale in [1.0, 1.1, 1.25, 1.5, 1.75, 2.0] {
+        let ctx = egui::Context::default();
+        shell::configure_style(&ctx);
+        ctx.set_pixels_per_point(scale);
+        for height in [600.0, 601.0, 773.0, 801.0, 843.0] {
+            let mut settled = None;
+            for frame in 0..20 {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(901.0, height),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| app.show_map_warning(ctx),
+                );
+                let rect = ctx
+                    .memory(|m| m.area_rect(egui::Id::new("map_mismatch")))
+                    .unwrap();
+                if frame >= 10 {
+                    if let Some(previous) = settled {
+                        assert_eq!(
+                            rect, previous,
+                            "Map warning moved at scale {scale}, height {height}, frame {frame}"
+                        );
+                    }
+                    settled = Some(rect);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn map_warning_blocks_background_and_reverts_or_ignores_without_losing_report() {
     let mut app = Explorer::default();
     app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build"));

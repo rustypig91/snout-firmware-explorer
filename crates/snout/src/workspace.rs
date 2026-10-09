@@ -490,7 +490,20 @@ impl Explorer {
         warning.focus_requested = true;
         let mut ignore = false;
         let mut revert = false;
-        let response = egui::Modal::new(egui::Id::new("map_mismatch"))
+        let id = egui::Id::new("map_mismatch");
+        let mut area = egui::Modal::default_area(id);
+        if let Some(rect) = ctx.memory(|memory| memory.area_rect(id)) {
+            // Stabilize the centered origin before Area rounds to physical pixels.
+            // Fractional-scale layout noise can otherwise cause a one-pixel oscillation.
+            let scale = ctx.pixels_per_point();
+            let size = (rect.size() * scale * 64.0).round() / (scale * 64.0);
+            area = area.anchor(
+                egui::Align2::LEFT_TOP,
+                (ctx.screen_rect().size() - size) * 0.5,
+            );
+        }
+        let response = egui::Modal::new(id)
+            .area(area)
             .backdrop_color(egui::Color32::from_black_alpha(160))
             .frame(egui::Frame::window(&ctx.style()).inner_margin(egui::Margin::same(20.0)))
             .show(ctx, |ui| {
