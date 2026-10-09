@@ -130,7 +130,7 @@ fn changing_layout_reloads_stack_reports_against_the_current_elf() {
         } else {
             app.configure(Some(layout.clone()));
         }
-        finish_job(&mut app);
+        finish_map_job(&mut app);
         assert!(app.analysis.as_ref().unwrap().symbols.is_empty());
         let stack = app.stack.as_ref().unwrap();
         assert!(stack.entries[0].symbol_candidates.is_empty());
@@ -198,7 +198,7 @@ fn changing_layout_rescans_stack_reports_after_a_rebuild() {
             } else {
                 app.configure(Some(layout));
             }
-            finish_job(&mut app);
+            finish_map_job(&mut app);
             let stack = app
                 .stack
                 .as_ref()
@@ -322,7 +322,7 @@ fn refresh_reloads_uppercase_maps_and_selected_maps_and_keeps_comparison() {
         } else {
             app.configure(Some(source.clone()));
         }
-        finish_job(&mut app);
+        finish_map_job(&mut app);
         let name = source.file_name().unwrap().to_str().unwrap().to_owned();
         app.take_snapshot(&name).unwrap();
         app.select_snapshot(Some(name)).unwrap();
@@ -442,14 +442,14 @@ fn active_map_follows_successful_map_selection() {
     assert!(app.map_in_use(&map));
     assert!(!app.map_in_use(&other_map));
     app.apply_map(other_map.clone());
-    finish_job(&mut app);
+    finish_map_job(&mut app);
     assert!(!app.map_in_use(&map));
     assert!(app.map_in_use(&other_map));
     app.refresh();
     finish_job(&mut app);
     assert!(app.map_in_use(&other_map));
     app.apply_map(root.join("missing.map"));
-    finish_job(&mut app);
+    finish_map_job(&mut app);
     assert!(app.error.is_some());
     assert!(app.map_in_use(&other_map));
     let mut restored = Explorer::default();
@@ -460,7 +460,7 @@ fn active_map_follows_successful_map_selection() {
     app.configure(Some(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/cortex-m.map"),
     ));
-    finish_job(&mut app);
+    finish_map_job(&mut app);
     assert!(!app.map_in_use(&map));
     assert!(!app.map_in_use(&other_map));
     app.discover_layout();
@@ -583,7 +583,7 @@ fn memory_regions_links_to_build_files_and_no_map_choice_survives_restart() {
         })
         .unwrap();
     click(&mut restored, radio);
-    finish_job(&mut restored);
+    finish_map_job(&mut restored);
     assert!(restored.map_in_use(&root.join("cortex-m-grown.map")));
     assert!(!restored.options.regions.is_empty());
     let output = frame(&mut restored, vec![]);
@@ -682,7 +682,7 @@ fn folder_reset_preserves_saved_choices_and_report_when_reanalysis_fails() {
         app.open(root.join(name));
         finish_job(&mut app);
         app.apply_map(root.join("manual.map"));
-        finish_job(&mut app);
+        finish_map_job(&mut app);
     }
     let preferences = app.preference_value();
     let analysis = app.analysis.clone().unwrap();
@@ -1548,7 +1548,7 @@ fn explicit_startup_selection_restores_its_saved_layout_and_reloads_the_source()
     original.open(second.clone());
     finish_job(&mut original);
     original.apply_map(map.clone());
-    finish_job(&mut original);
+    finish_map_job(&mut original);
     original.open(first);
     finish_job(&mut original);
 
@@ -2002,11 +2002,11 @@ fn map_choices_survive_elf_folder_switching_restart_and_folder_reset() {
     app.open(elf.clone());
     finish_job(&mut app);
     app.apply_map(other_map.clone());
-    finish_job(&mut app);
+    finish_map_job(&mut app);
     app.open(other_elf.clone());
     finish_job(&mut app);
     app.apply_map(map.clone());
-    finish_job(&mut app);
+    finish_map_job(&mut app);
     app.open(elf.clone());
     finish_job(&mut app);
     assert!(app.map_in_use(&other_map));
@@ -2030,7 +2030,7 @@ fn map_choices_survive_elf_folder_switching_restart_and_folder_reset() {
     app.open(second_elf.clone());
     finish_job(&mut app);
     app.apply_map(second_map.clone());
-    finish_job(&mut app);
+    finish_map_job(&mut app);
 
     let value =
         serde_json::from_slice(&serde_json::to_vec(&app.preference_value()).unwrap()).unwrap();
@@ -2098,7 +2098,7 @@ fn selected_map_supplies_dependencies_across_refresh_restart_and_failure() {
     finish_job(&mut app);
     app.change_view(View::BuildFiles);
     app.apply_map(map.clone());
-    finish_job(&mut app);
+    finish_map_job(&mut app);
     assert!(app.view == View::BuildFiles);
     assert_eq!(app.analysis.as_ref().unwrap().dependencies.edges.len(), 1);
     assert!(app.map_in_use(&map));
@@ -2108,7 +2108,7 @@ fn selected_map_supplies_dependencies_across_refresh_restart_and_failure() {
     prefs["build_settings"][root.to_str().unwrap()]["dependency_maps"] =
         serde_json::json!({firmware.to_str().unwrap(): root.join("obsolete.map")});
     app.apply_map(root.join("missing.map"));
-    finish_job(&mut app);
+    finish_map_job(&mut app);
     assert!(app.error.is_some());
     assert!(app.map_in_use(&map));
     std::fs::write(
@@ -2165,7 +2165,7 @@ fn selected_map_supplies_dependencies_across_refresh_restart_and_failure() {
         .is_empty());
     std::fs::write(&map, format!("{regions}{table}")).unwrap();
     restored.apply_map(map.clone());
-    finish_job(&mut restored);
+    finish_map_job(&mut restored);
     assert_eq!(
         restored.analysis.as_ref().unwrap().dependencies.edges.len(),
         1
@@ -2173,7 +2173,7 @@ fn selected_map_supplies_dependencies_across_refresh_restart_and_failure() {
     // A map without cross references replaces the previous map's graph too.
     std::fs::write(&map, regions).unwrap();
     restored.apply_map(map.clone());
-    finish_job(&mut restored);
+    finish_map_job(&mut restored);
     assert!(restored
         .analysis
         .as_ref()
@@ -3127,10 +3127,10 @@ fn llvm_map_selection_imports_dependencies_and_keeps_capacity_unknown() {
     app.configure(Some(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build/cortex-m.map"),
     ));
-    finish_job(&mut app);
+    finish_map_job(&mut app);
     let analysis = app.analysis.clone().unwrap();
     app.apply_map(map.clone());
-    finish_job(&mut app);
+    finish_map_job(&mut app);
     assert!(app.error.is_none());
     let imported = app.analysis.as_ref().unwrap();
     assert!(imported.options.regions.is_empty());
@@ -5326,4 +5326,145 @@ fn overview_no_map_warning_and_build_files_link_fit_and_navigate() {
         }
         assert!(app.view == View::BuildFiles);
     }
+}
+
+// Tests of persistence and report loading explicitly keep manually selected maps.
+fn finish_map_job(app: &mut Explorer) {
+    finish_job(app);
+    if app.map_warning.is_some() {
+        app.resolve_map_warning(true);
+        finish_job(app);
+    }
+}
+
+#[test]
+fn map_warning_blocks_background_and_reverts_or_ignores_without_losing_report() {
+    let mut app = Explorer::default();
+    app.scan_build(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/build"));
+    finish_job(&mut app);
+    let root = app.build.as_ref().unwrap().root.clone();
+    let elf = root.join("cortex-m.elf");
+    let map = root.join("cortex-m.map");
+    let stale = root.join("cortex-m-grown.map");
+    app.open(elf.clone());
+    finish_job(&mut app);
+    let original = app.analysis.clone().unwrap();
+    let preferences = app.preference_value();
+    let revision = app.report_revision;
+    app.apply_map(stale.clone());
+    finish_job(&mut app);
+    assert!(app
+        .map_warning
+        .as_ref()
+        .unwrap()
+        .reasons
+        .iter()
+        .any(|r| r.contains("size:")));
+    assert!(Arc::ptr_eq(&original, app.analysis.as_ref().unwrap()));
+    assert_eq!(preferences, app.preference_value());
+    assert_eq!(revision, app.report_revision);
+    assert!(app.map_in_use(&map));
+
+    let ctx = egui::Context::default();
+    shell::configure_style(&ctx);
+    fn frame(
+        ctx: &egui::Context,
+        app: &mut Explorer,
+        events: Vec<egui::Event>,
+        dropped_files: Vec<egui::DroppedFile>,
+    ) -> egui::FullOutput {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 600.0),
+                )),
+                events,
+                dropped_files,
+                ..Default::default()
+            },
+            |ctx| app.show(ctx),
+        )
+    }
+    fn click(ctx: &egui::Context, app: &mut Explorer, pos: egui::Pos2) {
+        for pressed in [true, false] {
+            frame(
+                ctx,
+                app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                vec![],
+            );
+        }
+    }
+    fn text_center(output: &egui::FullOutput, label: &str) -> egui::Pos2 {
+        output
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.text() == label => {
+                    Some(t.pos + t.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("Missing modal text: {label}"))
+    }
+    frame(&ctx, &mut app, vec![], vec![]);
+    let output = frame(&ctx, &mut app, vec![], vec![]);
+    let rect = ctx
+        .memory(|m| m.area_rect(egui::Id::new("map_mismatch")))
+        .unwrap();
+    assert!(
+        (rect.center() - egui::pos2(450.0, 300.0)).length() < 2.0,
+        "{rect:?}"
+    );
+    assert!(rect.min.y >= 0.0 && rect.max.y <= 600.0);
+    text_center(&output, "Why it does not match");
+    // Clicking the backdrop and sending shortcuts/dropped firmware must not change the report.
+    click(&ctx, &mut app, egui::pos2(10.0, 10.0));
+    frame(
+        &ctx,
+        &mut app,
+        vec![egui::Event::Key {
+            key: egui::Key::F5,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+        vec![egui::DroppedFile {
+            path: Some(elf),
+            ..Default::default()
+        }],
+    );
+    assert!(app.receiver.is_none());
+    assert!(app.map_warning.is_some());
+    assert!(Arc::ptr_eq(&original, app.analysis.as_ref().unwrap()));
+    let output = frame(&ctx, &mut app, vec![], vec![]);
+    click(&ctx, &mut app, text_center(&output, "Revert"));
+    assert!(app.map_warning.is_none());
+    assert!(app.receiver.is_none());
+    assert_eq!(preferences, app.preference_value());
+    assert!(Arc::ptr_eq(&original, app.analysis.as_ref().unwrap()));
+
+    app.apply_map(stale.clone());
+    finish_job(&mut app);
+    frame(&ctx, &mut app, vec![], vec![]);
+    let output = frame(&ctx, &mut app, vec![], vec![]);
+    click(&ctx, &mut app, text_center(&output, "Ignore"));
+    assert!(app.map_warning.is_none());
+    finish_job(&mut app);
+    assert!(app.map_in_use(&stale));
+    assert!(!Arc::ptr_eq(&original, app.analysis.as_ref().unwrap()));
+    assert_ne!(preferences, app.preference_value());
+    app.apply_map(map);
+    finish_job(&mut app);
+    assert!(app.map_warning.is_none());
 }

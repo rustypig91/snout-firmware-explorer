@@ -1,6 +1,8 @@
 //! Build folder discovery and automatic linker-map memory configuration import.
 mod map_match;
 
+pub use map_match::map_match_issues;
+
 pub use crate::map::{detect_map_format, parse_map_regions, MapFormat};
 use crate::{analyze_path, Analysis, AnalysisOptions, Error};
 use std::{
