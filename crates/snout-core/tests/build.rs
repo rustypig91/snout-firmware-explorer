@@ -757,3 +757,48 @@ fn implicit_load_addresses_reject_stale_maps_for_copied_sections() {
         assert!(report.dependencies.map_path.is_none());
     }
 }
+
+#[test]
+fn manual_map_diagnostics_explain_section_evidence_for_all_formats() {
+    use snout_core::{build::map_match_issues, map::MapFormat};
+    let elf = include_bytes!("../../../fixtures/build/cortex-m.elf");
+    for format in [MapFormat::GnuLd, MapFormat::TexasCgt, MapFormat::LlvmLld] {
+        let text = matching_section_map(format);
+        assert!(map_match_issues(elf, &text).is_empty(), "{format:?}");
+        let missing = map_match_issues(elf, &text.replace(".text", ".missing"));
+        assert!(
+            missing
+                .iter()
+                .any(|issue| issue == "Section .text is missing from the map."),
+            "{format:?}: {missing:?}"
+        );
+        let wrong_address = text.replace("8000000", "8000004");
+        let issues = map_match_issues(elf, &wrong_address);
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("runtime address: ELF 0x8000000, map 0x8000004")),
+            "{format:?}: {issues:?}"
+        );
+        let issues = map_match_issues(
+            include_bytes!("../../../fixtures/build/cortex-m-grown.elf"),
+            &text,
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("size: ELF") && issue.contains("bytes, map")),
+            "{format:?}: {issues:?}"
+        );
+    }
+    let issues = map_match_issues(
+        elf,
+        "Memory Configuration\nName Origin Length Attributes\nFLASH 0x08000000 0x40000 xr\n",
+    );
+    assert!(issues[0].contains("no supported output-section placement table"));
+    let issues = map_match_issues(elf, "Memory Configuration\nName Origin Length Attributes\nFLASH 0x08000000 0x40000 xr\nLinker script and memory map\n.text 0x08000000 nope\n");
+    assert!(issues[0].contains("could not be read"));
+    assert!(
+        map_match_issues(b"invalid ELF", "")[0].contains("ELF section placement could not be read")
+    );
+}

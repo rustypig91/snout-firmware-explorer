@@ -947,7 +947,8 @@ impl Explorer {
 
     pub(super) fn show(&mut self, ctx: &egui::Context) {
         self.firmware_watch.poll(ctx);
-        let snapshot_modal_open = self.snapshot_dialog.is_some();
+        let snapshot_modal_open = self.snapshot_dialog.is_some() || self.map_warning.is_some();
+        self.show_map_warning(ctx);
         self.show_snapshot_dialog(ctx);
         if !snapshot_modal_open {
             if let Some(path) =

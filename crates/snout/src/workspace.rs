@@ -6,6 +6,13 @@ use snout_core::{
 };
 use std::path::PathBuf;
 
+pub(super) struct MapWarning {
+    pub path: PathBuf,
+    pub firmware: String,
+    pub reasons: Vec<String>,
+    focus_requested: bool,
+}
+
 fn selected_map_options(text: &str) -> Result<super::AnalysisOptions, String> {
     if detect_map_format(text) == snout_core::map::MapFormat::LlvmLld {
         snout_core::map::parse_map_sections(text).map_err(|error| error.to_string())?;
@@ -438,6 +445,10 @@ impl Explorer {
     }
 
     pub(super) fn apply_map(&mut self, path: PathBuf) {
+        self.apply_map_checked(path, false);
+    }
+
+    fn apply_map_checked(&mut self, path: PathBuf, ignore: bool) {
         let current_path = self.analysis.as_ref().map(|a| a.path.clone());
         let build = self.build.clone();
         let reports = current_path
@@ -445,6 +456,20 @@ impl Explorer {
             .and_then(|p| self.saved_stack_selection(std::path::Path::new(p)));
         self.job_observing(current_path.as_ref().map(PathBuf::from), move || {
             let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+            if !ignore {
+                if let Some(firmware) = &current_path {
+                    let bytes = std::fs::read(firmware).map_err(|error| error.to_string())?;
+                    let reasons = snout_core::build::map_match_issues(&bytes, &text);
+                    if !reasons.is_empty() {
+                        return Ok(Loaded::MapWarning(MapWarning {
+                            path,
+                            firmware: firmware.clone(),
+                            reasons,
+                            focus_requested: false,
+                        }));
+                    }
+                }
+            }
             let options = selected_map_options(&text)?;
             let mut analysis = current_path.map(|p| {
                 let mut a = analyze_path(p, &options)?;
@@ -457,6 +482,78 @@ impl Explorer {
             configured_report(options, analysis, path.display().to_string(), build.as_deref(), reports)
         });
     }
+    pub(super) fn show_map_warning(&mut self, ctx: &egui::Context) {
+        let Some(warning) = &mut self.map_warning else {
+            return;
+        };
+        let request_focus = !warning.focus_requested;
+        warning.focus_requested = true;
+        let mut ignore = false;
+        let mut revert = false;
+        let id = egui::Id::new("map_mismatch");
+        let mut area = egui::Modal::default_area(id);
+        if let Some(rect) = ctx.memory(|memory| memory.area_rect(id)) {
+            // Stabilize the centered origin before Area rounds to physical pixels.
+            // Fractional-scale layout noise can otherwise cause a one-pixel oscillation.
+            let scale = ctx.pixels_per_point();
+            let size = (rect.size() * scale * 64.0).round() / (scale * 64.0);
+            area = area.anchor(
+                egui::Align2::LEFT_TOP,
+                (ctx.screen_rect().size() - size) * 0.5,
+            );
+        }
+        let response = egui::Modal::new(id)
+            .area(area)
+            .backdrop_color(egui::Color32::from_black_alpha(160))
+            .frame(egui::Frame::window(&ctx.style()).inner_margin(egui::Margin::same(20.0)))
+            .show(ctx, |ui| {
+                ui.set_width((ctx.screen_rect().width() - 64.0).clamp(240.0, 560.0));
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                ui.spacing_mut().item_spacing = egui::vec2(10.0, 12.0);
+                ui.spacing_mut().button_padding = egui::vec2(14.0, 8.0);
+                ui.heading("Map may not match firmware");
+                ui.label("This map could not be confirmed against the selected ELF. Using it may show incorrect memory capacities or dependencies.");
+                ui.separator();
+                for (label, path) in [("Map", warning.path.display().to_string()), ("ELF", warning.firmware.clone())] {
+                    let filename = std::path::Path::new(&path).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| display_path(&path).into_owned());
+                    ui.label(egui::RichText::new(format!("{label}: {filename}")).strong()).on_hover_text(path);
+                }
+                let color = ui.visuals().warn_fg_color;
+                egui::Frame::none()
+                    .fill(color.linear_multiply(0.08))
+                    .stroke(egui::Stroke::new(1.0_f32, color.linear_multiply(0.35)))
+                    .rounding(6.0)
+                    .inner_margin(12.0)
+                    .show(ui, |ui| {
+                        ui.colored_label(color, egui::RichText::new("Why it does not match").strong());
+                        egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                            for reason in &warning.reasons { ui.label(format!("• {reason}")); }
+                        });
+                    });
+                ui.weak("Revert keeps your previous map selection and report.");
+                ui.horizontal(|ui| {
+                    let revert_button = ui.button("Revert");
+                    if request_focus { revert_button.request_focus(); }
+                    revert = revert_button.clicked();
+                    ignore = ui.button("Ignore").on_hover_text("Use this map despite the warning").clicked();
+                });
+            });
+        // Escape cancels. Backdrop clicks never accept or dismiss the warning.
+        if revert || response.is_top_modal && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.resolve_map_warning(false);
+        } else if ignore {
+            self.resolve_map_warning(true);
+        }
+    }
+
+    pub(super) fn resolve_map_warning(&mut self, ignore: bool) {
+        if let Some(warning) = self.map_warning.take() {
+            if ignore {
+                self.apply_map_checked(warning.path, true);
+            }
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn build_browser(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("build_artifacts")

@@ -127,6 +127,7 @@ type Refreshed = (
     String,
 );
 enum Loaded {
+    MapWarning(workspace::MapWarning),
     ResetBuildSettings(Box<Loaded>),
     Refresh(Box<Refreshed>),
     Firmware(
@@ -185,6 +186,7 @@ struct SavedLayout {
 struct Explorer {
     snapshots: snapshots::SnapshotStore,
     snapshot_dialog: Option<snapshots::Dialog>,
+    map_warning: Option<workspace::MapWarning>,
     snapshot_name: String,
     snapshot_error: Option<String>,
     snapshot_dialog_error: Option<String>,
@@ -251,6 +253,7 @@ impl Default for Explorer {
         Self {
             snapshots: Default::default(),
             snapshot_dialog: None,
+            map_warning: None,
             snapshot_name: String::new(),
             snapshot_error: None,
             snapshot_dialog_error: None,
@@ -420,6 +423,11 @@ impl Explorer {
     fn poll(&mut self) {
         match self.receiver.as_ref().map(|r| r.try_recv()) {
             Some(Ok(completion)) => {
+                if let Ok(Loaded::MapWarning(warning)) = completion.result {
+                    self.receiver = None;
+                    self.map_warning = Some(warning);
+                    return;
+                }
                 if completion.result.is_ok() {
                     if let Some(observation) = completion.observation {
                         self.firmware_watch.set(Some(observation));
@@ -449,6 +457,7 @@ impl Explorer {
                     other => other,
                 });
                 match result {
+                    Ok(Loaded::MapWarning(_)) => unreachable!(),
                     Ok(Loaded::ResetBuildSettings(_)) => unreachable!(),
                     Ok(Loaded::Refresh(_)) => unreachable!(),
                     Ok(Loaded::Build(build)) => {
@@ -626,7 +635,7 @@ impl eframe::App for Explorer {
         }
         self.poll_updates(ctx);
         self.show(ctx);
-        if self.snapshot_dialog.is_none() {
+        if self.snapshot_dialog.is_none() && self.map_warning.is_none() {
             self.show_updates(ctx);
         }
     }
