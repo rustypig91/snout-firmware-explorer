@@ -3337,7 +3337,7 @@ dependencies = [
 
 [[package]]
 name = "snout"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "ashpd",
  "chrono",
@@ -3361,7 +3361,7 @@ dependencies = [
 
 [[package]]
 name = "snout-cli"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "clap",
  "serde",
@@ -3371,7 +3371,7 @@ dependencies = [
 
 [[package]]
 name = "snout-core"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "addr2line",
  "cpp_demangle",
