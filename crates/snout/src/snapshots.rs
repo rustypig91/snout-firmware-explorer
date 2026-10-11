@@ -47,7 +47,7 @@ fn snapshot_row(ui: &mut egui::Ui, snapshot: &Snapshot, active: bool) -> (bool, 
     let accent = super::views::ACCENT;
     let mut compare = false;
     let mut delete = false;
-    egui::Frame::none().inner_margin(12.0).show(ui, |ui| {
+    egui::Frame::NONE.inner_margin(12.0).show(ui, |ui| {
         ui.horizontal(|ui| {
             let body = ui.allocate_ui_with_layout(
                 egui::vec2((ui.available_width() - 40.0).max(1.0), 0.0),
@@ -88,6 +88,7 @@ fn snapshot_row(ui: &mut egui::Ui, snapshot: &Snapshot, active: bool) -> (bool, 
                     response.rect.expand(4.0),
                     4.0,
                     egui::Stroke::new(1.0_f32, accent),
+                    egui::StrokeKind::Middle,
                 );
             }
             compare = response
@@ -115,7 +116,8 @@ fn snapshot_row(ui: &mut egui::Ui, snapshot: &Snapshot, active: bool) -> (bool, 
             let center = rect.center();
             let bin =
                 egui::Rect::from_center_size(center + egui::vec2(0.0, 2.0), egui::vec2(10.0, 12.0));
-            ui.painter().rect_stroke(bin, 1.0, stroke);
+            ui.painter()
+                .rect_stroke(bin, 1.0, stroke, egui::StrokeKind::Middle);
             ui.painter().line_segment(
                 [
                     center + egui::vec2(-7.0, -6.0),
@@ -933,9 +935,9 @@ impl Explorer {
                     for snapshot in snapshots {
                         ui.push_id((&snapshot.firmware, &snapshot.name), |ui| {
                             let selected = active.as_deref() == Some(snapshot.name.as_str());
-                            let mut card = egui::Frame::none()
-                                .inner_margin(egui::Margin::symmetric(12.0, 8.0))
-                                .rounding(6.0)
+                            let mut card = egui::Frame::NONE
+                                .inner_margin(egui::Margin::symmetric(12, 8))
+                                .corner_radius(6)
                                 .begin(ui);
                             let ui_content = &mut card.content_ui;
                             let width = ui_content.available_width();
@@ -1021,7 +1023,7 @@ impl Explorer {
                                                     1.0_f32,
                                                     egui::Color32::from_rgb(79, 48, 56),
                                                 ))
-                                                .rounding(5.0),
+                                                .corner_radius(5),
                                         )
                                         .on_hover_text(
                                             format!("Delete baseline ‘{}’", snapshot.name),
@@ -1055,6 +1057,7 @@ impl Explorer {
                                         ),
                                         1.5,
                                         stroke,
+                                        egui::StrokeKind::Middle,
                                     );
                                     for (a, b) in [
                                         ((-7.0, -6.0), (7.0, -6.0)),
@@ -1359,7 +1362,7 @@ impl Explorer {
             Close,
         }
         let mut action = None;
-        let width = (ctx.screen_rect().width() - 64.0).clamp(240.0, 520.0);
+        let width = (ctx.content_rect().width() - 64.0).clamp(240.0, 520.0);
         let id = egui::Id::new("snapshot_manager");
         let mut area = egui::Modal::default_area(id);
         if let Some(rect) = ctx.memory(|memory| memory.area_rect(id)) {
@@ -1370,13 +1373,13 @@ impl Explorer {
             let size = (rect.size() * scale * 64.0).round() / (scale * 64.0);
             area = area.anchor(
                 egui::Align2::LEFT_TOP,
-                (ctx.screen_rect().size() - size) * 0.5,
+                (ctx.content_rect().size() - size) * 0.5,
             );
         }
         let response = egui::Modal::new(id)
             .area(area)
             .backdrop_color(egui::Color32::from_black_alpha(160))
-            .frame(egui::Frame::window(&ctx.style()).inner_margin(egui::Margin::same(16.0)))
+            .frame(egui::Frame::window(&ctx.style_of(egui::Theme::Dark)).inner_margin(egui::Margin::same(16)))
             .show(ctx, |ui| {
                 ui.set_width(width);
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
@@ -1434,7 +1437,7 @@ impl Explorer {
                             ui.add(egui::TextEdit::singleline(&mut self.snapshot_name)
                                 .hint_text("e.g. Before adding Bluetooth").desired_width(ui.available_width()))
                         }).inner;
-                        if name_response.gained_focus() || (self.snapshot_name.is_empty() && !ctx.wants_keyboard_input()) { name_response.request_focus(); }
+                        if name_response.gained_focus() || (self.snapshot_name.is_empty() && !ctx.egui_wants_keyboard_input()) { name_response.request_focus(); }
                         let can_save = !self.snapshot_name.trim().is_empty() && self.receiver.is_none();
                         if can_save && name_response.lost_focus() && ui.input(|input|input.key_pressed(egui::Key::Enter)) { action = Some(Action::Save); }
                         ui.horizontal(|ui| {
@@ -1453,7 +1456,7 @@ impl Explorer {
                         if snapshots.is_empty() { ui.label("No snapshots for this firmware yet."); }
                         else {
                             ui.label("Select a snapshot to compare with the loaded firmware.");
-                            egui::ScrollArea::vertical().max_height((ctx.screen_rect().height() - 360.0).clamp(100.0, 340.0)).auto_shrink([false,true]).show(ui,|ui| {
+                            egui::ScrollArea::vertical().max_height((ctx.content_rect().height() - 360.0).clamp(100.0, 340.0)).auto_shrink([false,true]).show(ui,|ui| {
                                 for snapshot in snapshots {
                                     ui.push_id((&snapshot.firmware, &snapshot.name), |ui| {
                                         let (compare, delete) = snapshot_row(ui, snapshot, self.snapshot_label() == Some(snapshot.name.as_str()));
@@ -2225,7 +2228,8 @@ mod tests {
                     );
                     let mut settled = None;
                     for frame in 0..20 {
-                        let _ = ctx.run(
+                        let _ = crate::tests::run_ui(
+                            &ctx,
                             egui::RawInput {
                                 screen_rect: Some(screen),
                                 ..Default::default()
@@ -2257,7 +2261,8 @@ mod tests {
             let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
             let mut output = None;
             for _ in 0..3 {
-                output = Some(ctx.run(
+                output = Some(crate::tests::run_ui(
+                    &ctx,
                     egui::RawInput {
                         screen_rect: Some(screen),
                         ..Default::default()
@@ -2319,7 +2324,8 @@ mod tests {
         app.open_snapshot_manager();
         let ctx = egui::Context::default();
         let frame = |app: &mut Explorer, events| {
-            ctx.run(
+            crate::tests::run_ui(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2364,7 +2370,8 @@ mod tests {
         app: &mut Explorer,
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
-        ctx.run(
+        crate::tests::run_ui(
+            ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -2650,7 +2657,8 @@ mod tests {
         app.open_snapshot_manager();
         let ctx = egui::Context::default();
         let revision = app.report_revision;
-        let _ = ctx.run(
+        let _ = crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -2663,13 +2671,10 @@ mod tests {
                     repeat: false,
                     modifiers: egui::Modifiers::NONE,
                 }],
-                dropped_files: vec![egui::DroppedFile {
-                    path: Some(root.join("app.elf")),
-                    ..Default::default()
-                }],
+                dropped_files: vec![crate::tests::dropped_file(root.join("app.elf"))],
                 ..Default::default()
             },
-            |ctx| app.show(ctx),
+            |ui| app.show(ui),
         );
         assert!(app.receiver.is_none());
         assert_eq!(app.report_revision, revision);
@@ -2906,7 +2911,8 @@ mod tests {
         let render = |app: &mut Explorer, view: View| {
             app.change_view(view);
             app.search = "probe".into();
-            let output = ctx.run(
+            let output = crate::tests::run_ui(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -2914,8 +2920,8 @@ mod tests {
                     )),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| match view {
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| match view {
                         View::Files => app.files(ui, &current),
                         View::Symbols => app.symbols(ui, &current),
                         View::Sections => app.sections(ui, &current),
@@ -2998,7 +3004,8 @@ mod tests {
             "{texts:?}"
         );
 
-        let output = ctx.run(
+        let output = crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -3006,8 +3013,8 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.directory_tree(ui, &current));
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.directory_tree(ui, &current));
             },
         );
         assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(t) if t.galley.text().contains("old_probe.c") && t.galley.text().contains("removed"))));
@@ -3028,7 +3035,8 @@ mod tests {
         app.change_view(View::Dependencies);
         app.search = "old_probe".into();
         let output = super::super::dependencies::settle_graph(&mut app, |app| {
-            ctx.run(
+            crate::tests::run_ui(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -3036,8 +3044,8 @@ mod tests {
                     )),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| app.dependency_view(ui, &current));
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| app.dependency_view(ui, &current));
                 },
             )
         });
@@ -3145,8 +3153,8 @@ mod tests {
         app.analysis = Some(Arc::new(current.clone()));
         app.sync_snapshot_comparison();
         let ctx = egui::Context::default();
-        let output = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| app.overview_pie(ui, &current));
+        let output = crate::tests::run_ui(&ctx, Default::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.overview_pie(ui, &current));
         });
         let label = output
             .shapes
@@ -3169,7 +3177,8 @@ mod tests {
         app: &mut Explorer,
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
-        ctx.run(
+        crate::tests::run_ui(
+            ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -3178,7 +3187,7 @@ mod tests {
                 events,
                 ..Default::default()
             },
-            |ctx| app.show(ctx),
+            |ui| app.show(ui),
         )
     }
     fn click_shell_text(ctx: &egui::Context, app: &mut Explorer, label: &str) {
@@ -3401,7 +3410,8 @@ mod tests {
         let ctx = egui::Context::default();
         for view in View::ALL {
             app.change_view(view);
-            let output = ctx.run(
+            let output = crate::tests::run_ui(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -3409,7 +3419,7 @@ mod tests {
                     )),
                     ..Default::default()
                 },
-                |ctx| app.show(ctx),
+                |ui| app.show(ui),
             );
             if view == View::Memory {
                 assert!(app.visible_rows > 0);
@@ -3434,8 +3444,8 @@ mod tests {
         app.change_view(View::Symbols);
         let a = app.analysis.clone().unwrap();
         let render = |app: &mut Explorer| {
-            let _ = ctx.run(Default::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.symbols(ui, &a));
+            let _ = crate::tests::run_ui(&ctx, Default::default(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.symbols(ui, &a));
             });
         };
         render(&mut app);
@@ -3599,8 +3609,8 @@ mod tests {
         let ctx = egui::Context::default();
         let render = |app: &mut Explorer| {
             let a = app.analysis.clone().unwrap();
-            let _ = ctx.run(Default::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.overview_pie(ui, &a));
+            let _ = crate::tests::run_ui(&ctx, Default::default(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.overview_pie(ui, &a));
             });
         };
         render(&mut app);
@@ -3666,23 +3676,23 @@ mod tests {
         assert!(app.diff_visible("symbol", &added_id));
         let a = app.analysis.clone().unwrap();
         let ctx = egui::Context::default();
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| app.symbols(ui, &a));
+        let _ = crate::tests::run_ui(&ctx, Default::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.symbols(ui, &a));
         });
         assert_eq!(app.visible_rows, 3);
         app.show_address_changes[View::Symbols as usize] = false;
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| app.symbols(ui, &a));
+        let _ = crate::tests::run_ui(&ctx, Default::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.symbols(ui, &a));
         });
         assert_eq!(app.visible_rows, 2);
         app.show_address_changes[View::Symbols as usize] = true;
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| app.symbols(ui, &a));
+        let _ = crate::tests::run_ui(&ctx, Default::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.symbols(ui, &a));
         });
         assert_eq!(app.visible_rows, 3);
         app.search = "diff_added_symbol".into();
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| app.symbols(ui, &a));
+        let _ = crate::tests::run_ui(&ctx, Default::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.symbols(ui, &a));
         });
         assert_eq!(app.visible_rows, 1);
     }
@@ -3708,7 +3718,8 @@ mod tests {
         app.change_view(super::super::View::Symbols);
         app.search = name;
         let ctx = egui::Context::default();
-        let output = ctx.run(
+        let output = crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -3716,8 +3727,8 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.symbols(ui, &a));
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.symbols(ui, &a));
             },
         );
         let texts: Vec<_> = output

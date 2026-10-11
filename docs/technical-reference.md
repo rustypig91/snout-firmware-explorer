@@ -17,7 +17,7 @@ A standalone Rust desktop application and CLI for understanding embedded firmwar
 
 ## Opening firmware and selecting supporting files
 
-Install a current stable Rust toolchain. Windows builds need the Visual Studio C++ Build Tools and Windows SDK. Linux desktop builds need a working X11 or Wayland session and development packages for Wayland, xkbcommon and OpenGL (on Ubuntu: `libwayland-dev libxkbcommon-dev libgl1-mesa-dev`). The CLI and core do not require desktop libraries.
+Install a current stable Rust toolchain (Rust 1.95 or newer for the desktop application). Windows builds need the Visual Studio C++ Build Tools and Windows SDK. Linux desktop builds need a working X11 or Wayland session and development packages for Wayland and xkbcommon (on Ubuntu: `libwayland-dev libxkbcommon-dev`). The desktop uses wgpu, with Vulkan or OpenGL on Linux and DirectX 12 or Vulkan on Windows. The renderer allows two queued frames and uses automatic presentation without vsync on Linux to avoid compositor waits blocking the UI thread; it retains automatic vsync on Windows. Redrawing remains driven by input, animations and background updates. Startup logs identify the selected graphics backend, adapter and driver. Linux Vulkan rendering needs a Vulkan loader and a suitable GPU driver (on Ubuntu: `libvulkan1` and the vendor driver or `mesa-vulkan-drivers`). The CLI and core do not require desktop libraries.
 
 ```sh
 cargo build --workspace --locked
@@ -88,7 +88,7 @@ The Debian package is named `snout` and installs the GUI as `/usr/bin/snout`. It
 
 After a successful tagged GitHub release, the `publish-apt` job dispatches `publish-apt.yml` on `main` in the shared [Rusty APT repository](https://github.com/rustypig91/rusty-apt). That publisher imports release Debian assets, signs repository metadata, and deploys the APT repository. Pull-request and manual branch builds do not dispatch publication. The application repository needs the `APT_PUBLISH_TOKEN` Actions secret with Actions write access only to `rustypig91/rusty-apt`; signing and Pages configuration belong to the shared repository. A failed dispatch can be recovered by manually running its **Publish APT** workflow.
 
-Build packages locally using `bash scripts/build-release.sh` on x86_64 Debian/Ubuntu or `scripts\build-release.cmd` from a Windows developer shell. Output goes to `target/release-assets/<target>/`. The Linux script needs the desktop build packages listed above, plus `curl`, `pkg-config`, and `dpkg-dev`; packaging downloads linuxdeploy and installs cargo-deb if needed. Windows requires Rust, the C++ Build Tools and Windows SDK; the script downloads portable WiX and Inno Setup. To capture a screenshot locally, install `xvfb xauth xdotool imagemagick`, then run:
+Build packages locally using `bash scripts/build-release.sh` on x86_64 Debian/Ubuntu or `scripts\build-release.cmd` from a Windows developer shell. Output goes to `target/release-assets/<target>/`. The Linux script needs the desktop build packages listed above, plus `curl`, `pkg-config`, and `dpkg-dev`; packaging downloads linuxdeploy and installs cargo-deb if needed. Windows requires Rust, the C++ Build Tools and Windows SDK; the script downloads portable WiX and Inno Setup. To capture a screenshot locally, install `xvfb xauth xdotool imagemagick libvulkan1 mesa-vulkan-drivers`, then run:
 
 ```sh
 bash scripts/capture-screenshot.sh target/release/snout target/snout-screenshot.png fixtures/build/gcc/cortex-m.elf
@@ -122,7 +122,7 @@ Source files use consistent short paths across the desktop views, keeping at lea
 
 - [goblin](https://docs.rs/goblin/0.10.7/goblin/elf/struct.Elf.html) exposes ELF section and program headers, including physical load addresses, directly. This avoids writing a production binary parser.
 - [gimli and addr2line](https://docs.rs/addr2line/0.25.1/addr2line/) provide DWARF line lookup. `cpp_demangle` and `rustc-demangle` preserve raw symbol names alongside readable names.
-- [egui/eframe](https://docs.rs/eframe/0.30.0/eframe/) provides a native Rust desktop frontend with virtualized table rows, contextual help and no web frontend build step. Versions are pinned by `Cargo.lock`; deliberate dependency upgrades should run the full checks.
+- [egui/eframe](https://docs.rs/eframe/0.36.2/eframe/) provides a native Rust desktop frontend rendered with wgpu, with virtualized table rows, contextual help and no web frontend build step. Versions are pinned by `Cargo.lock`; deliberate dependency upgrades should run the full checks. Headless tests exercise egui without a GPU; release screenshots use wgpu with Mesa's Lavapipe Vulkan software driver (`mesa-vulkan-drivers`).
 - [layout-rs](https://docs.rs/layout-rs/0.1.3/layout/) arranges dependency boxes and routes curves in-process, with cached geometry drawn interactively in egui. No Graphviz installation is required. Disassembly dependencies remain deferred until there is a concrete call-graph implementation to validate.
 
 ## What the numbers mean

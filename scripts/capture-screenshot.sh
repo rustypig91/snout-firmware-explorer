@@ -7,10 +7,20 @@ if [[ ${1:-} != --under-xvfb ]]; then
     echo "Usage: bash $0 <binary> <output.png> <elf>" >&2
     exit 2
   fi
+  # Use Mesa's Lavapipe driver for wgpu software rendering. Ubuntu versions
+  # differ in whether the ICD filename includes the architecture.
+  shopt -s nullglob
+  lavapipe_icds=(/usr/share/vulkan/icd.d/lvp_icd*.json)
+  if [[ ${#lavapipe_icds[@]} == 0 ]]; then
+    echo "Install mesa-vulkan-drivers for software screenshot rendering" >&2
+    exit 1
+  fi
   # winit accepts WAYLAND_SOCKET independently of WAYLAND_DISPLAY and honors
   # a caller's X11 scale override even when Xvfb specifies 96 DPI.
   exec env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET \
-    WINIT_X11_SCALE_FACTOR=1 LIBGL_ALWAYS_SOFTWARE=1 TZ=Europe/Stockholm \
+    WINIT_X11_SCALE_FACTOR=1 WGPU_BACKEND=vulkan \
+    VK_DRIVER_FILES="${lavapipe_icds[0]}" VK_ICD_FILENAMES="${lavapipe_icds[0]}" \
+    TZ=Europe/Stockholm \
     xvfb-run --auto-servernum --server-args="-screen 0 1280x900x24 -dpi 96" \
     bash "$0" --under-xvfb "$@"
 fi

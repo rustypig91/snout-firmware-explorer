@@ -623,20 +623,22 @@ impl Explorer {
     }
 }
 impl eframe::App for Explorer {
-    fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
+    fn on_exit(&mut self) {
         if let Err(error) = self.save_preferences() {
             eprintln!("Could not save workspace preferences: {error}");
         }
     }
-    fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         self.poll();
         if self.receiver.is_some() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
         self.poll_updates(ctx);
-        self.show(ctx);
+    }
+    fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
+        self.show(ui);
         if self.snapshot_dialog.is_none() && self.map_warning.is_none() {
-            self.show_updates(ctx);
+            self.show_updates(ui.ctx());
         }
     }
 }
@@ -655,6 +657,19 @@ fn main() -> eframe::Result {
         }
     };
     let options = eframe::NativeOptions {
+        renderer: eframe::Renderer::Wgpu,
+        // Avoid serializing the UI thread with GPU presentation. In particular,
+        // waiting for vsync can block indefinitely on some Linux compositors.
+        wgpu_options: eframe::WgpuConfiguration::default().with_surface_config(
+            eframe::SurfaceConfig {
+                present_mode: if cfg!(target_os = "linux") {
+                    eframe::wgpu::PresentMode::AutoNoVsync
+                } else {
+                    eframe::wgpu::PresentMode::AutoVsync
+                },
+                desired_maximum_frame_latency: Some(2),
+            },
+        ),
         viewport: egui::ViewportBuilder::default()
             .with_icon(
                 eframe::icon_data::from_png_bytes(include_bytes!("../packaging/icons/snout.png"))
@@ -668,6 +683,13 @@ fn main() -> eframe::Result {
         "Rusty's Snout - Firmware Explorer",
         options,
         Box::new(move |cc| {
+            if let Some(render_state) = &cc.wgpu_render_state {
+                let adapter = render_state.adapter.get_info();
+                eprintln!(
+                    "wgpu renderer: {:?}, adapter: {}, driver: {} ({})",
+                    adapter.backend, adapter.name, adapter.driver, adapter.driver_info
+                );
+            }
             shell::configure_style(&cc.egui_ctx);
             #[cfg(target_os = "linux")]
             window_theme::apply_startup_theme(cc.egui_ctx.clone());

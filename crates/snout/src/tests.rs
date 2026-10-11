@@ -17,7 +17,7 @@ fn finish_job(app: &mut Explorer) {
 #[test]
 fn interface_text_respects_minimum_size_except_zoomable_graph_labels() {
     let ctx = egui::Context::default();
-    ctx.style_mut(|style| {
+    ctx.style_mut_of(egui::Theme::Dark, |style| {
         style.text_styles.insert(
             egui::TextStyle::Name("tiny".into()),
             egui::FontId::proportional(6.0),
@@ -25,12 +25,18 @@ fn interface_text_respects_minimum_size_except_zoomable_graph_labels() {
     });
     shell::configure_style(&ctx);
     assert!(ctx
-        .style()
+        .style_of(egui::Theme::Dark)
         .text_styles
         .values()
         .all(|font| font.size >= shell::MIN_TEXT_SIZE));
-    assert_eq!(ctx.style().text_styles[&egui::TextStyle::Small].size, 12.0);
-    assert_eq!(ctx.style().text_styles[&egui::TextStyle::Body].size, 14.0);
+    assert_eq!(
+        ctx.style_of(egui::Theme::Dark).text_styles[&egui::TextStyle::Small].size,
+        12.0
+    );
+    assert_eq!(
+        ctx.style_of(egui::Theme::Dark).text_styles[&egui::TextStyle::Body].size,
+        14.0
+    );
     let analysis = snout_core::analyze_bytes(
         include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
         "test.elf",
@@ -44,7 +50,8 @@ fn interface_text_respects_minimum_size_except_zoomable_graph_labels() {
     for view in View::ALL {
         app.change_view(view);
         let frame = |app: &mut Explorer| {
-            ctx.run(
+            crate::tests::run_ui(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -52,7 +59,7 @@ fn interface_text_respects_minimum_size_except_zoomable_graph_labels() {
                     )),
                     ..Default::default()
                 },
-                |ctx| app.show(ctx),
+                |ui| app.show(ui),
             )
         };
         let output = if view == View::Dependencies {
@@ -277,7 +284,8 @@ fn same_named_symbols_at_different_addresses_expand_independently() {
     };
     let ctx = egui::Context::default();
     for address in addresses {
-        let _ = ctx.run(
+        let _ = crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 events: [true, false]
                     .map(|pressed| egui::Event::Key {
@@ -290,7 +298,7 @@ fn same_named_symbols_at_different_addresses_expand_independently() {
                     .into(),
                 ..Default::default()
             },
-            |ctx| app.show(ctx),
+            |ui| app.show(ui),
         );
         assert_eq!(app.visible_rows, 2);
         assert_eq!(app.details.as_ref().unwrap().0, "shared_local");
@@ -411,8 +419,8 @@ fn stripped_firmware_shows_unresolved_uppercase_stack_reports() {
         ..Default::default()
     };
     let ctx = egui::Context::default();
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| app.stack_view(ui));
+    let _ = crate::tests::run_ui(&ctx, egui::RawInput::default(), |ui| {
+        egui::CentralPanel::default().show(ui, |ui| app.stack_view(ui));
     });
     assert_eq!(app.visible_rows, 7);
 }
@@ -425,15 +433,13 @@ fn dropping_an_elf_opens_its_folder_and_selects_it() {
         .unwrap();
     let mut app = Explorer::default();
     let ctx = egui::Context::default();
-    let _ = ctx.run(
+    let _ = crate::tests::run_ui(
+        &ctx,
         egui::RawInput {
-            dropped_files: vec![egui::DroppedFile {
-                path: Some(path.clone()),
-                ..Default::default()
-            }],
+            dropped_files: vec![crate::tests::dropped_file(path.clone())],
             ..Default::default()
         },
-        |ctx| app.show(ctx),
+        |ui| app.show(ui),
     );
     finish_job(&mut app);
     finish_job(&mut app);
@@ -503,7 +509,8 @@ fn memory_regions_links_to_build_files_and_no_map_choice_survives_restart() {
     app.change_view(View::BuildFiles);
     let ctx = egui::Context::default();
     let frame = |app: &mut Explorer, events| {
-        ctx.run(
+        crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -512,7 +519,7 @@ fn memory_regions_links_to_build_files_and_no_map_choice_survives_restart() {
                 events,
                 ..Default::default()
             },
-            |ctx| app.show(ctx),
+            |ui| app.show(ui),
         )
     };
     let text_pos = |output: &egui::FullOutput, label: &str| {
@@ -777,7 +784,8 @@ fn folder_workflow_selects_firmware_and_loads_stack_automatically() {
         .path
         .ends_with("cortex-m-grown.elf"));
     let ctx = egui::Context::default();
-    let output = ctx.run(
+    let output = crate::tests::run_ui(
+        &ctx,
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -785,7 +793,7 @@ fn folder_workflow_selects_firmware_and_loads_stack_automatically() {
             )),
             ..Default::default()
         },
-        |ctx| app.show(ctx),
+        |ui| app.show(ui),
     );
     assert!(output.viewport_output[&egui::ViewportId::ROOT]
         .commands
@@ -836,7 +844,8 @@ fn arrow_keys_navigate_visible_rows_and_respect_text_focus() {
                 })
             })
             .collect();
-        ctx.run(
+        crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -845,7 +854,7 @@ fn arrow_keys_navigate_visible_rows_and_respect_text_focus() {
                 events,
                 ..Default::default()
             },
-            |ctx| app.show(ctx),
+            |ui| app.show(ui),
         )
     };
     frame(&mut app, None);
@@ -886,7 +895,8 @@ fn arrow_keys_navigate_visible_rows_and_respect_text_focus() {
     egui::TextEdit::store_state(&ctx, id, egui::text_edit::TextEditState::default());
     ctx.memory_mut(|m| m.request_focus(id));
     let analysis = app.analysis.clone().unwrap();
-    let _ = ctx.run(
+    let _ = crate::tests::run_ui(
+        &ctx,
         egui::RawInput {
             events: vec![egui::Event::Key {
                 key: egui::Key::ArrowDown,
@@ -897,8 +907,8 @@ fn arrow_keys_navigate_visible_rows_and_respect_text_focus() {
             }],
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 ui.add(egui::TextEdit::singleline(&mut String::new()).id(id));
                 app.sections(ui, &analysis);
             });
@@ -935,7 +945,8 @@ fn all_data_views_render_headlessly() {
         app.view = view;
         for search in ["", "no such symbol"] {
             app.search = search.into();
-            let output = ctx.run(
+            let output = crate::tests::run_ui(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -943,8 +954,8 @@ fn all_data_views_render_headlessly() {
                     )),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| match view {
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| match view {
                         View::Overview => app.overview(ui, &analysis),
                         View::Files => app.files(ui, &analysis),
                         View::Symbols => app.symbols(ui, &analysis),
@@ -987,12 +998,13 @@ fn compact_shell_renders_all_views_with_optional_panes() {
                     "Selection".into(),
                     "Address: 0x08000000\nSource: main.c:1".into(),
                 ));
-                let output = ctx.run(
+                let output = crate::tests::run_ui(
+                    &ctx,
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                         ..Default::default()
                     },
-                    |ctx| app.show(ctx),
+                    |ui| app.show(ui),
                 );
                 assert!(!output.shapes.is_empty());
             }
@@ -1019,7 +1031,8 @@ fn tabs_row_selection_and_escape_work_in_the_shell() {
         app: &mut Explorer,
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
-        ctx.run(
+        crate::tests::run_ui(
+            ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1028,7 +1041,7 @@ fn tabs_row_selection_and_escape_work_in_the_shell() {
                 events,
                 ..Default::default()
             },
-            |ctx| app.show(ctx),
+            |ui| app.show(ui),
         )
     }
     fn text_position(output: &egui::FullOutput, text: &str) -> egui::Pos2 {
@@ -1075,7 +1088,13 @@ fn tabs_row_selection_and_escape_work_in_the_shell() {
             .iter()
             .filter(|shape| match &shape.shape {
                 egui::Shape::Rect(rect) => {
-                    rect.fill == ctx.style().visuals.widgets.hovered.bg_fill
+                    rect.fill
+                        == ctx
+                            .style_of(egui::Theme::Dark)
+                            .visuals
+                            .widgets
+                            .hovered
+                            .bg_fill
                         && rect.rect.top() <= text_pos.y
                         && rect.rect.bottom() >= text_pos.y
                 }
@@ -1193,7 +1212,10 @@ fn tabs_row_selection_and_escape_work_in_the_shell() {
         }),
         "Selected text needs a visible selection background"
     );
-    assert_ne!(views::TEXT_SELECTION, ctx.style().visuals.selection.bg_fill);
+    assert_ne!(
+        views::TEXT_SELECTION,
+        ctx.style_of(egui::Theme::Dark).visuals.selection.bg_fill
+    );
     click(&ctx, &mut app, text_position(&output, ".text"));
     assert!(
         app.details.is_none(),
@@ -1294,7 +1316,8 @@ fn configured_regions_render_bars_and_search_without_symbols() {
         app.selected_region = Some(region); // Legacy selection must not open a symbol browser.
         for search in ["", "no-such-region-symbol"] {
             app.search = search.into();
-            let output = ctx.run(
+            let output = crate::tests::run_ui(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1302,8 +1325,8 @@ fn configured_regions_render_bars_and_search_without_symbols() {
                     )),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| app.memory_map(ui, &analysis));
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| app.memory_map(ui, &analysis));
                 },
             );
             assert!(!output.shapes.is_empty());
@@ -1346,7 +1369,8 @@ fn header_reload_is_right_aligned_clickable_and_replaced_while_loading() {
     let ctx = egui::Context::default();
     shell::configure_style(&ctx);
     let frame = |app: &mut Explorer, width, events| {
-        ctx.run(
+        crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1355,7 +1379,7 @@ fn header_reload_is_right_aligned_clickable_and_replaced_while_loading() {
                 events,
                 ..Default::default()
             },
-            |ctx| app.show(ctx),
+            |ui| app.show(ui),
         )
     };
     // Locate the drawn reload arc; the icon-only control has no visible text.
@@ -1458,7 +1482,7 @@ fn changed_firmware_indicator_survives_failed_reload_and_clears_on_success() {
     assert!(app.error.is_some());
     assert!(Arc::ptr_eq(&report, app.analysis.as_ref().unwrap()));
     assert!(app.firmware_watch.changed());
-    let output = ctx.run(egui::RawInput::default(), |ctx| app.show(ctx));
+    let output = crate::tests::run_ui(&ctx, egui::RawInput::default(), |ui| app.show(ui));
     assert!(
         output.shapes.iter().any(|shape| matches!(&shape.shape,
             egui::Shape::Circle(circle) if circle.radius == 2.5
@@ -1827,7 +1851,8 @@ fn local_frame_bars_compare_visible_memory_without_covering_the_numbers() {
     let ctx = egui::Context::default();
     shell::configure_style(&ctx);
     let frame = |app: &mut Explorer| {
-        ctx.run(
+        crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1835,8 +1860,8 @@ fn local_frame_bars_compare_visible_memory_without_covering_the_numbers() {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.stack_view(ui));
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.stack_view(ui));
             },
         )
     };
@@ -1942,7 +1967,8 @@ fn memory_bars_scale_size_flash_and_ram_independently_in_each_table() {
         let ctx = egui::Context::default();
         shell::configure_style(&ctx);
         let frame = |app: &mut Explorer| {
-            ctx.run(
+            crate::tests::run_ui(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1950,8 +1976,8 @@ fn memory_bars_scale_size_flash_and_ram_independently_in_each_table() {
                     )),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| match view {
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| match view {
                         View::Sections => app.sections(ui, &analysis),
                         View::Symbols => app.symbols(ui, &analysis),
                         View::Files => app.files(ui, &analysis),
@@ -2015,8 +2041,8 @@ fn stack_view_scopes_rows_to_selected_elf_and_keeps_unresolved_available() {
     let ctx = egui::Context::default();
     for (show_unresolved, expected) in [(false, 7), (true, 8)] {
         app.stack_show_unresolved = show_unresolved;
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| app.stack_view(ui));
+        let _ = crate::tests::run_ui(&ctx, egui::RawInput::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.stack_view(ui));
         });
         assert_eq!(app.visible_rows, expected);
     }
@@ -2229,7 +2255,8 @@ fn committed_fixture_renders_six_boxes_and_sixteen_dependency_arrowheads() {
     let ctx = egui::Context::default();
     shell::configure_style(&ctx);
     let output = dependencies::settle_graph(&mut app, |app| {
-        ctx.run(
+        crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -2237,7 +2264,7 @@ fn committed_fixture_renders_six_boxes_and_sixteen_dependency_arrowheads() {
                 )),
                 ..Default::default()
             },
-            |ctx| app.show(ctx),
+            |ui| app.show(ui),
         )
     });
     let boxes: Vec<_> = output
@@ -2273,7 +2300,11 @@ fn committed_fixture_renders_six_boxes_and_sixteen_dependency_arrowheads() {
             }
         }
     }
-    let arrow_color = ctx.style().visuals.text_color().gamma_multiply(0.3);
+    let arrow_color = ctx
+        .style_of(egui::Theme::Dark)
+        .visuals
+        .text_color()
+        .gamma_multiply(0.3);
     let arrows = output.shapes.iter().filter(|shape| matches!(&shape.shape,
         egui::Shape::Path(path) if path.closed && path.points.len() == 3 && path.fill == arrow_color
     )).count();
@@ -2427,9 +2458,10 @@ fn sidebar_scrolls_past_long_supporting_lists_to_the_next_firmware() {
         ..Default::default()
     };
     let ctx = egui::Context::default();
-    ctx.style_mut(|style| style.animation_time = 0.0);
+    ctx.style_mut_of(egui::Theme::Dark, |style| style.animation_time = 0.0);
     let mut frame = |scroll| {
-        ctx.run(
+        crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -2439,6 +2471,7 @@ fn sidebar_scrolls_past_long_supporting_lists_to_the_next_firmware() {
                     vec![
                         egui::Event::PointerMoved(egui::pos2(100.0, 250.0)),
                         egui::Event::MouseWheel {
+                            phase: egui::TouchPhase::Move,
                             unit: egui::MouseWheelUnit::Point,
                             delta: egui::vec2(0.0, -1_000_000.0),
                             modifiers: egui::Modifiers::NONE,
@@ -2449,7 +2482,7 @@ fn sidebar_scrolls_past_long_supporting_lists_to_the_next_firmware() {
                 },
                 ..Default::default()
             },
-            |ctx| app.build_browser(ctx),
+            |ui| app.build_browser(ui),
         )
     };
     let labels = |output: &egui::FullOutput| {
@@ -2506,9 +2539,10 @@ fn sidebar_large_firmware_list_only_builds_visible_rows() {
         ..Default::default()
     };
     let ctx = egui::Context::default();
-    ctx.style_mut(|style| style.animation_time = 0.0);
+    ctx.style_mut_of(egui::Theme::Dark, |style| style.animation_time = 0.0);
     let frame = |app: &mut Explorer, scroll| {
-        ctx.run(
+        crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -2518,6 +2552,7 @@ fn sidebar_large_firmware_list_only_builds_visible_rows() {
                     vec![
                         egui::Event::PointerMoved(egui::pos2(100.0, 250.0)),
                         egui::Event::MouseWheel {
+                            phase: egui::TouchPhase::Move,
                             unit: egui::MouseWheelUnit::Point,
                             delta: egui::vec2(0.0, -100_000.0),
                             modifiers: egui::Modifiers::NONE,
@@ -2528,7 +2563,7 @@ fn sidebar_large_firmware_list_only_builds_visible_rows() {
                 },
                 ..Default::default()
             },
-            |ctx| app.build_browser(ctx),
+            |ui| app.build_browser(ui),
         )
     };
     frame(&mut app, false);
@@ -2548,8 +2583,8 @@ fn sidebar_large_firmware_list_only_builds_visible_rows() {
     // Recover the first header's persistent ID through the same scoped UI.
     // An expanded row must still be found after it scrolls out of view.
     let mut first_header = None;
-    let _ = ctx.run(Default::default(), |ctx| {
-        egui::SidePanel::left("build_artifacts").show(ctx, |ui| {
+    let _ = crate::tests::run_ui(&ctx, Default::default(), |ui| {
+        egui::Panel::left("build_artifacts").show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.push_id(root.join("firmware_0000.elf"), |ui| {
                     first_header = Some(ui.make_persistent_id("firmware_files"));
@@ -2605,9 +2640,10 @@ fn sidebar_expands_firmware_loaded_outside_the_sidebar() {
     app.scan_build(root);
     finish_job(&mut app);
     let ctx = egui::Context::default();
-    ctx.style_mut(|style| style.animation_time = 0.0);
+    ctx.style_mut_of(egui::Theme::Dark, |style| style.animation_time = 0.0);
     let frame = |app: &mut Explorer, events| {
-        ctx.run(
+        crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -2616,7 +2652,7 @@ fn sidebar_expands_firmware_loaded_outside_the_sidebar() {
                 events,
                 ..Default::default()
             },
-            |ctx| app.build_browser(ctx),
+            |ui| app.build_browser(ui),
         )
     };
     // The folder is drawn before startup restoration or an external open completes.
@@ -2736,9 +2772,10 @@ fn build_files_without_firmware_does_not_load_supporting_files() {
     app.scan_build(root.clone());
     finish_job(&mut app);
     let ctx = egui::Context::default();
-    ctx.style_mut(|style| style.animation_time = 0.0);
+    ctx.style_mut_of(egui::Theme::Dark, |style| style.animation_time = 0.0);
     let frame = |app: &mut Explorer, events| {
-        ctx.run(
+        crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -2747,7 +2784,7 @@ fn build_files_without_firmware_does_not_load_supporting_files() {
                 events,
                 ..Default::default()
             },
-            |ctx| app.build_browser(ctx),
+            |ui| app.build_browser(ui),
         )
     };
     for name in ["only.map", "only.su"] {
@@ -2809,13 +2846,14 @@ fn sidebar_checkboxes_and_map_radios_apply_choices_to_current_elf() {
     app.open(elf.clone());
     finish_job(&mut app);
     let ctx = egui::Context::default();
-    ctx.style_mut(|style| style.animation_time = 0.0);
+    ctx.style_mut_of(egui::Theme::Dark, |style| style.animation_time = 0.0);
     fn frame(
         ctx: &egui::Context,
         app: &mut Explorer,
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
-        ctx.run(
+        crate::tests::run_ui(
+            ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -2824,7 +2862,7 @@ fn sidebar_checkboxes_and_map_radios_apply_choices_to_current_elf() {
                 events,
                 ..Default::default()
             },
-            |ctx| app.build_browser(ctx),
+            |ui| app.build_browser(ui),
         )
     }
     fn click(ctx: &egui::Context, app: &mut Explorer, pos: egui::Pos2) {
@@ -3441,7 +3479,8 @@ fn check_recent_folder_submenu(width: f32, folder_name: &str) {
     let ctx = egui::Context::default();
     shell::configure_style(&ctx);
     let frame = |app: &mut Explorer, events| {
-        ctx.run(
+        crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -3450,7 +3489,7 @@ fn check_recent_folder_submenu(width: f32, folder_name: &str) {
                 events,
                 ..Default::default()
             },
-            |ctx| app.show(ctx),
+            |ui| app.show(ui),
         )
     };
     let text_rect = |output: &egui::FullOutput, text: &str| {
@@ -3693,7 +3732,8 @@ fn dashboard_cards_fit_and_navigation_remains_visible_at_both_widths() {
         };
         let mut output = egui::FullOutput::default();
         for _ in 0..3 {
-            output = ctx.run(
+            output = crate::tests::run_ui(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -3701,7 +3741,7 @@ fn dashboard_cards_fit_and_navigation_remains_visible_at_both_widths() {
                     )),
                     ..Default::default()
                 },
-                |ctx| app.show(ctx),
+                |ui| app.show(ui),
             );
         }
         for label in View::ALL
@@ -3831,7 +3871,8 @@ fn distribution_legend_opens_sections_without_resetting_overview_filters() {
     };
     let ctx = egui::Context::default();
     let frame = |app: &mut Explorer, events| {
-        ctx.run(
+        crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -3840,8 +3881,8 @@ fn distribution_legend_opens_sections_without_resetting_overview_filters() {
                 events,
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     app.section_distribution(ui, &analysis, overview::Metric::Flash)
                 });
             },
@@ -3906,9 +3947,10 @@ fn build_files_scan_notes_remain_accessible_after_loading_firmware() {
         };
         let ctx = egui::Context::default();
         shell::configure_style(&ctx);
-        ctx.style_mut(|style| style.animation_time = 0.0);
+        ctx.style_mut_of(egui::Theme::Dark, |style| style.animation_time = 0.0);
         let frame = |app: &mut Explorer, events| {
-            ctx.run(
+            crate::tests::run_ui(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -3917,7 +3959,7 @@ fn build_files_scan_notes_remain_accessible_after_loading_firmware() {
                     events,
                     ..Default::default()
                 },
-                |ctx| app.show(ctx),
+                |ui| app.show(ui),
             )
         };
         frame(&mut app, vec![]);
@@ -3983,7 +4025,8 @@ fn header_switches_elf_and_build_files_selects_support_without_leaving_the_tab()
         app: &mut Explorer,
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
-        ctx.run(
+        crate::tests::run_ui(
+            ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -3992,7 +4035,7 @@ fn header_switches_elf_and_build_files_selects_support_without_leaving_the_tab()
                 events,
                 ..Default::default()
             },
-            |ctx| app.show(ctx),
+            |ui| app.show(ui),
         )
     }
     fn text_pos(output: &egui::FullOutput, label: &str) -> egui::Pos2 {
@@ -4109,7 +4152,8 @@ fn overview_matches_reference_column_and_memory_bar_alignment() {
     shell::configure_style(&ctx);
     let mut output = egui::FullOutput::default();
     for _ in 0..3 {
-        output = ctx.run(
+        output = crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -4117,7 +4161,7 @@ fn overview_matches_reference_column_and_memory_bar_alignment() {
                 )),
                 ..Default::default()
             },
-            |ctx| app.show(ctx),
+            |ui| app.show(ui),
         );
     }
     let text_pos = |label: &str| {
@@ -4295,7 +4339,8 @@ fn overview_memory_keeps_totals_and_bars_visible_with_many_regions() {
         app.ensure_region_cache(&analysis);
         let mut output = egui::FullOutput::default();
         for _ in 0..2 {
-            output = ctx.run(
+            output = crate::tests::run_ui(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -4303,8 +4348,8 @@ fn overview_memory_keeps_totals_and_bars_visible_with_many_regions() {
                     )),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| app.compact_memory(ui, &analysis));
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| app.compact_memory(ui, &analysis));
                 },
             );
         }
@@ -4350,7 +4395,8 @@ fn overview_memory_dropdown_and_regions_link_work_and_unknown_capacity_has_no_ba
     app.ensure_region_cache(&a);
     let ctx = egui::Context::default();
     let frame = |app: &mut Explorer, events| {
-        ctx.run(
+        crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -4359,8 +4405,8 @@ fn overview_memory_dropdown_and_regions_link_work_and_unknown_capacity_has_no_ba
                 events,
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.compact_memory(ui, &a));
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.compact_memory(ui, &a));
             },
         )
     };
@@ -4419,8 +4465,8 @@ fn overview_memory_dropdown_and_regions_link_work_and_unknown_capacity_has_no_ba
 
     a.options.regions.clear();
     app.ensure_region_cache(&a);
-    let output = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| app.compact_memory(ui, &a));
+    let output = crate::tests::run_ui(&ctx, egui::RawInput::default(), |ui| {
+        egui::CentralPanel::default().show(ui, |ui| app.compact_memory(ui, &a));
     });
     assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
         egui::Shape::Text(text) if text.galley.text() == "Capacity unknown"
@@ -4595,7 +4641,8 @@ fn distribution_colors_are_distinct_match_legend_and_ignore_section_names() {
     let render_colors = |a: &snout_core::Analysis| {
         let ctx = egui::Context::default();
         let mut app = Explorer::default();
-        let output = ctx.run(
+        let output = crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -4603,8 +4650,8 @@ fn distribution_colors_are_distinct_match_legend_and_ignore_section_names() {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     app.section_distribution(ui, a, overview::Metric::Flash)
                 });
             },
@@ -4679,7 +4726,8 @@ fn section_distributions_use_separate_flash_and_static_ram_sizes() {
         let ctx = egui::Context::default();
         let mut app = Explorer::default();
         let render = |app: &mut Explorer, analysis: &snout_core::Analysis| {
-            ctx.run(
+            crate::tests::run_ui(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -4687,9 +4735,9 @@ fn section_distributions_use_separate_flash_and_static_ram_sizes() {
                     )),
                     ..Default::default()
                 },
-                |ctx| {
+                |ui| {
                     egui::CentralPanel::default()
-                        .show(ctx, |ui| app.section_distribution(ui, analysis, metric));
+                        .show(ui, |ui| app.section_distribution(ui, analysis, metric));
                 },
             )
         };
@@ -4774,7 +4822,8 @@ fn dashboard_distribution_legends_remain_readable_at_minimum_window_size() {
     shell::configure_style(&ctx);
     let mut output = egui::FullOutput::default();
     for _ in 0..3 {
-        output = ctx.run(
+        output = crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -4782,7 +4831,7 @@ fn dashboard_distribution_legends_remain_readable_at_minimum_window_size() {
                 )),
                 ..Default::default()
             },
-            |ctx| app.show(ctx),
+            |ui| app.show(ui),
         );
     }
     for name in names[..5].iter().copied().chain(["Other"]) {
@@ -4833,7 +4882,8 @@ fn dashboard_memory_controls_fit_at_minimum_window_size() {
     shell::configure_style(&ctx);
     let mut output = egui::FullOutput::default();
     for _ in 0..3 {
-        output = ctx.run(
+        output = crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -4841,7 +4891,7 @@ fn dashboard_memory_controls_fit_at_minimum_window_size() {
                 )),
                 ..Default::default()
             },
-            |ctx| app.show(ctx),
+            |ui| app.show(ui),
         );
     }
     let bars: Vec<_> = output
@@ -4886,7 +4936,8 @@ fn firmware_dropdown_scrolling_keeps_the_last_row_at_the_bottom() {
     let ctx = egui::Context::default();
     shell::configure_style(&ctx);
     let frame = |app: &mut Explorer, events| {
-        ctx.run(
+        crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -4895,8 +4946,8 @@ fn firmware_dropdown_scrolling_keeps_the_last_row_at_the_bottom() {
                 events,
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.firmware_selector(ui));
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.firmware_selector(ui));
             },
         )
     };
@@ -4924,6 +4975,7 @@ fn firmware_dropdown_scrolling_keeps_the_last_row_at_the_bottom() {
         vec![
             egui::Event::PointerMoved(egui::pos2(100.0, 130.0)),
             egui::Event::MouseWheel {
+                phase: egui::TouchPhase::Move,
                 unit: egui::MouseWheelUnit::Point,
                 delta: egui::vec2(0.0, -100000.0),
                 modifiers: egui::Modifiers::NONE,
@@ -5029,7 +5081,8 @@ fn dashboard_rankings_show_ten_functions_and_refresh_after_report_replacement() 
         ..Default::default()
     };
     let frame = |app: &mut Explorer| {
-        ctx.run(
+        crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -5037,7 +5090,7 @@ fn dashboard_rankings_show_ten_functions_and_refresh_after_report_replacement() 
                 )),
                 ..Default::default()
             },
-            |ctx| app.show(ctx),
+            |ui| app.show(ui),
         )
     };
     frame(&mut app);
@@ -5111,7 +5164,8 @@ fn dashboard_file_labels_match_baseline_tables_and_reuse_path_cache() {
     let ctx = egui::Context::default();
     shell::configure_style(&ctx);
     for _ in 0..2 {
-        let output = ctx.run(
+        let output = crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -5119,7 +5173,7 @@ fn dashboard_file_labels_match_baseline_tables_and_reuse_path_cache() {
                 )),
                 ..Default::default()
             },
-            |ctx| app.show(ctx),
+            |ui| app.show(ui),
         );
         assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
             egui::Shape::Text(text) if text.galley.text() == "app/src/main.c")));
@@ -5158,7 +5212,8 @@ fn sections_expose_tls_template_and_variable_details_without_inventing_total_ram
     let ctx = egui::Context::default();
     shell::configure_style(&ctx);
     let frame = |app: &mut Explorer, events| {
-        ctx.run(
+        crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -5167,12 +5222,12 @@ fn sections_expose_tls_template_and_variable_details_without_inventing_total_ram
                 events,
                 ..Default::default()
             },
-            |ctx| app.show(ctx),
+            |ui| app.show(ui),
         )
     };
     app.search = "stale section filter".into();
     // The dashboard link must reveal details even after a user collapses them.
-    ctx.style_mut(|style| style.animation_time = 0.0);
+    ctx.style_mut_of(egui::Theme::Dark, |style| style.animation_time = 0.0);
     frame(&mut app, vec![]);
     let output = frame(&mut app, vec![]);
     let header = output
@@ -5274,12 +5329,13 @@ fn build_files_selection_panels_fit_small_and_large_windows() {
         let ctx = egui::Context::default();
         shell::configure_style(&ctx);
         let frame = |app: &mut Explorer| {
-            ctx.run(
+            crate::tests::run_ui(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     ..Default::default()
                 },
-                |ctx| app.show(ctx),
+                |ui| app.show(ui),
             )
         };
         frame(&mut app);
@@ -5334,13 +5390,14 @@ fn overview_no_map_warning_and_build_files_link_fit_and_navigate() {
         let ctx = egui::Context::default();
         shell::configure_style(&ctx);
         let frame = |app: &mut Explorer, events| {
-            ctx.run(
+            crate::tests::run_ui(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     events,
                     ..Default::default()
                 },
-                |ctx| app.show(ctx),
+                |ui| app.show(ui),
             )
         };
         frame(&mut app, vec![]);
@@ -5425,7 +5482,8 @@ fn map_warning_with_long_filenames_fits_minimum_window() {
     let ctx = egui::Context::default();
     shell::configure_style(&ctx);
     for _ in 0..10 {
-        let _ = ctx.run(
+        let _ = crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -5460,7 +5518,8 @@ fn map_warning_stays_stationary_at_fractional_display_scales() {
         for height in [600.0, 601.0, 773.0, 801.0, 843.0] {
             let mut settled = None;
             for frame in 0..20 {
-                let _ = ctx.run(
+                let _ = crate::tests::run_ui(
+                    &ctx,
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -5521,9 +5580,10 @@ fn map_warning_blocks_background_and_reverts_or_ignores_without_losing_report() 
         ctx: &egui::Context,
         app: &mut Explorer,
         events: Vec<egui::Event>,
-        dropped_files: Vec<egui::DroppedFile>,
+        dropped_files: Vec<egui::DroppedFileHandle>,
     ) -> egui::FullOutput {
-        ctx.run(
+        crate::tests::run_ui(
+            ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -5533,7 +5593,7 @@ fn map_warning_blocks_background_and_reverts_or_ignores_without_losing_report() 
                 dropped_files,
                 ..Default::default()
             },
-            |ctx| app.show(ctx),
+            |ui| app.show(ui),
         )
     }
     fn click(ctx: &egui::Context, app: &mut Explorer, pos: egui::Pos2) {
@@ -5589,10 +5649,7 @@ fn map_warning_blocks_background_and_reverts_or_ignores_without_losing_report() 
             repeat: false,
             modifiers: egui::Modifiers::NONE,
         }],
-        vec![egui::DroppedFile {
-            path: Some(elf),
-            ..Default::default()
-        }],
+        vec![crate::tests::dropped_file(elf)],
     );
     assert!(app.receiver.is_none());
     assert!(app.map_warning.is_some());
@@ -5665,4 +5722,31 @@ fn map_warning_blocks_background_and_reverts_or_ignores_without_losing_report() 
     app.apply_map(map);
     finish_job(&mut app);
     assert!(app.map_warning.is_none());
+}
+
+#[derive(Debug)]
+struct TestDroppedFile(std::path::PathBuf);
+impl egui::DroppedFile for TestDroppedFile {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|error| error.to_string())
+    }
+}
+pub(crate) fn dropped_file(path: std::path::PathBuf) -> egui::DroppedFileHandle {
+    Arc::new(TestDroppedFile(path))
+}
+
+// Headless tests inspect shapes without a renderer; consume texture updates
+// explicitly, as required by egui's FullOutput lifecycle.
+pub(crate) fn run_ui(
+    ctx: &egui::Context,
+    input: egui::RawInput,
+    ui: impl FnMut(&mut egui::Ui),
+) -> egui::FullOutput {
+    ctx.set_theme(egui::Theme::Dark);
+    let mut output = ctx.run_ui(input, ui);
+    output.textures_delta.clear();
+    output
 }

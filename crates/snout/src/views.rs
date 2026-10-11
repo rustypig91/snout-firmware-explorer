@@ -285,7 +285,7 @@ impl Explorer {
                 && s.headers.iter().zip(headers).all(|(a, (b, _))| a == b)
         });
         if !valid {
-            let desired = ui.fonts(|f| {
+            let desired = ui.fonts_mut(|f| {
                 let mono_advance =
                     (f.glyph_width(&fonts[1], 'M') * pixels_per_point).round() / pixels_per_point;
                 headers
@@ -381,7 +381,7 @@ impl Explorer {
             && self.map_warning.is_none()
             && ui.memory(|m| m.allows_interaction(ui.layer_id()))
             && !editing_text
-            && !ui.memory(|m| m.any_popup_open())
+            && !egui::Popup::is_any_open(ui.ctx())
         {
             ui.input_mut(|input| {
                 if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
@@ -1377,8 +1377,8 @@ mod cache_tests {
             ..Default::default()
         };
         let ctx = egui::Context::default();
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| app.symbols(ui, &analysis));
+        let _ = crate::tests::run_ui(&ctx, Default::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.symbols(ui, &analysis));
         });
         assert_eq!(app.visible_rows, 1);
         let cache = app.table_cache.rows[View::Symbols as usize].borrow();
@@ -1431,7 +1431,8 @@ mod cache_tests {
             ..Default::default()
         };
         let ctx = egui::Context::default();
-        let output = ctx.run(
+        let output = crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1439,8 +1440,8 @@ mod cache_tests {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     app.table(
                         ui,
                         &[("Symbol", ""), ("Flash", ""), ("RAM", ""), ("Source", "")],
@@ -1478,8 +1479,8 @@ mod cache_tests {
         let source = Rc::new(source_rows);
         let mut app = Explorer::default();
         let ctx = egui::Context::default();
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = crate::tests::run_ui(&ctx, Default::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 let headers = [("Name", ""), ("Size", "")];
                 let (first, reset) = app.column_widths(ui, &headers, source.clone(), 1200.0);
                 assert!(reset);
@@ -1553,8 +1554,8 @@ mod cache_tests {
             ..Default::default()
         };
         let ctx = egui::Context::default();
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| app.files(ui, &a));
+        let _ = crate::tests::run_ui(&ctx, Default::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.files(ui, &a));
         });
         let rows = app.table_cache.rows[View::Files as usize]
             .borrow()
@@ -1603,8 +1604,8 @@ mod cache_tests {
         };
         let ctx = egui::Context::default();
         app.change_view(View::Files);
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| app.files(ui, &a));
+        let _ = crate::tests::run_ui(&ctx, Default::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.files(ui, &a));
         });
         let rows = app.table_cache.rows[View::Files as usize]
             .borrow()
@@ -1637,8 +1638,8 @@ mod cache_tests {
             ..Default::default()
         };
         let ctx = egui::Context::default();
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| app.symbols(ui, &analysis));
+        let _ = crate::tests::run_ui(&ctx, Default::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.symbols(ui, &analysis));
         });
         let cache = app.table_cache.rows[View::Symbols as usize].borrow();
         let rows = &cache.as_ref().unwrap().1;

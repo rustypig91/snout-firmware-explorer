@@ -29,7 +29,7 @@ pub(super) fn show_rows(
         full_rect.x_range(),
         top.y + first as f32 * stride..=top.y + end as f32 * stride,
     );
-    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
         ui.skip_ahead_auto_ids(first);
         add_contents(ui, first..end);
     });
@@ -374,7 +374,8 @@ mod tests {
         cache.filter("");
         let ctx = egui::Context::default();
         let mut frame = |scroll: bool| {
-            ctx.run(
+            crate::tests::run_ui(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -384,6 +385,7 @@ mod tests {
                         vec![
                             egui::Event::PointerMoved(egui::pos2(150.0, 250.0)),
                             egui::Event::MouseWheel {
+                                phase: egui::TouchPhase::Move,
                                 unit: egui::MouseWheelUnit::Point,
                                 delta: egui::vec2(0.0, -100_000.0),
                                 modifiers: egui::Modifiers::NONE,
@@ -394,8 +396,8 @@ mod tests {
                     },
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
                         egui::ScrollArea::vertical().show(ui, |ui| {
                             cache.report_ui(ui);
                         });

@@ -499,15 +499,15 @@ impl Explorer {
             let size = (rect.size() * scale * 64.0).round() / (scale * 64.0);
             area = area.anchor(
                 egui::Align2::LEFT_TOP,
-                (ctx.screen_rect().size() - size) * 0.5,
+                (ctx.content_rect().size() - size) * 0.5,
             );
         }
         let response = egui::Modal::new(id)
             .area(area)
             .backdrop_color(egui::Color32::from_black_alpha(160))
-            .frame(egui::Frame::window(&ctx.style()).inner_margin(egui::Margin::same(20.0)))
+            .frame(egui::Frame::window(&ctx.style_of(egui::Theme::Dark)).inner_margin(egui::Margin::same(20)))
             .show(ctx, |ui| {
-                ui.set_width((ctx.screen_rect().width() - 64.0).clamp(240.0, 560.0));
+                ui.set_width((ctx.content_rect().width() - 64.0).clamp(240.0, 560.0));
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
                 ui.spacing_mut().item_spacing = egui::vec2(10.0, 12.0);
                 ui.spacing_mut().button_padding = egui::vec2(14.0, 8.0);
@@ -519,10 +519,10 @@ impl Explorer {
                     ui.add(egui::Label::new(egui::RichText::new(format!("{label}: {filename}")).strong()).truncate()).on_hover_text(path);
                 }
                 let color = ui.visuals().warn_fg_color;
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(color.linear_multiply(0.08))
                     .stroke(egui::Stroke::new(1.0_f32, color.linear_multiply(0.35)))
-                    .rounding(6.0)
+                    .corner_radius(6)
                     .inner_margin(12.0)
                     .show(ui, |ui| {
                         ui.colored_label(color, egui::RichText::new("Why it does not match").strong());
@@ -555,11 +555,11 @@ impl Explorer {
     }
 
     #[cfg(test)]
-    pub(super) fn build_browser(&mut self, ctx: &egui::Context) {
-        egui::SidePanel::left("build_artifacts")
-            .default_width(260.0)
-            .width_range(180.0..=500.0)
-            .show(ctx, |ui| self.build_files_contents(ui, false));
+    pub(super) fn build_browser(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::left("build_artifacts")
+            .default_size(260.0)
+            .size_range(180.0..=500.0)
+            .show(ui, |ui| self.build_files_contents(ui, false));
     }
 
     pub(super) fn build_files(&mut self, ui: &mut egui::Ui) {
@@ -711,7 +711,7 @@ impl Explorer {
                             // Match the row's persistent ID without creating a
                             // one-frame UI scope that shifts subsequent widget IDs.
                             let id = ui.id()
-                                .with(egui::Id::new(std::path::Path::new(&analysis.path)))
+                                .with(egui::IdSalt::new(std::path::Path::new(&analysis.path)))
                                 .with("firmware_files");
                             let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
                                 ui.ctx(), id, true);
@@ -774,9 +774,8 @@ impl Explorer {
                         let row_rect = egui::Rect::from_min_size(ui.next_widget_position(),
                             egui::vec2(ui.available_width(), height));
                         if !active && !ui.is_rect_visible(row_rect) {
-                            // push_id hashes its salt into an Id before deriving the
-                            // child UI's ID. Match that scope when looking up state.
-                            let id = ui.id().with(egui::Id::new(&artifact.path)).with("firmware_files");
+                            // Match push_id's child scope when looking up offscreen state.
+                            let id = ui.id().with(egui::IdSalt::new(&artifact.path)).with("firmware_files");
                             let expanded = egui::collapsing_header::CollapsingState::load(ui.ctx(), id)
                                 .is_some_and(|mut state| {
                                     if self.receiver.is_none() && state.is_open() {
