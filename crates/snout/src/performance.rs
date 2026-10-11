@@ -36,7 +36,8 @@ fn large_report_latency() {
     let ctx = egui::Context::default();
     let frame = |app: &mut Explorer| {
         let start = std::time::Instant::now();
-        let _ = ctx.run(
+        let _ = crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -44,8 +45,8 @@ fn large_report_latency() {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.symbols(ui, &analysis));
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.symbols(ui, &analysis));
             },
         );
         start.elapsed().as_secs_f64() * 1000.0
@@ -66,8 +67,8 @@ fn large_report_latency() {
     app.descending = !app.descending;
     println!("sort interaction: {:.3} ms", frame(&mut app));
     app.change_view(View::Sections);
-    let _ = ctx.run(Default::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| app.sections(ui, &analysis));
+    let _ = crate::tests::run_ui(&ctx, Default::default(), |ui| {
+        egui::CentralPanel::default().show(ui, |ui| app.sections(ui, &analysis));
     });
     app.change_view(View::Symbols);
     println!("return to Symbols: {:.3} ms", frame(&mut app));
@@ -111,7 +112,8 @@ fn dense_graph_latency() {
     let ctx = egui::Context::default();
     let frame = |app: &mut Explorer| {
         let start = std::time::Instant::now();
-        let output = ctx.run(
+        let output = crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -119,8 +121,8 @@ fn dense_graph_latency() {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.dependency_view(ui, &analysis));
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.dependency_view(ui, &analysis));
             },
         );
         let pending = output.shapes.iter().any(|s| {
@@ -206,7 +208,8 @@ fn large_build_scrolling_latency() {
     let ctx = egui::Context::default();
     let frame = |app: &mut Explorer, x| {
         let start = std::time::Instant::now();
-        let _ = ctx.run(
+        let _ = crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -215,6 +218,7 @@ fn large_build_scrolling_latency() {
                 events: vec![
                     egui::Event::PointerMoved(egui::pos2(x, 400.0)),
                     egui::Event::MouseWheel {
+                        phase: egui::TouchPhase::Move,
                         unit: egui::MouseWheelUnit::Point,
                         delta: egui::vec2(0.0, -100.0),
                         modifiers: egui::Modifiers::NONE,
@@ -222,7 +226,7 @@ fn large_build_scrolling_latency() {
                 ],
                 ..Default::default()
             },
-            |ctx| app.show(ctx),
+            |ui| app.show(ui),
         );
         start.elapsed().as_secs_f64() * 1000.0
     };

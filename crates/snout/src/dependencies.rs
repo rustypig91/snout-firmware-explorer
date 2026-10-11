@@ -582,6 +582,7 @@ impl Explorer {
                     if selected { 2.0_f32 } else { 1.0_f32 },
                     ui.visuals().text_color().gamma_multiply(0.6),
                 ),
+                egui::StrokeKind::Middle,
             );
             if pointer.is_some_and(|p| card.contains(p)) {
                 hit_node = Some(*node);
@@ -848,7 +849,8 @@ mod tests {
         let ctx = egui::Context::default();
         let frame = |app: &mut Explorer| {
             settle_graph(app, |app| {
-                ctx.run(
+                crate::tests::run_ui(
+                    &ctx,
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -856,9 +858,9 @@ mod tests {
                         )),
                         ..Default::default()
                     },
-                    |ctx| {
+                    |ui| {
                         egui::CentralPanel::default()
-                            .show(ctx, |ui| app.dependency_view(ui, &analysis));
+                            .show(ui, |ui| app.dependency_view(ui, &analysis));
                     },
                 )
             })
@@ -923,7 +925,8 @@ mod tests {
         super::super::shell::configure_style(&ctx);
         let frame = |app: &mut Explorer, mut events| {
             settle_graph(app, |app| {
-                ctx.run(
+                crate::tests::run_ui(
+                    &ctx,
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -932,9 +935,9 @@ mod tests {
                         events: std::mem::take(&mut events),
                         ..Default::default()
                     },
-                    |ctx| {
+                    |ui| {
                         egui::CentralPanel::default()
-                            .show(ctx, |ui| app.dependency_view(ui, &analysis));
+                            .show(ui, |ui| app.dependency_view(ui, &analysis));
                     },
                 )
             })
@@ -977,7 +980,7 @@ mod tests {
         let last_card = output
             .shapes
             .iter()
-            .rposition(|shape| matches!(shape.shape, egui::Shape::Rect(_)))
+            .rposition(|shape| matches!(&shape.shape, egui::Shape::Rect(card) if card.fill == egui::Color32::from_rgb(40, 100, 140)))
             .unwrap();
         for label in ["app/main.c", "drivers/spi.c", "unused/main.c"] {
             let index = output.shapes.iter().position(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().starts_with(label))).unwrap();
@@ -1058,6 +1061,7 @@ mod tests {
             vec![
                 egui::Event::PointerMoved(cards[0]),
                 egui::Event::MouseWheel {
+                    phase: egui::TouchPhase::Move,
                     unit: egui::MouseWheelUnit::Point,
                     delta: egui::vec2(0.0, 120.0),
                     modifiers: egui::Modifiers::NONE,

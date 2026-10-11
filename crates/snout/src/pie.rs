@@ -116,7 +116,7 @@ impl Explorer {
             area.center().y - legend_height * 0.5
         };
         let text_offset = (row_height
-            - ui.fonts(|fonts| fonts.row_height(&egui::FontId::proportional(14.0))))
+            - ui.fonts_mut(|fonts| fonts.row_height(&egui::FontId::proportional(14.0))))
             * 0.5;
         for (index, (name, size)) in items.iter().enumerate() {
             let row = egui::Rect::from_min_size(

@@ -7,9 +7,9 @@ description = "A desktop explorer for embedded firmware memory usage."
 
 [dependencies]
 snout-core.workspace = true
-eframe = { version = "0.30", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "links", "wgpu", "x11", "wayland"] }
 rfd = "0.16"
-egui_extras = "0.30"
+egui_extras = "0.36.2"
 serde_json.workspace = true
 serde.workspace = true
 crossbeam-channel = "0.5"

@@ -156,6 +156,7 @@ impl ByteCell {
                     rect.expand2(egui::vec2(2.0, 3.0)),
                     3.0,
                     egui::Stroke::new(1.0_f32, SYMBOL_HIGHLIGHT),
+                    egui::StrokeKind::Middle,
                 )
             })
             .collect();
@@ -610,8 +611,9 @@ impl Explorer {
         let mut rendered_rows = 0;
         let mut byte_cells = Vec::new();
         let mut hovered_range = None;
-        let digit_width = ui
-            .fonts(|fonts| fonts.glyph_width(&egui::TextStyle::Monospace.resolve(ui.style()), '0'));
+        let digit_width = ui.fonts_mut(|fonts| {
+            fonts.glyph_width(&egui::TextStyle::Monospace.resolve(ui.style()), '0')
+        });
         let address_width = digit_width
             * if analysis.metadata.bitness == 64 {
                 16.0
@@ -919,22 +921,29 @@ mod tests {
                 }
                 let ctx = egui::Context::default();
                 super::super::shell::configure_style(&ctx);
+                let mut previous_pointer = None;
                 let mut render = |time, pointer: Option<egui::Pos2>| {
-                    ctx.run(
+                    // PointerMoved now resets the tooltip timer even at the same
+                    // coordinates. Resting the pointer produces no new event.
+                    let events = pointer
+                        .filter(|pos| Some(*pos) != previous_pointer)
+                        .map(|pos| vec![egui::Event::PointerMoved(pos)])
+                        .unwrap_or_default();
+                    previous_pointer = pointer;
+                    crate::tests::run_ui(
+                        &ctx,
                         egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(
                                 egui::Pos2::ZERO,
                                 egui::vec2(1500.0, 820.0),
                             )),
                             time: Some(time),
-                            events: pointer
-                                .map(|pos| vec![egui::Event::PointerMoved(pos)])
-                                .unwrap_or_default(),
+                            events,
                             ..Default::default()
                         },
-                        |ctx| {
+                        |ui| {
                             egui::CentralPanel::default()
-                                .show(ctx, |ui| app.memory_view(ui, &analysis));
+                                .show(ui, |ui| app.memory_view(ui, &analysis));
                         },
                     )
                 };
@@ -1110,7 +1119,8 @@ mod tests {
         let ctx = egui::Context::default();
         super::super::shell::configure_style(&ctx);
         let mut render = |pointer: Option<egui::Pos2>| {
-            ctx.run(
+            crate::tests::run_ui(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1121,8 +1131,8 @@ mod tests {
                         .unwrap_or_default(),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| app.memory_view(ui, &analysis));
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| app.memory_view(ui, &analysis));
                 },
             )
         };
@@ -1209,7 +1219,8 @@ mod tests {
             ]
         };
         let mut render = |events| {
-            let _ = ctx.run(
+            let _ = crate::tests::run_ui(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1218,8 +1229,8 @@ mod tests {
                     events,
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
                         memory_scrollbar(ui, rect, &mut position, limit, total, 25.0, &mut grab);
                     });
                 },
@@ -1257,7 +1268,8 @@ mod tests {
         super::super::shell::configure_style(&ctx);
         let mut texts = Vec::new();
         for frame in 0..5 {
-            let output = ctx.run(
+            let output = crate::tests::run_ui(
+                &ctx,
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1268,6 +1280,7 @@ mod tests {
                         vec![
                             egui::Event::PointerMoved(egui::pos2(500.0, 500.0)),
                             egui::Event::MouseWheel {
+                                phase: egui::TouchPhase::Move,
                                 unit: egui::MouseWheelUnit::Point,
                                 delta: egui::vec2(0.0, -150.0),
                                 modifiers: egui::Modifiers::NONE,
@@ -1278,8 +1291,8 @@ mod tests {
                     },
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| app.memory_view(ui, &analysis));
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| app.memory_view(ui, &analysis));
                 },
             );
             assert!(app.visible_rows > 0 && app.visible_rows < 50);
@@ -1349,7 +1362,8 @@ mod tests {
         assert!(app.memory_view.error.is_none());
         assert_eq!(app.memory_view.scroll_to, Some(1));
         let ctx = egui::Context::default();
-        let output = ctx.run(
+        let output = crate::tests::run_ui(
+            &ctx,
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1357,8 +1371,8 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.memory_view(ui, &analysis));
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.memory_view(ui, &analysis));
             },
         );
         assert_eq!(app.visible_rows, 2);
@@ -1370,8 +1384,8 @@ mod tests {
             .position(|r| r.label == "All RAM startup")
             .unwrap();
         app.memory_view.navigate();
-        let output = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| app.memory_view(ui, &analysis));
+        let output = crate::tests::run_ui(&ctx, Default::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.memory_view(ui, &analysis));
         });
         assert!(app.visible_rows < 50);
         assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "FFFFFFFFFFFFFFF0")));

@@ -289,12 +289,14 @@ mod tests {
             let mut app = Explorer::default();
             app.updates.notice = Some(notice);
             let ctx = egui::Context::default();
-            let output = ctx.run(egui::RawInput::default(), |ctx| app.show_updates(ctx));
+            let output =
+                crate::tests::run_ui(&ctx, egui::RawInput::default(), |ctx| app.show_updates(ctx));
             assert!(!output.shapes.is_empty());
             let (_tx, rx) = crossbeam_channel::unbounded();
             app.updates.install = Some(rx);
             app.updates.progress = Some(0.5);
-            let output = ctx.run(egui::RawInput::default(), |ctx| app.show_updates(ctx));
+            let output =
+                crate::tests::run_ui(&ctx, egui::RawInput::default(), |ctx| app.show_updates(ctx));
             assert!(!output.shapes.is_empty());
         }
     }

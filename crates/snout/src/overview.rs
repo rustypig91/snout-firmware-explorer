@@ -126,8 +126,9 @@ fn compact_card(
         7.0,
         egui::Color32::from_rgb(16, 25, 35),
         egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(31, 45, 60)),
+        egui::StrokeKind::Middle,
     );
-    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect.shrink(14.0)), |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect.shrink(14.0)), |ui| {
         ui.set_clip_rect(rect.shrink(10.0).intersect(ui.clip_rect()));
         ui.add(egui::Label::new(egui::RichText::new(title).size(16.0).strong()).wrap());
         ui.add_space(8.0);
@@ -372,10 +373,10 @@ impl Explorer {
 
     pub(super) fn map_selection_notice(&mut self, ui: &mut egui::Ui) {
         let warning = ui.visuals().warn_fg_color;
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(warning.linear_multiply(0.08))
             .stroke(egui::Stroke::new(1.0_f32, warning.linear_multiply(0.35)))
-            .rounding(6.0)
+            .corner_radius(6)
             .inner_margin(8.0)
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -450,7 +451,7 @@ impl Explorer {
                 egui::vec2(ui.available_width(), block_height),
                 egui::Sense::hover(),
             );
-            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                 let total = self.snapshot_bytes("totals", "", field, total);
                 let tip = format!("{help}\n{label}: {total}");
                 let Some(mut index) = self.overview_region(a, slot, kind) else {

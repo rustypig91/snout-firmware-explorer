@@ -681,8 +681,8 @@ mod tests {
             ..Default::default()
         };
         let ctx = crate::egui::Context::default();
-        let output = ctx.run(Default::default(), |ctx| {
-            crate::egui::CentralPanel::default().show(ctx, |ui| app.stack_view(ui));
+        let output = crate::tests::run_ui(&ctx, Default::default(), |ui| {
+            crate::egui::CentralPanel::default().show(ui, |ui| app.stack_view(ui));
         });
         assert!(output.shapes.iter().any(|shape| matches!(
             &shape.shape,

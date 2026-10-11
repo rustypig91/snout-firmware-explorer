@@ -27,8 +27,6 @@ fn style_popup_menu(ui: &mut egui::Ui) {
 fn app_menu_popup(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
     let bar_id = ui.id();
     let child_id = bar_id.with("recent_menu_rect");
-    let size_id = bar_id.with("app_menu_size");
-    let mut state = egui::menu::BarState::load(ui.ctx(), bar_id);
     let button = ui.add(
         egui::Button::new("")
             .fill(egui::Color32::TRANSPARENT)
@@ -56,58 +54,37 @@ fn app_menu_popup(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
             stroke,
         );
     }
-    if let Some(root) = state.as_ref() {
-        if let Some(child) = ui.ctx().data(|data| data.get_temp::<egui::Rect>(child_id)) {
-            // Only extend the hit bounds when the pointer is actually in the
-            // child. A permanent union also counts empty space beside either
-            // menu as inside, preventing outside clicks from dismissing it.
-            if ui.input(|input| {
+    let popup_id = bar_id.with("app_menu_popup");
+    let child_hovered = ui
+        .ctx()
+        .data(|data| data.get_temp::<egui::Rect>(child_id))
+        .is_some_and(|rect| {
+            ui.input(|input| {
                 input
                     .pointer
                     .interact_pos()
-                    .is_some_and(|pos| child.contains(pos))
-            }) {
-                let mut menu = root.menu_state.write();
-                menu.rect = menu.rect.union(child);
-            }
-        }
-    }
-    egui::menu::MenuRoot::stationary_click_interaction(&button, &mut state);
+                    .is_some_and(|pos| rect.contains(pos))
+            })
+        });
     ui.ctx()
         .data_mut(|data| data.remove::<egui::Rect>(child_id));
-    if let Some(root) = state.as_ref() {
-        let mut menu = root.menu_state.write();
-        // Hovering the button recreates MenuRoot with an empty rect. Keep the
-        // measured popup size separately, including while a child menu is open.
-        let size = ui
-            .ctx()
-            .data(|data| data.get_temp::<egui::Vec2>(size_id))
-            .unwrap_or(menu.rect.size());
-        let height = size.y;
-        menu.rect = egui::Rect::from_min_size(
-            egui::pos2(
-                button.rect.left(),
-                (button.rect.top() - height - ui.spacing().menu_spacing)
-                    .max(ui.ctx().screen_rect().top()),
-            ),
-            size,
-        );
-    }
-    state.show(&button, |ui| {
-        style_popup_menu(ui);
-        contents(ui);
-    });
-    if let Some(root) = state.as_ref() {
-        ui.ctx().data_mut(|data| {
-            data.insert_temp(size_id, root.menu_state.read().rect.size());
+    let close_behavior = if child_hovered {
+        egui::PopupCloseBehavior::IgnoreClicks
+    } else {
+        egui::PopupCloseBehavior::CloseOnClickOutside
+    };
+    egui::Popup::menu(&button)
+        .id(popup_id)
+        .align(egui::RectAlign::TOP_START)
+        .close_behavior(close_behavior)
+        .show(|ui| {
+            style_popup_menu(ui);
+            contents(ui);
         });
+    if !egui::Popup::is_id_open(ui.ctx(), popup_id) {
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(bar_id.with("recent_menu"), false));
     }
-    if state.as_ref().is_none() {
-        ui.ctx().data_mut(|data| {
-            data.insert_temp(bar_id.with("recent_menu"), false);
-        });
-    }
-    state.store(ui.ctx(), bar_id);
 }
 
 fn right_recent_menu(
@@ -136,7 +113,8 @@ fn right_recent_menu(
         );
         // Bound the popup to the space right of its parent. Otherwise long
         // paths make Area's screen constraint move it over the parent menu.
-        let available_width = (ui.ctx().screen_rect().right() - anchor.x - margin.sum().x).max(1.0);
+        let available_width =
+            (ui.ctx().content_rect().right() - anchor.x - margin.sum().x).max(1.0);
         let path_width = folders
             .iter()
             .map(|folder| {
@@ -166,7 +144,8 @@ fn right_recent_menu(
                     egui::ScrollArea::both()
                         .max_width(width)
                         .max_height(
-                            (ui.ctx().screen_rect().bottom() - anchor.y - margin.sum().y).max(30.0),
+                            (ui.ctx().content_rect().bottom() - anchor.y - margin.sum().y)
+                                .max(30.0),
                         )
                         .show(ui, |ui| {
                             ui.with_layout(
@@ -207,18 +186,19 @@ fn right_recent_menu(
     }
     ui.ctx().data_mut(|data| data.insert_temp(id, open));
     if selected.is_some() {
-        ui.close_menu();
+        ui.close();
     }
     selected
 }
 
 pub(super) fn configure_style(ctx: &egui::Context) {
-    let mut style = (*ctx.style()).clone();
+    ctx.set_theme(egui::Theme::Dark);
+    let mut style = (*ctx.style_of(egui::Theme::Dark)).clone();
     style.visuals = egui::Visuals::dark();
     style.visuals.panel_fill = egui::Color32::from_rgb(11, 18, 26);
     style.visuals.window_fill = egui::Color32::from_rgb(16, 25, 35);
     style.visuals.window_stroke = egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(31, 45, 60));
-    style.visuals.menu_rounding = egui::Rounding::same(6.0);
+    style.visuals.menu_corner_radius = egui::CornerRadius::same(6);
     style.visuals.extreme_bg_color = egui::Color32::from_rgb(8, 14, 21);
     style.visuals.faint_bg_color = egui::Color32::from_white_alpha(4);
     style.visuals.override_text_color = Some(egui::Color32::from_rgb(207, 220, 238));
@@ -233,7 +213,7 @@ pub(super) fn configure_style(ctx: &egui::Context) {
         &mut style.visuals.widgets.hovered,
         &mut style.visuals.widgets.active,
     ] {
-        widgets.rounding = egui::Rounding::same(6.0);
+        widgets.corner_radius = egui::CornerRadius::same(6);
         widgets.expansion = 0.0;
     }
     style.spacing.item_spacing = egui::vec2(10.0, 6.0);
@@ -254,13 +234,14 @@ pub(super) fn configure_style(ctx: &egui::Context) {
     for font in style.text_styles.values_mut() {
         font.size = font.size.max(MIN_TEXT_SIZE);
     }
-    ctx.set_style(style);
+    ctx.set_style_of(egui::Theme::Dark, style);
 }
 
 fn draw_chip(ui: &mut egui::Ui) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
     let stroke = egui::Stroke::new(1.0_f32, super::overview::MUTED);
-    ui.painter().rect_stroke(rect.shrink(4.0), 1.0, stroke);
+    ui.painter()
+        .rect_stroke(rect.shrink(4.0), 1.0, stroke, egui::StrokeKind::Middle);
     for offset in [-4.0, 0.0, 4.0] {
         let center = rect.center();
         for (start, end) in [
@@ -285,6 +266,7 @@ fn draw_bit_width(ui: &mut egui::Ui) {
         egui::Rect::from_center_size(center + egui::vec2(0.0, -4.0), egui::vec2(18.0, 8.0)),
         1.0,
         stroke,
+        egui::StrokeKind::Middle,
     );
     for x in [-3.0, 3.0] {
         painter.line_segment(
@@ -429,8 +411,8 @@ fn header_title_is_vertically_centered_beside_the_icon() {
     configure_style(&ctx);
     let mut output = egui::FullOutput::default();
     for _ in 0..3 {
-        output = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        output = crate::tests::run_ui(&ctx, Default::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 ui.horizontal(draw_brand);
             });
         });
@@ -509,8 +491,8 @@ fn firmware_path_galley(ui: &egui::Ui, path: &str, width: f32) -> std::sync::Arc
 fn firmware_paths_keep_their_end_when_space_is_limited() {
     let ctx = egui::Context::default();
     configure_style(&ctx);
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    let _ = crate::tests::run_ui(&ctx, egui::RawInput::default(), |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             for path in [
                 "/home/developer/projects/firmware/build/debug/application.elf",
                 "C:\\Users\\Developer\\Projects\\Firmware\\build\\application.elf",
@@ -580,7 +562,7 @@ impl Explorer {
             .map(|path| display_path(&path.to_string_lossy()).into_owned())
             .unwrap_or_else(|| "Open a build folder to select firmware".into());
         let popup_id = ui.make_persistent_id("current_elf");
-        let width = (ui.ctx().screen_rect().width() - 560.0).clamp(240.0, 470.0);
+        let width = (ui.ctx().content_rect().width() - 560.0).clamp(240.0, 470.0);
         let mut selected = None;
         ui.add_enabled_ui(self.receiver.is_none(), |ui| {
             let (rect, response) =
@@ -595,6 +577,7 @@ impl Explorer {
                 6.0,
                 fill,
                 egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(34, 49, 65)),
+                egui::StrokeKind::Middle,
             );
             let stroke = egui::Stroke::new(1.5_f32, super::overview::MUTED);
             let origin = rect.left_top() + egui::vec2(18.0, 17.0);
@@ -648,14 +631,13 @@ impl Explorer {
                 .on_hover_text(&path)
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
             if response.clicked() {
-                ui.memory_mut(|memory| memory.toggle_popup(popup_id));
+                egui::Popup::toggle_id(ui.ctx(), popup_id);
             }
-            egui::popup::popup_below_widget(
-                ui,
-                popup_id,
-                &response,
-                egui::popup::PopupCloseBehavior::CloseOnClickOutside,
-                |ui| {
+            egui::Popup::from_response(&response)
+                .id(popup_id)
+                .open_memory(None)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .show(|ui| {
                     style_popup_menu(ui);
                     ui.set_width(width - 16.0);
                     if let Some(build) = &self.build {
@@ -687,7 +669,7 @@ impl Explorer {
                                     let active = current.as_ref() == Some(&artifact.path);
                                     let response = ui.add_sized(
                                         egui::vec2(ui.available_width(), row_height),
-                                        egui::Button::new("").selected(active).rounding(6.0),
+                                        egui::Button::new("").selected(active).corner_radius(6),
                                     );
                                     response.widget_info(|| {
                                         egui::WidgetInfo::labeled(
@@ -719,7 +701,7 @@ impl Explorer {
                                         .clicked()
                                     {
                                         selected = Some(artifact.clone());
-                                        ui.memory_mut(|memory| memory.close_popup());
+                                        egui::Popup::close_all(ui.ctx());
                                     }
                                 }
                             },
@@ -729,8 +711,7 @@ impl Explorer {
                     } else {
                         ui.weak("Open a build folder first.");
                     }
-                },
-            );
+                });
         });
         if let Some(artifact) = selected {
             if current.as_ref() != Some(&artifact.path) {
@@ -751,7 +732,7 @@ impl Explorer {
                     )
                     .clicked()
                 {
-                    ui.close_menu();
+                    ui.close();
                     self.pick_build();
                 }
                 if let Some(folder) = right_recent_menu(ui, &self.recent_build_folders, bar_id) {
@@ -766,7 +747,7 @@ impl Explorer {
                     .on_hover_text("Rescan and reload selected firmware")
                     .clicked()
                 {
-                    ui.close_menu();
+                    ui.close();
                     self.refresh();
                 }
                 if ui
@@ -776,7 +757,7 @@ impl Explorer {
                     )
                     .clicked()
                 {
-                    ui.close_menu();
+                    ui.close();
                     self.reset_build_settings();
                 }
                 ui.separator();
@@ -790,7 +771,7 @@ impl Explorer {
                     )
                     .clicked()
                 {
-                    ui.close_menu();
+                    ui.close();
                     if let Err(error) = self.open_configuration_folder() {
                         self.error = Some(error);
                     }
@@ -802,7 +783,7 @@ impl Explorer {
                     .clicked()
                 {
                     self.start_update_check(ui.ctx(), true);
-                    ui.close_menu();
+                    ui.close();
                 }
                 if ui
                     .checkbox(
@@ -822,7 +803,7 @@ impl Explorer {
                     .clicked()
                 {
                     self.show_notes = !self.show_notes;
-                    ui.close_menu();
+                    ui.close();
                 }
                 if ui
                     .button("Support developer")
@@ -832,7 +813,7 @@ impl Explorer {
                     ui.ctx().open_url(egui::OpenUrl::new_tab(
                         "https://buymeacoffee.com/rustypig91g",
                     ));
-                    ui.close_menu();
+                    ui.close();
                 }
                 if ui
                     .add(
@@ -842,7 +823,7 @@ impl Explorer {
                     .clicked()
                 {
                     self.show_about = true;
-                    ui.close_menu();
+                    ui.close();
                 }
             });
         });
@@ -945,14 +926,15 @@ impl Explorer {
         self.kind_filter = "All".into();
     }
 
-    pub(super) fn show(&mut self, ctx: &egui::Context) {
+    pub(super) fn show(&mut self, ui: &mut egui::Ui) {
+        let ctx = &ui.ctx().clone();
         self.firmware_watch.poll(ctx);
         let snapshot_modal_open = self.snapshot_dialog.is_some() || self.map_warning.is_some();
         self.show_map_warning(ctx);
         self.show_snapshot_dialog(ctx);
         if !snapshot_modal_open {
             if let Some(path) =
-                ctx.input(|i| i.raw.dropped_files.iter().find_map(|f| f.path.clone()))
+                ctx.input(|i| i.raw.dropped_files.first().map(|f| f.path().to_path_buf()))
             {
                 if self.receiver.is_none() {
                     match super::startup::parse([path.into_os_string()]) {
@@ -994,13 +976,13 @@ impl Explorer {
         if ctx.input(|i| i.viewport().title.as_deref() != Some(title.as_str())) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
         }
-        egui::TopBottomPanel::top("workbench_tabs")
+        egui::Panel::top("workbench_tabs")
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(11, 18, 26))
-                    .inner_margin(egui::Margin::symmetric(16.0, 14.0)),
+                    .inner_margin(egui::Margin::symmetric(16, 14)),
             )
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.horizontal(|ui| {
                         draw_brand(ui);
@@ -1055,12 +1037,12 @@ impl Explorer {
                 });
             });
         if self.show_notes {
-            egui::TopBottomPanel::bottom("analysis_notes")
+            egui::Panel::bottom("analysis_notes")
                 .resizable(true)
-                .default_height(155.0)
-                .min_height(65.0)
-                .max_height(300.0)
-                .show(ctx, |ui| {
+                .default_size(155.0)
+                .min_size(65.0)
+                .max_size(300.0)
+                .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.strong("Analysis notes");
                         if ui.small_button("Hide").clicked() {
@@ -1076,9 +1058,9 @@ impl Explorer {
                 });
         }
         self.show_about_window(ctx);
-        egui::SidePanel::left("workbench_navigation")
-            .exact_width(165.0)
-            .show(ctx, |ui| {
+        egui::Panel::left("workbench_navigation")
+            .exact_size(165.0)
+            .show(ui, |ui| {
                 let bounds = ui.available_rect_before_wrap();
                 let settings = egui::Rect::from_min_max(
                     egui::pos2(bounds.left(), bounds.bottom() - 34.0),
@@ -1097,10 +1079,10 @@ impl Explorer {
             });
         if self.tree && matches!(self.view, View::Files | View::Symbols) {
             if let Some(a) = self.analysis.clone() {
-                egui::SidePanel::left("file_tree")
-                    .default_width(240.0)
-                    .width_range(160.0..=420.0)
-                    .show(ctx, |ui| {
+                egui::Panel::left("file_tree")
+                    .default_size(240.0)
+                    .size_range(160.0..=420.0)
+                    .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.strong("DIRECTORIES");
                             if ui.small_button("Hide").clicked() {
@@ -1112,7 +1094,7 @@ impl Explorer {
                     });
             }
         }
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             if let Some(error) = self.error.clone() {
                 ui.horizontal_wrapped(|ui| { ui.colored_label(egui::Color32::LIGHT_RED, error); if ui.small_button("Dismiss").clicked() { self.error = None; } }); ui.separator();
             }
