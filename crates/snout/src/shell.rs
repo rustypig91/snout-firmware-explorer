@@ -1094,6 +1094,7 @@ impl Explorer {
                                 .size()
                                 .x;
                             if label_width <= content.right() - ui.cursor().left() {
+                                ui.add_space(content.right() - ui.cursor().left() - label_width);
                                 ui.label("Analyzing...");
                             }
                         }

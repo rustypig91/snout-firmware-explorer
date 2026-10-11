@@ -1446,9 +1446,19 @@ fn header_reload_is_right_aligned_clickable_and_replaced_while_loading() {
         reload_center(&output).is_none(),
         "Loading must replace the reload button"
     );
-    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
-        egui::Shape::Text(text) if text.galley.text() == "Analyzing..."
-    )));
+    let analyzing = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "Analyzing..." => Some(text),
+            _ => None,
+        })
+        .expect("Loading must show the analysis status");
+    let expected_right = 1280.0 - 16.0 - crate::window_frame::CONTROLS_WIDTH - 52.0;
+    assert!(
+        (analyzing.pos.x + analyzing.galley.size().x - expected_right).abs() < 1.0,
+        "Analysis status must align just left of the spinner"
+    );
     finish_job(&mut app);
     let output = frame(&mut app, 1280.0, vec![]);
     assert!(reload_center(&output).is_some());
