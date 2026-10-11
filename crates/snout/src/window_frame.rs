@@ -89,13 +89,28 @@ pub(super) fn raw_input_hook(ctx: &egui::Context, input: &mut egui::RawInput) {
 pub(super) fn header_drag(ui: &mut egui::Ui, rect: egui::Rect) {
     // Register the background first so selectors and buttons take precedence.
     let response = ui.interact(rect, ui.id().with("window_drag"), egui::Sense::click());
+    let armed_id = ui.id().with("window_drag_armed");
+    if ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary)) {
+        ui.ctx().data_mut(|data| {
+            data.insert_temp(armed_id, response.is_pointer_button_down_on());
+        });
+    }
+    let armed = ui
+        .ctx()
+        .data(|data| data.get_temp::<bool>(armed_id).unwrap_or(false));
+    if !ui.input(|i| i.pointer.primary_down()) {
+        ui.ctx().data_mut(|data| data.remove::<bool>(armed_id));
+    }
     if response.double_clicked() {
         let maximized = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
         ui.ctx()
             .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
-    } else if response.is_pointer_button_down_on()
-        && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary))
-    {
+    } else if armed && ui.input(|i| i.pointer.primary_down() && i.pointer.is_decidedly_dragging()) {
+        // Leave ordinary clicks with egui. Handing off on press would inject
+        // a release on the next repaint, corrupting double-click timing.
+        // Keep click-only sense so a press on an overlaid button cannot also
+        // capture the header as a drag target.
+        ui.ctx().data_mut(|data| data.remove::<bool>(armed_id));
         hand_off_pointer(
             ui.ctx(),
             response.interact_pointer_pos().unwrap_or(rect.center()),
@@ -396,6 +411,25 @@ mod tests {
                     );
                 }
             }
+            // Dragging away from a control must not move the window behind it.
+            frame(
+                &ctx,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                maximized,
+            );
+            let output = frame(
+                &ctx,
+                vec![egui::Event::PointerMoved(pos + egui::vec2(20.0, 0.0))],
+                maximized,
+            );
+            assert!(!output.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .contains(&egui::ViewportCommand::StartDrag));
         }
     }
 
@@ -417,9 +451,36 @@ mod tests {
             ],
             false,
         );
+        assert!(!output.viewport_output[&egui::ViewportId::ROOT]
+            .commands
+            .contains(&egui::ViewportCommand::StartDrag));
+        let output = frame(
+            &ctx,
+            vec![egui::Event::PointerMoved(pos + egui::vec2(12.0, 0.0))],
+            false,
+        );
         assert!(output.viewport_output[&egui::ViewportId::ROOT]
             .commands
             .contains(&egui::ViewportCommand::StartDrag));
+        // Recover from a consumed native release, then click the header once.
+        // A completed drag must not seed double-click history.
+        frame(&ctx, vec![], false);
+        let pos = pos + egui::vec2(12.0, 0.0);
+        for pressed in [true, false] {
+            let output = frame(
+                &ctx,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                false,
+            );
+            assert!(!output.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .contains(&egui::ViewportCommand::Maximized(true)));
+        }
     }
     #[test]
     fn hovering_and_clicking_recover_after_native_move_or_resize() {
@@ -458,7 +519,10 @@ mod tests {
                 };
                 frame(vec![]);
                 frame(vec![]);
-                let output = frame(vec![egui::Event::PointerMoved(pos), button(pos, true)]);
+                let mut output = frame(vec![egui::Event::PointerMoved(pos), button(pos, true)]);
+                if command == egui::ViewportCommand::StartDrag {
+                    output = frame(vec![egui::Event::PointerMoved(pos + egui::vec2(12.0, 0.0))]);
+                }
                 assert!(output.viewport_output[&egui::ViewportId::ROOT]
                     .commands
                     .contains(&command));
@@ -532,6 +596,46 @@ mod tests {
             }
             assert!(commands.contains(&egui::ViewportCommand::Maximized(!maximized)));
         }
+    }
+
+    #[test]
+    fn header_double_click_uses_real_release_times() {
+        let ctx = egui::Context::default();
+        let pos = egui::pos2(230.0, 36.0);
+        let frame = |time, events| {
+            let mut input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(300.0, 100.0),
+                )),
+                time: Some(time),
+                events,
+                ..Default::default()
+            };
+            raw_input_hook(&ctx, &mut input);
+            crate::tests::run_ui(&ctx, input, |ui| {
+                header_drag(
+                    ui,
+                    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0, 64.0)),
+                );
+            })
+        };
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(0.0, vec![]);
+        frame(0.1, vec![egui::Event::PointerMoved(pos), button(true)]);
+        // A repaint while the button is still held must not manufacture a click.
+        frame(0.12, vec![]);
+        frame(0.3, vec![button(false)]);
+        frame(0.45, vec![button(true)]);
+        let output = frame(0.5, vec![button(false)]);
+        assert!(output.viewport_output[&egui::ViewportId::ROOT]
+            .commands
+            .contains(&egui::ViewportCommand::Maximized(true)));
     }
 
     #[test]
