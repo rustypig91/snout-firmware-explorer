@@ -120,6 +120,20 @@ pub(super) fn header_drag(ui: &mut egui::Ui, rect: egui::Rect) {
 }
 
 pub(super) fn controls(ui: &mut egui::Ui, rect: egui::Rect) {
+    // These replace native title-bar controls, so application modals must not
+    // disable them. Keep only the window controls above the modal backdrop.
+    let area = egui::Area::new(ui.id().with("window_controls"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(rect.min)
+        .fade_in(false)
+        .constrain(false)
+        .movable(false)
+        .sense(egui::Sense::hover());
+    ui.ctx().move_to_top(area.layer());
+    area.show(ui.ctx(), |ui| draw_controls(ui, rect));
+}
+
+fn draw_controls(ui: &mut egui::Ui, rect: egui::Rect) {
     ui.scope_builder(
         egui::UiBuilder::new()
             .max_rect(rect)
@@ -354,6 +368,93 @@ mod tests {
     }
 
     #[test]
+    fn window_controls_remain_clickable_while_a_modal_is_open() {
+        for (x, command) in [
+            (156.0, egui::ViewportCommand::Close),
+            (106.0, egui::ViewportCommand::Maximized(true)),
+            (56.0, egui::ViewportCommand::Minimized(true)),
+        ] {
+            let ctx = egui::Context::default();
+            let pos = egui::pos2(x, 36.0);
+            let application_clicked = std::cell::Cell::new(false);
+            let frame = |events| {
+                crate::tests::run_ui(
+                    &ctx,
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(300.0, 200.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        egui::Modal::new(egui::Id::new("test_modal")).show(ui.ctx(), |ui| {
+                            ui.label("The application is blocked by this dialog");
+                        });
+                        if ui
+                            .put(
+                                egui::Rect::from_min_size(
+                                    egui::pos2(20.0, 160.0),
+                                    egui::vec2(120.0, 24.0),
+                                ),
+                                egui::Button::new("Application action"),
+                            )
+                            .clicked()
+                        {
+                            application_clicked.set(true);
+                        }
+                        controls(
+                            ui,
+                            egui::Rect::from_min_size(
+                                egui::pos2(20.0, 20.0),
+                                egui::vec2(CONTROLS_WIDTH, 32.0),
+                            ),
+                        );
+                    },
+                )
+            };
+            frame(vec![]);
+            frame(vec![]);
+            for pressed in [true, false] {
+                let output = frame(vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]);
+                if !pressed {
+                    assert!(
+                        output.viewport_output[&egui::ViewportId::ROOT]
+                            .commands
+                            .contains(&command),
+                        "Modal blocked {command:?}"
+                    );
+                }
+            }
+            for pressed in [true, false] {
+                let pos = egui::pos2(80.0, 172.0);
+                frame(vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]);
+            }
+            assert!(
+                !application_clicked.get(),
+                "Modal must still block application actions"
+            );
+        }
+    }
+
+    #[test]
     fn buttons_highlight_and_send_window_commands_without_dragging() {
         for (x, maximized, command, color) in [
             (
@@ -383,6 +484,7 @@ mod tests {
         ] {
             let ctx = egui::Context::default();
             let pos = egui::pos2(x, 36.0);
+            frame(&ctx, vec![], maximized);
             frame(&ctx, vec![], maximized);
             let output = frame(&ctx, vec![egui::Event::PointerMoved(pos)], maximized);
             assert!(
