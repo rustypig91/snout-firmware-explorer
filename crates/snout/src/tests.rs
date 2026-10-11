@@ -1426,10 +1426,14 @@ fn header_reload_is_right_aligned_clickable_and_replaced_while_loading() {
         let output = frame(&mut app, width, vec![]);
         let center = reload_center(&output).expect("Idle header must have a reload icon");
         assert!(
-            (center.x - (width - 32.0)).abs() < 1.0,
-            "Reload must stay at the top right at {width}: {center:?}"
+            center.x + 16.0 < width - 16.0 - crate::window_frame::CONTROLS_WIDTH,
+            "Reload must leave room for window controls at {width}: {center:?}"
         );
-        assert!(center.y < 140.0);
+        assert!(
+            (center.x - (width - 32.0 - crate::window_frame::CONTROLS_WIDTH - 10.0)).abs() < 1.0,
+            "Reload must stay right aligned at {width}: {center:?}"
+        );
+        assert!(center.y < 92.0);
     }
     let output = frame(&mut app, 1280.0, vec![]);
     click(&mut app, reload_center(&output).unwrap());
@@ -1442,9 +1446,19 @@ fn header_reload_is_right_aligned_clickable_and_replaced_while_loading() {
         reload_center(&output).is_none(),
         "Loading must replace the reload button"
     );
-    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
-        egui::Shape::Text(text) if text.galley.text() == "Analyzing..."
-    )));
+    let analyzing = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "Analyzing..." => Some(text),
+            _ => None,
+        })
+        .expect("Loading must show the analysis status");
+    let expected_right = 1280.0 - 16.0 - crate::window_frame::CONTROLS_WIDTH - 52.0;
+    assert!(
+        (analyzing.pos.x + analyzing.galley.size().x - expected_right).abs() < 1.0,
+        "Analysis status must align just left of the spinner"
+    );
     finish_job(&mut app);
     let output = frame(&mut app, 1280.0, vec![]);
     assert!(reload_center(&output).is_some());
@@ -3716,6 +3730,81 @@ fn check_recent_folder_submenu(width: f32, folder_name: &str) {
 }
 
 #[test]
+fn header_hides_bit_width_before_architecture_and_restores_details_on_resize() {
+    let mut analysis = snout_core::analyze_bytes(
+        include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
+        "fixture.elf",
+        &Default::default(),
+    )
+    .unwrap();
+    analysis.metadata.architecture = "ARM".into();
+    let mut app = Explorer {
+        analysis: Some(Arc::new(analysis)),
+        ..Default::default()
+    };
+    let ctx = egui::Context::default();
+    shell::configure_style(&ctx);
+    for (width, architecture_visible, bitness_visible) in [
+        (1280.0, true, true),
+        (1030.0, true, false),
+        (980.0, false, false),
+        (900.0, false, false),
+        (760.0, false, false),
+        (1280.0, true, true),
+    ] {
+        let mut output = egui::FullOutput::default();
+        for _ in 0..3 {
+            output = run_ui(
+                &ctx,
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 820.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| app.show(ui),
+            );
+        }
+        let selector_width = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect)
+                    if rect.rect.top() < 92.0
+                        && rect.rect.height() == 54.0
+                        && rect.fill == egui::Color32::from_rgb(23, 34, 47) =>
+                {
+                    Some(rect.rect.width())
+                }
+                _ => None,
+            })
+            .expect("ELF selector");
+        if width >= 980.0 {
+            assert!(
+                (selector_width - 470.0).abs() < 1.0,
+                "ELF selector must keep its preferred width at {width}"
+            );
+        } else {
+            assert!(selector_width < 470.0);
+            assert!(
+                !architecture_visible && !bitness_visible,
+                "Metadata must disappear before the ELF selector shrinks"
+            );
+        }
+        for (label, expected) in [("ARM", architecture_visible), ("32-bit", bitness_visible)] {
+            assert_eq!(
+                output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::Shape::Text(text) if text.pos.y < 92.0 && text.galley.text() == label
+                )),
+                expected,
+                "Metadata {label} at {width}"
+            );
+        }
+    }
+}
+
+#[test]
 fn dashboard_cards_fit_and_navigation_remains_visible_at_both_widths() {
     let analysis = snout_core::analyze_bytes(
         include_bytes!("../../../fixtures/build/gcc/cortex-m.elf"),
@@ -3723,7 +3812,14 @@ fn dashboard_cards_fit_and_navigation_remains_visible_at_both_widths() {
         &Default::default(),
     )
     .unwrap();
-    for (width, height) in [(900.0, 600.0), (1280.0, 820.0), (1536.0, 1024.0)] {
+    for (width, height) in [
+        (900.0, 600.0),
+        (980.0, 600.0),
+        (1100.0, 600.0),
+        (1180.0, 700.0),
+        (1280.0, 820.0),
+        (1536.0, 1024.0),
+    ] {
         let ctx = egui::Context::default();
         shell::configure_style(&ctx);
         let mut app = Explorer {
@@ -3777,17 +3873,36 @@ fn dashboard_cards_fit_and_navigation_remains_visible_at_both_widths() {
             analysis.metadata.architecture.clone(),
             format!("{}-bit", analysis.metadata.bitness),
         ] {
-            let metadata = position(&label);
-            assert!(
-                metadata.y < 140.0,
-                "Firmware metadata belongs in the header: {label}"
+            let metadata = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label && text.pos.y < 92.0 => {
+                    Some((text, shape.clip_rect))
+                }
+                _ => None,
+            });
+            assert_eq!(
+                metadata.is_some(),
+                if label == analysis.metadata.architecture {
+                    width >= 1030.0
+                } else {
+                    width >= 1100.0
+                },
+                "Header metadata visibility at {width}: {label}"
             );
-            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
-                egui::Shape::Text(text) if text.galley.text() == label
-                    && shape.clip_rect.contains(egui::Rect::from_min_size(text.pos, text.galley.size()).right_bottom())
-            )), "Header metadata must be visible at {width}: {label}");
+            if let Some((text, clip)) = metadata {
+                let bounds = egui::Rect::from_min_size(text.pos, text.galley.size());
+                assert!(
+                    clip.contains_rect(bounds),
+                    "Visible metadata must fit: {label}"
+                );
+                let actions_left = width - 16.0 - crate::window_frame::CONTROLS_WIDTH - 42.0;
+                assert!(
+                    bounds.right() <= actions_left - 10.0,
+                    "Metadata must not overlap controls: {label}"
+                );
+            }
         }
         let overview = position("Overview");
+        assert!(overview.y < 120.0, "Header must stay on one row at {width}");
         let build_files = position("Build files");
         let files = position("Files");
         assert!((build_files.x - overview.x).abs() < 0.1);
@@ -3807,7 +3922,11 @@ fn dashboard_cards_fit_and_navigation_remains_visible_at_both_widths() {
             .shapes
             .iter()
             .filter_map(|shape| match &shape.shape {
-                egui::Shape::Rect(rect) if rect.fill == egui::Color32::from_rgb(16, 25, 35) => {
+                egui::Shape::Rect(rect)
+                    if rect.fill == egui::Color32::from_rgb(16, 25, 35)
+                        && rect.rect.width() > 100.0
+                        && rect.rect.height() > 64.0 =>
+                {
                     Some((rect, shape.clip_rect))
                 }
                 _ => None,
