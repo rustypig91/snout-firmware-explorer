@@ -3256,6 +3256,70 @@ mod tests {
     }
 
     #[test]
+    fn header_baseline_stays_visible_and_clickable_at_narrow_widths() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = fixture(&directory.path().join("build"));
+        let mut app = open(&root);
+        app.take_snapshot("baseline").unwrap();
+        let ctx = egui::Context::default();
+        super::super::shell::configure_style(&ctx);
+        for width in [900.0, 980.0, 1100.0, 1280.0] {
+            app.select_snapshot(Some("baseline".into())).unwrap();
+            let frame = |app: &mut Explorer, events| {
+                crate::tests::run_ui(
+                    &ctx,
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 820.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| app.show(ui),
+                )
+            };
+            frame(&mut app, vec![]);
+            frame(&mut app, vec![]);
+            let output = frame(&mut app, vec![]);
+            let bounds = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "Baseline: baseline" => {
+                        let bounds = egui::Rect::from_min_size(text.pos, text.galley.size());
+                        assert!(
+                            shape.clip_rect.contains_rect(bounds),
+                            "Baseline clipped at {width}: {bounds:?}, clip={:?}",
+                            shape.clip_rect
+                        );
+                        Some(bounds)
+                    }
+                    _ => None,
+                })
+                .expect("Baseline badge must remain visible");
+            assert!(
+                bounds.right() < width - 16.0 - super::super::window_frame::CONTROLS_WIDTH - 52.0
+            );
+            for pressed in [true, false] {
+                frame(
+                    &mut app,
+                    vec![
+                        egui::Event::PointerMoved(bounds.center()),
+                        egui::Event::PointerButton {
+                            pos: bounds.center(),
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+            assert!(app.snapshot_label().is_none(), "Baseline click at {width}");
+        }
+    }
+
+    #[test]
     fn baselines_tab_selects_saved_baselines_or_none() {
         use super::super::View;
         let directory = tempfile::tempdir().unwrap();

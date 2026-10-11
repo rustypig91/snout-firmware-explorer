@@ -999,7 +999,16 @@ impl Explorer {
                 ui.scope_builder(egui::UiBuilder::new().max_rect(content), |ui| {
                     ui.set_clip_rect(ui.clip_rect().intersect(content));
                     ui.horizontal(|ui| {
+                        let spacing = ui.spacing().item_spacing.x;
+                        let baseline_width = if self.snapshot_label().is_some() {
+                            180.0 + spacing
+                        } else {
+                            0.0
+                        };
                         ui.horizontal(|ui| {
+                            // Reserve the baseline before the selector consumes
+                            // the row, so it remains visible in narrow windows.
+                            ui.set_max_width((content.width() - baseline_width).max(0.0));
                             draw_brand(ui);
                             ui.add_space(22.0);
                             self.firmware_selector(ui);
@@ -1023,11 +1032,6 @@ impl Explorer {
                             let bitness_width = 20.0 + spacing + measure(&bitness);
                             // Keep reload and the baseline usable, then omit bit
                             // width first and architecture only if it cannot fit.
-                            let baseline_width = if self.snapshot_label().is_some() {
-                                180.0 + spacing
-                            } else {
-                                0.0
-                            };
                             // Use the fixed content boundary: egui's available width
                             // can expand when earlier widgets exceed their budget.
                             let available = content.right() - ui.cursor().left() - baseline_width;
