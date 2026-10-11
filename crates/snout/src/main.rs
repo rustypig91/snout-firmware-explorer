@@ -23,6 +23,7 @@ mod snapshots;
 #[cfg(test)]
 mod tests;
 mod views;
+mod window_frame;
 #[cfg(target_os = "linux")]
 mod window_theme;
 mod workspace;
@@ -623,6 +624,10 @@ impl Explorer {
     }
 }
 impl eframe::App for Explorer {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        window_frame::raw_input_hook(ctx, input);
+    }
+
     fn on_exit(&mut self) {
         if let Err(error) = self.save_preferences() {
             eprintln!("Could not save workspace preferences: {error}");
@@ -671,6 +676,7 @@ fn main() -> eframe::Result {
             },
         ),
         viewport: egui::ViewportBuilder::default()
+            .with_decorations(false)
             .with_icon(
                 eframe::icon_data::from_png_bytes(include_bytes!("../packaging/icons/snout.png"))
                     .expect("bundled Snout icon"),

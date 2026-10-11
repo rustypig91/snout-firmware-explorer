@@ -562,7 +562,9 @@ impl Explorer {
             .map(|path| display_path(&path.to_string_lossy()).into_owned())
             .unwrap_or_else(|| "Open a build folder to select firmware".into());
         let popup_id = ui.make_persistent_id("current_elf");
-        let width = (ui.ctx().content_rect().width() - 560.0).clamp(240.0, 470.0);
+        // Keep the preferred ELF width until optional metadata has been
+        // omitted. Only shrink when the selector itself exhausts the space.
+        let width = ui.available_width().clamp(0.0, 470.0);
         let mut selected = None;
         ui.add_enabled_ui(self.receiver.is_none(), |ui| {
             let (rect, response) =
@@ -983,35 +985,74 @@ impl Explorer {
                     .inner_margin(egui::Margin::symmetric(16, 14)),
             )
             .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
+                let full_width = ui.available_width();
+                let header =
+                    egui::Rect::from_min_size(ui.cursor().min, egui::vec2(full_width, 64.0));
+                super::window_frame::header_drag(ui, header);
+                let content = egui::Rect::from_min_max(
+                    header.min,
+                    egui::pos2(
+                        header.right() - super::window_frame::CONTROLS_WIDTH - 52.0,
+                        ui.max_rect().bottom(),
+                    ),
+                );
+                ui.scope_builder(egui::UiBuilder::new().max_rect(content), |ui| {
+                    ui.set_clip_rect(ui.clip_rect().intersect(content));
                     ui.horizontal(|ui| {
-                        draw_brand(ui);
-                        ui.add_space(22.0);
-                        self.firmware_selector(ui);
-                    });
-                    if let Some(analysis) = &self.analysis {
                         ui.horizontal(|ui| {
-                            draw_chip(ui);
-                            ui.label(&analysis.metadata.architecture);
-                            ui.add_space(12.0);
-                            draw_bit_width(ui);
-                            ui.label(format!("{}-bit", analysis.metadata.bitness))
-                                .on_hover_text("Firmware word size from the ELF header");
+                            draw_brand(ui);
+                            ui.add_space(22.0);
+                            self.firmware_selector(ui);
                         });
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // Keep the action at the far right, beside the baseline badge.
-                        if self.receiver.is_some() {
-                            ui.add_sized(egui::vec2(32.0, 32.0), egui::Spinner::new());
-                            ui.label("Analyzing...");
-                        } else if reload_button(
-                            ui,
-                            self.build.is_some(),
-                            self.firmware_watch.changed(),
-                        )
-                        .clicked()
-                        {
-                            self.refresh();
+                        if let Some(analysis) = &self.analysis {
+                            let font = egui::TextStyle::Body.resolve(ui.style());
+                            let bitness = format!("{}-bit", analysis.metadata.bitness);
+                            let measure = |text: &str| {
+                                ui.painter()
+                                    .layout_no_wrap(
+                                        text.to_owned(),
+                                        font.clone(),
+                                        ui.visuals().text_color(),
+                                    )
+                                    .size()
+                                    .x
+                            };
+                            let spacing = ui.spacing().item_spacing.x;
+                            let architecture_width =
+                                20.0 + spacing + measure(&analysis.metadata.architecture);
+                            let bitness_width = 20.0 + spacing + measure(&bitness);
+                            // Keep reload and the baseline usable, then omit bit
+                            // width first and architecture only if it cannot fit.
+                            let baseline_width = if self.snapshot_label().is_some() {
+                                180.0 + spacing
+                            } else {
+                                0.0
+                            };
+                            // Use the fixed content boundary: egui's available width
+                            // can expand when earlier widgets exceed their budget.
+                            let available = content.right() - ui.cursor().left() - baseline_width;
+                            if architecture_width <= available {
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(architecture_width, 20.0),
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        draw_chip(ui);
+                                        ui.label(&analysis.metadata.architecture);
+                                    },
+                                );
+                                if architecture_width + spacing + bitness_width <= available {
+                                    ui.allocate_ui_with_layout(
+                                        egui::vec2(bitness_width, 20.0),
+                                        egui::Layout::left_to_right(egui::Align::Center),
+                                        |ui| {
+                                            draw_bit_width(ui);
+                                            ui.label(&bitness).on_hover_text(
+                                                "Firmware word size from the ELF header",
+                                            );
+                                        },
+                                    );
+                                }
+                            }
                         }
                         if let Some(name) = self.snapshot_label().map(str::to_owned) {
                             let label = format!("Baseline: {name}");
@@ -1020,7 +1061,11 @@ impl Explorer {
                                 .color(super::views::ACCENT);
                             if ui
                                 .add_sized(
-                                    egui::vec2(180.0_f32.min(ui.available_width()), 28.0),
+                                    egui::vec2(
+                                        180.0_f32
+                                            .min((content.right() - ui.cursor().left()).max(0.0)),
+                                        28.0,
+                                    ),
                                     egui::Button::new(text).selected(true).truncate(),
                                 )
                                 .on_hover_text(format!(
@@ -1033,9 +1078,59 @@ impl Explorer {
                                 }
                             }
                         }
+                        if self.receiver.is_some() {
+                            let font = egui::TextStyle::Body.resolve(ui.style());
+                            let label_width = ui
+                                .painter()
+                                .layout_no_wrap(
+                                    "Analyzing...".to_owned(),
+                                    font,
+                                    ui.visuals().text_color(),
+                                )
+                                .size()
+                                .x;
+                            if label_width <= content.right() - ui.cursor().left() {
+                                ui.label("Analyzing...");
+                            }
+                        }
                     });
                 });
+                let action_rect = egui::Rect::from_min_size(
+                    egui::pos2(
+                        header.right() - super::window_frame::CONTROLS_WIDTH - 42.0,
+                        header.top() + 16.0,
+                    ),
+                    egui::vec2(32.0, 32.0),
+                );
+                ui.scope_builder(
+                    egui::UiBuilder::new()
+                        .max_rect(action_rect)
+                        .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                    |ui| {
+                        if self.receiver.is_some() {
+                            ui.add_sized(egui::vec2(32.0, 32.0), egui::Spinner::new())
+                                .on_hover_text("Analyzing...");
+                        } else if reload_button(
+                            ui,
+                            self.build.is_some(),
+                            self.firmware_watch.changed(),
+                        )
+                        .clicked()
+                        {
+                            self.refresh();
+                        }
+                    },
+                );
+                let controls = egui::Rect::from_min_size(
+                    egui::pos2(
+                        header.right() - super::window_frame::CONTROLS_WIDTH,
+                        header.top() + 16.0,
+                    ),
+                    egui::vec2(super::window_frame::CONTROLS_WIDTH, 32.0),
+                );
+                super::window_frame::controls(ui, controls);
             });
+        super::window_frame::resize_edges(ctx);
         if self.show_notes {
             egui::Panel::bottom("analysis_notes")
                 .resizable(true)
