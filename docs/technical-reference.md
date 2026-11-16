@@ -151,7 +151,10 @@ Store preferences and snapshots use `snout-firmware-explorer-store` instead of
 On Windows the requested preferences path is
 `%APPDATA%\snout-firmware-explorer-store\workspace.json`, with `snapshots` beside
 it. Windows package virtualization may redirect these into per-user package
-storage. **Open configuration folder** opens the path visible to that edition.
+storage. **Open configuration folder** resolves the physical directory before
+opening Explorer, so backups and migration use the edition's actual storage
+rather than a path that is only redirected inside the app. Windows verbatim
+drive/UNC prefixes are converted to shell paths without losing filename data.
 Neither edition imports data automatically. The workspace/snapshot schemas and
 original direct-download paths are unchanged.
 
