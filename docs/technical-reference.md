@@ -219,7 +219,8 @@ Following Canvaz, `scripts/package-store-submission.py` bundles the MSIX, checks
 build metadata, all committed listing PNGs and original icons, the manifest
 reference, license, privacy policy, listing/reviewer notes and submission
 instructions. It verifies that the package matches both digest sidecars before
-archiving, requires exactly one MSIX and all referenced materials, and replaces
+archiving, requires exactly one MSIX and all referenced materials (including each
+of the seven listing PNGs and the PNG/ICO/SVG originals), and replaces
 an existing ZIP only after a complete archive is written. Missing/corrupt package
 files or missing artwork fail the Store job and block release publication.
 The release workflow downloads and attaches this completed ZIP without repacking.
@@ -364,7 +365,8 @@ Run `python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v`
 for archive checks and publication regressions with a mock GitHub CLI. These
 exercise create/upload/publish failures, empty/missing assets, retrying drafts,
 protecting published releases, ZIP contents, package/sidecar digest mismatches,
-missing materials and preserving an existing ZIP on failure without contacting GitHub. The reusable build workflow runs them before
+missing materials (including individual artwork files) and preserving an existing
+ZIP on failure without contacting GitHub. The reusable build workflow runs them before
 platform builds. Validate workflow syntax and reusable calls with `actionlint`.
 
 Run `pwsh -NoProfile -File scripts/tests/build-msix.Tests.ps1` for packaging-script

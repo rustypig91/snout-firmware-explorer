@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 import zipfile
@@ -118,6 +119,26 @@ class SubmissionArchiveTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Missing Store artwork'):
             submission.create_archive(self.packages, self.screenshot, self.output, root=self.root)
         self.assertFalse(self.output.exists())
+
+    def test_each_required_artwork_file_is_checked_and_existing_archive_is_preserved(self):
+        materials = self.root / 'materials'
+        for directory in ('crates/snout/packaging', 'docs'):
+            shutil.copytree(ROOT / directory, materials / directory)
+        for name in ('README.md', 'LICENSE'):
+            shutil.copyfile(ROOT / name, materials / name)
+        self.output.parent.mkdir()
+        self.output.write_bytes(b'previous archive')
+        for relative in submission.REQUIRED_ARTWORK:
+            with self.subTest(missing=relative):
+                artwork = materials / relative
+                content = artwork.read_bytes()
+                artwork.unlink()
+                try:
+                    with self.assertRaisesRegex(ValueError, 'Missing Store artwork'):
+                        submission.create_archive(self.packages, None, self.output, root=materials)
+                    self.assertEqual(self.output.read_bytes(), b'previous archive')
+                finally:
+                    artwork.write_bytes(content)
 
 
 if __name__ == '__main__':

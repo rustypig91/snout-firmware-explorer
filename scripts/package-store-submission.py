@@ -10,6 +10,18 @@ import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
+REQUIRED_ARTWORK = (
+    'crates/snout/packaging/windows/store-listing/snout-app-tile-71x71.png',
+    'crates/snout/packaging/windows/store-listing/snout-app-tile-150x150.png',
+    'crates/snout/packaging/windows/store-listing/snout-app-tile-300x300.png',
+    'crates/snout/packaging/windows/store-listing/snout-box-art-1080x1080.png',
+    'crates/snout/packaging/windows/store-listing/snout-box-art-2160x2160.png',
+    'crates/snout/packaging/windows/store-listing/snout-poster-art-720x1080.png',
+    'crates/snout/packaging/windows/store-listing/snout-poster-art-1440x2160.png',
+    'crates/snout/packaging/icons/snout.png',
+    'crates/snout/packaging/icons/snout.ico',
+    'crates/snout/packaging/icons/snout.svg',
+)
 
 
 def create_archive(package_directory, screenshot, output, root=ROOT):
@@ -44,13 +56,14 @@ def create_archive(package_directory, screenshot, output, root=ROOT):
         'docs/site/privacy/index.html',
     ):
         files[relative] = root / relative
+    for relative in REQUIRED_ARTWORK:
+        if not (root / relative).is_file():
+            raise ValueError(f'Missing Store artwork: {relative}')
     for directory, pattern in (
         ('crates/snout/packaging/windows/store-listing', '*.png'),
         ('crates/snout/packaging/icons', 'snout.*'),
     ):
         images = sorted((root / directory).glob(pattern))
-        if not images:
-            raise ValueError(f'Missing Store artwork: {directory}')
         for image in images:
             files[image.relative_to(root).as_posix()] = image
     for file in files.values():
