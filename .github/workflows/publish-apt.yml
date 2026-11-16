@@ -1,0 +1,21 @@
+name: Request APT publication
+
+on:
+  # workflow_run also fires for releases published using GITHUB_TOKEN.
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  publish-apt:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-22.04
+    steps:
+      # No source checkout: only request reconciliation of published releases.
+      - name: Request shared APT reconciliation
+        env:
+          GH_TOKEN: ${{ secrets.APT_PUBLISH_TOKEN }}
+        run: gh api --method POST repos/rustypig91/rusty-apt/actions/workflows/publish-apt.yml/dispatches -f ref=main

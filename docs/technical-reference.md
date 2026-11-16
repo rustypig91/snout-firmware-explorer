@@ -78,7 +78,29 @@ Executables are `target/release/snout` and `target/release/snout-cli` (with `.ex
 
 ## Releases and updates
 
-The [build workflow](../.github/workflows/build.yml) follows Pigtail's Windows/Linux release workflow. Every pull request and push to `main` builds both platforms and produces downloadable artifacts without build labels. Feature-branch pushes build through the pull-request event, avoiding duplicate builds. New PR commits cancel older runs for that PR; every `main` push, version-tag build, and manual run builds independently. Manual branch builds remain available. Pushing `v<workspace-version>` publishes a GitHub release only after both Windows and Linux pass formatting, Clippy, tests, release builds, packaging, and artifact uploads. A separate release job downloads both platforms’ assets before publishing; a failed or canceled platform prevents release creation. The workflow rejects tags that do not match `Cargo.toml`.
+The [build workflow](../.github/workflows/build.yml) builds Windows and Linux on
+pull requests, pushes to `main`, manual dispatch and reusable calls. It produces
+downloadable artifacts without build labels and never publishes a release.
+Feature-branch pushes build through the PR event, avoiding duplicate builds.
+New PR commits cancel older runs for that PR; main pushes and manual runs build
+independently. The [Store workflow](../.github/workflows/store.yml) is likewise
+reusable and runs on relevant PRs, main pushes and manual dispatch. Neither build
+workflow handles version-tag pushes independently.
+
+Following Canvaz's workflow split, [release.yml](../.github/workflows/release.yml)
+handles `v*` tag pushes and manual runs against an existing version tag. It rejects
+branch refs and tags that differ from `Cargo.toml`. It calls both reusable build
+workflows, waits for **both platforms and Store packaging** to succeed, then
+publishes the privacy policy from that commit. The final release job waits for
+all these jobs; failed, cancelled or skipped prerequisites block publication.
+Runs for the same tag serialize without cancelling an in-progress release.
+
+After both platform artifacts download, `scripts/publish-release.sh` creates or
+reuses a private draft, uploads all assets, and publishes only as its final
+operation. An upload failure leaves an unpublished draft for retry. A rerun
+replaces incomplete draft uploads but refuses to change an already published
+release. Failed artifact downloads never reach draft creation. Normal PR/main
+builds and manual build/Store runs never create or publish GitHub releases.
 
 The header displays the pig artwork at 64 × 64 logical pixels, with the two-line application title vertically centered beside it. The header, About dialog, native window icon, Windows executable and Setup installer, and Linux desktop packages use the same pig artwork from `crates/snout/packaging/icons/snout.svg` (the supplied `pigbot-vector.svg`). After editing the SVG, install CairoSVG (`python3 -m pip install CairoSVG`) and run `python3 scripts/generate-icons.py` to regenerate the committed 512 px PNG and Windows ICO (16–256 px). Normal builds use the committed assets and do not require CairoSVG.
 
@@ -88,7 +110,21 @@ Release assets include portable archives containing the GUI and CLI, standalone 
 
 The Debian package is named `snout` and installs the GUI as `/usr/bin/snout`. Its desktop launcher runs `snout`; the AppImage uses the same executable name internally. Cargo builds and portable archives also use `snout` (`snout.exe` on Windows).
 
-After a successful tagged GitHub release, the `publish-apt` job dispatches `publish-apt.yml` on `main` in the shared [Rusty APT repository](https://github.com/rustypig91/rusty-apt). That publisher imports release Debian assets, signs repository metadata, and deploys the APT repository. Pull-request and manual branch builds do not dispatch publication. The application repository needs the `APT_PUBLISH_TOKEN` Actions secret with Actions write access only to `rustypig91/rusty-apt`; signing and Pages configuration belong to the shared repository. A failed dispatch can be recovered by manually running its **Publish APT** workflow.
+The separate [Request APT publication workflow](../.github/workflows/publish-apt.yml)
+runs after a successful **Release** workflow through `workflow_run`, or on manual
+dispatch for recovery. It requests `publish-apt.yml` on `main` in the shared
+[Rusty APT repository](https://github.com/rustypig91/rusty-apt), which imports
+published release Debian assets, signs repository metadata and deploys APT.
+APT reconciliation must follow GitHub publication because it consumes those
+assets; a downstream APT failure does not undo a published release. No APT job
+runs after publication inside the Release workflow itself. PRs and manual
+build/Store runs do not dispatch APT publication. This repository needs the
+`APT_PUBLISH_TOKEN` Actions secret with Actions write access only to
+`rustypig91/rusty-apt`; signing and APT Pages configuration belong to that shared
+repository. A failed dispatch can be retried through **Request APT publication**
+or the shared repository's **Publish APT** workflow. The `workflow_run` listener
+must be on the default branch to receive completion events and checks out no
+source code.
 
 Build packages locally using `bash scripts/build-release.sh` on x86_64 Debian/Ubuntu or `scripts\build-release.cmd` from a Windows developer shell. Output goes to `target/release-assets/<target>/`. The Linux script needs the desktop build packages listed above, plus `curl`, `pkg-config`, and `dpkg-dev`; packaging downloads linuxdeploy and installs cargo-deb if needed. Windows requires Rust, the C++ Build Tools and Windows SDK; the script downloads portable WiX and Inno Setup. To capture a screenshot locally, install `xvfb xauth xdotool imagemagick libvulkan1 mesa-vulkan-drivers`, then run:
 
@@ -169,8 +205,9 @@ The unsigned output is
 Partner Center; Microsoft signs it during Store publication. It is not a public
 unsigned sideload installer and needs no signing-certificate secret. The separate
 **Microsoft Store MSIX** workflow tests the Store edition and packaging script,
-checks tag/version consistency, and builds on relevant PRs, main pushes, version
-tags and manual dispatch. Download `snout-store-msix-<run-id>` from its artifacts.
+checks tag/version consistency, and builds on relevant PRs, main pushes, manual
+dispatch and reusable calls from the tag-release workflow. Download
+`snout-store-msix-<run-id>` from its artifacts.
 Reruns replace that run's artifact. It neither adds MSIX files to GitHub releases
 nor submits/publishes automatically. The existing build workflow keeps producing
 the direct-download Windows/Linux packages.
@@ -191,13 +228,15 @@ Keep the content and visible date aligned with app behavior. Both editions link
 to `https://rustypig91.github.io/snout-firmware-explorer/privacy/` from the menu.
 
 The reusable **Publish privacy policy** workflow publishes only `docs/site` to
-GitHub Pages after a successful tagged release, or on manual dispatch for first
-publication and policy-only updates. Repository **Settings → Pages** must use
+GitHub Pages after the application and Store builds succeed, before the tagged
+GitHub release is published. Deployment failure blocks release publication. Manual
+dispatch remains available for first publication and policy-only updates.
+Repository **Settings → Pages** must use
 **GitHub Actions**. The `github-pages` environment must allow `v*` tags and the
 manual-publication branch (normally `main`). The URL becomes live after a
 successful deployment. Publishing replaces this repository's Pages site; keep
-future pages under `docs/site` too. The release workflow calls it explicitly,
-since releases created with `GITHUB_TOKEN` do not trigger other release workflows.
+future pages under `docs/site` too. The release workflow calls it directly as a
+required dependency.
 Deployment runs serialize; artifacts use run/attempt names, with successful build
 outputs retained for deploy-only retries. No custom token or domain is required.
 
@@ -294,6 +333,12 @@ cargo test --workspace --locked
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-features --locked
 ```
+
+Run `python3 -m unittest discover -s scripts/tests -p 'test_publish_release.py' -v`
+for publication regressions with a mock GitHub CLI. These exercise create/upload/
+publish failures, empty/missing assets, retrying drafts and protecting published
+releases without contacting GitHub. The reusable build workflow runs them before
+platform builds. Validate workflow syntax and reusable calls with `actionlint`.
 
 Run `pwsh -NoProfile -File scripts/tests/build-msix.Tests.ps1` for packaging-script
 regressions without Rust builds or SDK tools. Coverage includes derived package

@@ -1,8 +1,7 @@
 name: Publish privacy policy
 
 on:
-  # Called explicitly after the build workflow publishes its release. Releases
-  # created with GITHUB_TOKEN do not trigger another workflow's release event.
+  # The release workflow waits for this deployment before publishing.
   workflow_call:
   # Also allows the initial publication before the next application release.
   workflow_dispatch:

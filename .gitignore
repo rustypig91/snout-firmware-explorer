@@ -32,3 +32,6 @@ fixtures/build/**
 # Local fixture caches.
 fixtures/generated/
 fixtures/__pycache__/
+
+# Python validation scripts
+__pycache__/
