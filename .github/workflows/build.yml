@@ -23,8 +23,8 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-      - name: Test release publication failures
-        run: python3 -m unittest discover -s scripts/tests -p 'test_publish_release.py' -v
+      - name: Test release publication and Store archive
+        run: python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
       - name: Read workspace version
         id: version
         run: |

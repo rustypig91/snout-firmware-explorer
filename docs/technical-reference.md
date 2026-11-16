@@ -95,7 +95,8 @@ publishes the privacy policy from that commit. The final release job waits for
 all these jobs; failed, cancelled or skipped prerequisites block publication.
 Runs for the same tag serialize without cancelling an in-progress release.
 
-After both platform artifacts download, `scripts/publish-release.sh` creates or
+After both platform artifacts and the completed Store submission ZIP download,
+`scripts/publish-release.sh` creates or
 reuses a private draft, uploads all assets, and publishes only as its final
 operation. An upload failure leaves an unpublished draft for retry. A rerun
 replaces incomplete draft uploads but refuses to change an already published
@@ -106,7 +107,7 @@ The header displays the pig artwork at 64 × 64 logical pixels, with the two-lin
 
 The desktop window uses an application-drawn frame instead of OS decorations. Minimize, maximize/restore and close controls stay at the right of the header, with a divider separating them from reload. Buttons highlight on hover and press; close highlights red. Window controls remain usable while application modal dialogs are open; those dialogs continue to block application actions. Drag unused header space to move the window, or double-click it to maximize/restore. Native movement starts once egui recognizes a drag, preserving real press/release timing for header clicks across intervening repaints. The thin visible border has invisible resize targets extending 8 logical pixels inward, with diagonal resizing available along the first 28 logical pixels of each edge near a corner. Corner targets follow the edge bands so nearby content remains clickable. Directional cursors identify the active resize direction; resizing is disabled while maximized or fullscreen. Window movement and resizing use the desktop window manager. After handing off a move or resize, the input hook releases egui’s pointer capture if the native backend consumes mouse-up, and ignores a delayed duplicate release so hover and subsequent clicks remain responsive. The native title and icon remain available to task switchers. Headless tests verify viewport commands and hover rendering, but native window-manager behavior requires platform testing.
 
-Release assets include portable archives containing the GUI and CLI, standalone GUI executables for the updater, Windows MSI and Setup installers, a Debian package, and an AppImage. Linux builds also capture `snout-screenshot.png` using the regular app with `fixtures/build/gcc/cortex-m.elf` selected. There is no demo build. The screenshot runs in an isolated Xvfb session with fresh preferences and update checks disabled.
+Release assets include `store-submission.zip` for maintainers, portable archives containing the GUI and CLI, standalone GUI executables for the updater, Windows MSI and Setup installers, a Debian package, and an AppImage. Linux builds also capture `snout-screenshot.png` using the regular app with `fixtures/build/gcc/cortex-m.elf` selected. There is no demo build. The screenshot runs in an isolated Xvfb session with fresh preferences and update checks disabled.
 
 The Debian package is named `snout` and installs the GUI as `/usr/bin/snout`. Its desktop launcher runs `snout`; the AppImage uses the same executable name internally. Cargo builds and portable archives also use `snout` (`snout.exe` on Windows).
 
@@ -201,16 +202,41 @@ Encoded compiler flags, including explicitly empty flags, take precedence over
 plain flags; plain flags are split without empty arguments.
 
 The unsigned output is
-`target/release-assets/store/snout-store-<app-version>.0-x64.msix`. Upload it to
-Partner Center; Microsoft signs it during Store publication. It is not a public
-unsigned sideload installer and needs no signing-certificate secret. The separate
-**Microsoft Store MSIX** workflow tests the Store edition and packaging script,
-checks tag/version consistency, and builds on relevant PRs, main pushes, manual
-dispatch and reusable calls from the tag-release workflow. Download
-`snout-store-msix-<run-id>` from its artifacts.
-Reruns replace that run's artifact. It neither adds MSIX files to GitHub releases
-nor submits/publishes automatically. The existing build workflow keeps producing
-the direct-download Windows/Linux packages.
+`target/release-assets/store/snout-store-<app-version>.0-x64.msix`, accompanied by
+`.msix.sha256` and `.msix.build-info.json` sidecars. The metadata records app and
+package versions, build target and MSIX SHA-256. Upload the MSIX to Partner Center;
+Microsoft signs it during Store publication. It is not a public unsigned sideload
+installer and needs no signing-certificate secret.
+
+The separate **Microsoft Store MSIX** workflow tests the Store edition, packaging
+script and submission archiver, checks tag/version consistency, and builds on
+relevant PRs, main pushes, manual dispatch and reusable calls from the tag-release
+workflow. It uploads `snout-store-msix-<run-id>` with the MSIX and sidecars.
+Every successful Store run also creates `store-submission.zip` and uploads it as
+`snout-store-submission-<run-id>`. Artifact replacement supports reruns.
+
+Following Canvaz, `scripts/package-store-submission.py` bundles the MSIX, checksum,
+build metadata, all committed listing PNGs and original icons, the manifest
+reference, license, privacy policy, listing/reviewer notes and submission
+instructions. It verifies that the package matches both digest sidecars before
+archiving, requires exactly one MSIX and all referenced materials, and replaces
+an existing ZIP only after a complete archive is written. Missing/corrupt package
+files or missing artwork fail the Store job and block release publication.
+The release workflow downloads and attaches this completed ZIP without repacking.
+An archive upload/download failure also prevents GitHub publication.
+
+This ZIP is a maintainer bundle: extract it and upload its **contained MSIX** to
+Partner Center. CI does not submit or publish the Store listing. Windows Store
+screenshots still need to be captured for submission; the Linux fixture screenshot
+remains a separate GitHub release asset. The local archiver accepts an optional
+`--screenshot` for reference but does not require one. To archive a local MSIX build:
+
+```powershell
+python scripts/package-store-submission.py --package-directory target/release-assets/store --output target/release-assets/store-submission.zip
+```
+
+The existing build workflow keeps producing the direct-download Windows/Linux
+packages. These retain their normal installation and update behavior.
 
 ### Store listing and privacy publication
 
@@ -334,10 +360,11 @@ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-features --locked
 ```
 
-Run `python3 -m unittest discover -s scripts/tests -p 'test_publish_release.py' -v`
-for publication regressions with a mock GitHub CLI. These exercise create/upload/
-publish failures, empty/missing assets, retrying drafts and protecting published
-releases without contacting GitHub. The reusable build workflow runs them before
+Run `python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v`
+for archive checks and publication regressions with a mock GitHub CLI. These
+exercise create/upload/publish failures, empty/missing assets, retrying drafts,
+protecting published releases, ZIP contents, package/sidecar digest mismatches,
+missing materials and preserving an existing ZIP on failure without contacting GitHub. The reusable build workflow runs them before
 platform builds. Validate workflow syntax and reusable calls with `actionlint`.
 
 Run `pwsh -NoProfile -File scripts/tests/build-msix.Tests.ps1` for packaging-script

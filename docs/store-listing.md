@@ -55,3 +55,9 @@ Upload current screenshots and the generated listing PNGs from
 workflow produces an Overview capture with the committed fixture; verify that
 uploaded screenshots match the submitted version. Complete pricing/availability,
 properties, age ratings and all remaining Partner Center sections before submission.
+
+Tagged releases attach `store-submission.zip`, which groups the MSIX, checksum,
+build metadata and these listing materials. Every successful Store workflow
+also uploads it in `snout-store-submission-<run-id>`. Extract the ZIP and upload
+the contained MSIX to Partner Center. Submission instructions are in its README;
+Windows Store screenshots still need to be prepared separately.

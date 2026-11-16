@@ -114,6 +114,18 @@ try {
 
     $package = Join-Path $OutputDirectory "snout-store-$PackageVersion-x64.msix"
     Invoke-Checked $makeAppxPath @('pack', '/o', '/h', 'SHA256', '/d', $stage, '/p', $package)
+    # Sidecars let the submission archiver detect changed or stale package bytes.
+    $digest = (Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
+    $utf8 = [System.Text.UTF8Encoding]::new($false)
+    $checksum = "$digest  $([System.IO.Path]::GetFileName($package))`n"
+    [System.IO.File]::WriteAllText("$package.sha256", $checksum, $utf8)
+    $buildInfo = [ordered]@{
+        applicationVersion = $version
+        packageVersion = $PackageVersion
+        target = $target
+        msixSha256 = $digest
+    } | ConvertTo-Json
+    [System.IO.File]::WriteAllText("$package.build-info.json", $buildInfo, $utf8)
     Write-Host "Store submission package (unsigned): $package"
     Write-Host 'Upload this MSIX to Partner Center. Microsoft signs it after certification.'
 } finally {

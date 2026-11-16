@@ -24,7 +24,7 @@ if is_draft=$(gh release view "$tag" --repo "$GH_REPO" --json isDraft --jq .isDr
 else
   gh release create "$tag" --repo "$GH_REPO" --verify-tag --draft \
     --title "Rusty's Snout - Firmware Explorer $tag" \
-    --notes 'See the assets to download this version.' --generate-notes
+    --notes 'Use the EXE/MSI or Linux packages to install Snout. store-submission.zip contains the unsigned Microsoft Store package and listing materials for maintainers; upload its MSIX to Partner Center.' --generate-notes
 fi
 
 # Retry incomplete draft uploads without exposing partially uploaded releases.

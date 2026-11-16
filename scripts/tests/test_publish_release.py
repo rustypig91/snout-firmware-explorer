@@ -50,7 +50,7 @@ class PublishReleaseTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.assets = self.root / "assets with spaces"
         self.assets.mkdir()
-        for name in ["snout.tar.gz", "snout-setup.exe", "snout-screenshot.png"]:
+        for name in ["snout.tar.gz", "snout-setup.exe", "snout-screenshot.png", "store-submission.zip"]:
             (self.assets / name).write_bytes(b"asset")
         self.state = self.root / "state"
         self.log = self.root / "calls.jsonl"
