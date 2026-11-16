@@ -1596,6 +1596,44 @@ mod tests {
         root.canonicalize().unwrap()
     }
     #[test]
+    fn editions_persist_and_cleanup_only_their_own_snapshots() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = fixture(&directory.path().join("build"));
+        let open_edition = |store| {
+            let mut app = Explorer {
+                preferences_file: Some(crate::preferences::preferences_path_in(
+                    directory.path(),
+                    store,
+                )),
+                ..Explorer::default()
+            };
+            app.restore_preferences(false);
+            app.scan_build(root.clone());
+            finish(&mut app);
+            app.open(root.join("app.elf"));
+            finish(&mut app);
+            app
+        };
+        let mut direct = open_edition(false);
+        direct.take_snapshot("direct baseline").unwrap();
+        let mut store = open_edition(true);
+        assert!(store.snapshots.snapshots.is_empty());
+        store.take_snapshot("store baseline").unwrap();
+        let direct = open_edition(false);
+        assert_eq!(direct.snapshots.snapshots.len(), 1);
+        assert_eq!(direct.snapshots.snapshots[0].name, "direct baseline");
+        // An authoritative empty keep-list triggers cleanup only in Store storage.
+        store.build_settings.clear();
+        store.save_preferences().unwrap();
+        drop(store);
+        let store = open_edition(true);
+        assert!(store.snapshots.snapshots.is_empty());
+        let direct = open_edition(false);
+        assert_eq!(direct.snapshots.snapshots.len(), 1);
+        assert_eq!(direct.snapshots.snapshots[0].name, "direct baseline");
+    }
+
+    #[test]
     fn snapshot_paths_fit_the_windows_path_budget_with_long_display_names() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("build");

@@ -6,7 +6,12 @@ pub(super) fn preferences_path() -> Option<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from))
         .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".config")))
-        .map(|p| p.join("snout-firmware-explorer").join("workspace.json"))
+        .map(|p| preferences_path_in(&p, crate::distribution::MICROSOFT_STORE))
+}
+
+pub(super) fn preferences_path_in(base: &Path, store: bool) -> PathBuf {
+    base.join(crate::distribution::application_directory(store))
+        .join("workspace.json")
 }
 
 fn write_preferences(

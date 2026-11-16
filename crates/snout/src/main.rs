@@ -1,4 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+mod distribution;
+mod graphics;
 mod stack_guess;
 mod startup;
 mod update;
@@ -663,18 +665,7 @@ fn main() -> eframe::Result {
     };
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
-        // Avoid serializing the UI thread with GPU presentation. In particular,
-        // waiting for vsync can block indefinitely on some Linux compositors.
-        wgpu_options: eframe::WgpuConfiguration::default().with_surface_config(
-            eframe::SurfaceConfig {
-                present_mode: if cfg!(target_os = "linux") {
-                    eframe::wgpu::PresentMode::AutoNoVsync
-                } else {
-                    eframe::wgpu::PresentMode::AutoVsync
-                },
-                desired_maximum_frame_latency: Some(2),
-            },
-        ),
+        wgpu_options: graphics::configuration(),
         viewport: egui::ViewportBuilder::default()
             .with_decorations(false)
             .with_icon(

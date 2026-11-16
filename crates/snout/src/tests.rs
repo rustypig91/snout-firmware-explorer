@@ -3560,8 +3560,17 @@ fn check_recent_folder_submenu(width: f32, folder_name: &str) {
         "Refresh",
         "Reset settings for this build folder",
         "Open configuration folder",
-        "Check for updates",
-        "Check for updates on startup",
+        if distribution::MICROSOFT_STORE {
+            "Open in Microsoft Store"
+        } else {
+            "Check for updates"
+        },
+        if distribution::MICROSOFT_STORE {
+            distribution::STORE_UPDATE_MESSAGE
+        } else {
+            "Check for updates on startup"
+        },
+        "Privacy policy",
         "Analysis notes",
         "Support developer",
         "About",
@@ -3571,6 +3580,17 @@ fn check_recent_folder_submenu(width: f32, folder_name: &str) {
             rect.bottom() < icon_center.y - 17.0 && rect.left() >= 0.0 && rect.right() <= width,
             "Menu action must fit above its sidebar button: {label}: {rect:?}"
         );
+    }
+    for label in if distribution::MICROSOFT_STORE {
+        &["Check for updates", "Check for updates on startup"][..]
+    } else {
+        &[
+            "Open in Microsoft Store",
+            distribution::STORE_UPDATE_MESSAGE,
+        ][..]
+    } {
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.text() == *label)));
     }
     let refresh = text_rect(&output, "Refresh");
     let f5 = text_rect(&output, "F5");

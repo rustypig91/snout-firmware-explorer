@@ -17,7 +17,7 @@ A standalone Rust desktop application and CLI for understanding embedded firmwar
 
 ## Opening firmware and selecting supporting files
 
-Install a current stable Rust toolchain (Rust 1.95 or newer for the desktop application). Windows builds need the Visual Studio C++ Build Tools and Windows SDK. Linux desktop builds need a working X11 or Wayland session and development packages for Wayland and xkbcommon (on Ubuntu: `libwayland-dev libxkbcommon-dev`). The desktop uses wgpu, with Vulkan or OpenGL on Linux and DirectX 12 or Vulkan on Windows. The renderer allows two queued frames and uses automatic presentation without vsync on Linux to avoid compositor waits blocking the UI thread; it retains automatic vsync on Windows. Redrawing remains driven by input, animations and background updates. Startup logs identify the selected graphics backend, adapter and driver. Linux Vulkan rendering needs a Vulkan loader and a suitable GPU driver (on Ubuntu: `libvulkan1` and the vendor driver or `mesa-vulkan-drivers`). The CLI and core do not require desktop libraries.
+Install a current stable Rust toolchain (Rust 1.95 or newer for the desktop application). Windows builds need the Visual Studio C++ Build Tools and Windows SDK. Linux desktop builds need a working X11 or Wayland session and development packages for Wayland and xkbcommon (on Ubuntu: `libwayland-dev libxkbcommon-dev`). The desktop uses wgpu, with Vulkan or OpenGL on Linux and DirectX 12 by default on Windows. Windows excludes Vulkan before adapter enumeration to avoid crashes in older Intel Vulkan drivers, following Pigtail’s Windows compatibility fix. Explicit `WGPU_BACKEND` overrides remain available for diagnostics; `WGPU_POWER_PREF` and other upstream settings are preserved. There is no automatic Vulkan fallback on Windows. The renderer allows two queued frames and uses automatic presentation without vsync on Linux to avoid compositor waits blocking the UI thread; it retains automatic vsync on Windows. Redrawing remains driven by input, animations and background updates. Startup logs identify the selected graphics backend, adapter and driver. Linux Vulkan rendering needs a Vulkan loader and a suitable GPU driver (on Ubuntu: `libvulkan1` and the vendor driver or `mesa-vulkan-drivers`). The CLI and core do not require desktop libraries.
 
 ```sh
 cargo build --workspace --locked
@@ -96,7 +96,137 @@ Build packages locally using `bash scripts/build-release.sh` on x86_64 Debian/Ub
 bash scripts/capture-screenshot.sh target/release/snout target/snout-screenshot.png fixtures/build/gcc/cortex-m.elf
 ```
 
-Snout checks GitHub releases at startup. **Menu → Check for updates** provides a manual check. **Support developer** opens Buy Me a Coffee, and **About** shows the app version and repository link. Startup checks stay quiet on network errors, when up to date, or for a skipped version. Download and installation begin only when you press **Update**, and the download's published size and SHA-256 digest are verified before installation. Workspace preferences are saved before installing and restored after restarting. Portable binaries update in place, AppImages replace the original AppImage, and Windows Setup installations reuse their existing installation scope. Debian installations use the package manager instead. MSI installations are identified by this product’s Windows Installer UpgradeCode and the registered executable component, and offer a **Download MSI installer** button instead of in-app replacement. Run that MSI to upgrade the registered installation. Portable copies remain eligible for self-updates even when an MSI is installed elsewhere. If Windows Installer ownership cannot be checked, in-app replacement is disabled and the downloads page remains available. `--no-update-check` suppresses the startup request for one launch.
+Direct-download desktop builds check GitHub releases at startup. **Menu → Check for updates** provides a manual check. **Privacy policy** opens the public policy, **Support developer** opens Buy Me a Coffee, and **About** shows the app version and repository link. Startup checks stay quiet on network errors, when up to date, or for a skipped version. Download and installation begin only when you press **Update**, and the download's published size and SHA-256 digest are verified before installation. Workspace preferences are saved before installing and restored after restarting. Portable binaries update in place, AppImages replace the original AppImage, and Windows Setup installations reuse their existing installation scope. Debian installations use the package manager instead. MSI installations are identified by this product’s Windows Installer UpgradeCode and the registered executable component, and offer a **Download MSI installer** button instead of in-app replacement. Run that MSI to upgrade the registered installation. Portable copies remain eligible for self-updates even when an MSI is installed elsewhere. If Windows Installer ownership cannot be checked, in-app replacement is disabled and the downloads page remains available. `--no-update-check` suppresses the startup request for one launch.
+
+### Microsoft Store edition
+
+The `microsoft-store` Cargo feature builds a separate desktop edition. It replaces
+both GitHub update menu controls with **Open in Microsoft Store** and an update
+management explanation. The URI is `ms-windows-store://pdp/?productid=9NWM3QW158VZ`.
+Startup/manual GitHub checks, downloads, and installation are rejected before
+workers start, even when saved preferences enable checks. Replacement workers
+also enforce the Store policy. Windows and Store settings control external
+updates; Snout does not request Store installation, termination or restart.
+GitHub and Store releases can publish at different times.
+
+Store preferences and snapshots use `snout-firmware-explorer-store` instead of
+`snout-firmware-explorer`, with the same existing configuration-root selection.
+On Windows the requested preferences path is
+`%APPDATA%\snout-firmware-explorer-store\workspace.json`, with `snapshots` beside
+it. Windows package virtualization may redirect these into per-user package
+storage. **Open configuration folder** opens the path visible to that edition.
+Neither edition imports data automatically. The workspace/snapshot schemas and
+original direct-download paths are unchanged.
+
+To migrate manually, launch and close the Store edition first, close both editions,
+back up the destination, then copy **both `workspace.json` and the complete
+`snapshots` directory** to the Store configuration directory. Do not copy snapshots
+alone: startup cleanup uses the workspace's saved build settings to identify
+retained snapshot folders. Do not merge live files. Back up important baselines
+before uninstalling; Store uninstall retention is not guaranteed.
+
+The reserved product is **Rusty's Snout - Firmware Explorer**:
+
+| Field | Value |
+| --- | --- |
+| Identity Name | `rustypig91.RustysSnout-FirmwareExplorer` |
+| Identity Publisher | `CN=B41BE868-9458-4B44-AE02-EA569AC9D53B` |
+| PublisherDisplayName | `rustypig91` |
+| Product ID | `9NWM3QW158VZ` |
+
+The manifest at `crates/snout/packaging/windows/msix/AppxManifest.xml` packages
+`snout.exe` as an x64, medium-integrity `packagedClassicApp` with `runFullTrust`,
+for Windows 10 build 19041 or newer. This retains normal desktop file access and
+native dialogs. It installs no drivers, services, elevation helper or updater.
+The Store package contains the GUI and license; the CLI remains in the existing
+direct-download archives. ARM64/x86 packages and CLI execution aliases are not
+produced.
+
+On Windows with Rust, Visual Studio C++ Build Tools and the Windows SDK, run:
+
+```powershell
+./scripts/build-msix.ps1
+```
+
+The script reads the `snout` version using Cargo metadata and appends `.0`.
+For example, app `1.0.0` produces package `1.0.0.0`. There is no independent
+package-version setting or override. Releases must use numeric `major.minor.patch`,
+a nonzero major, and components no larger than 65535. Prerelease/build suffixes
+are rejected. Increase the app version before submitting a newer Store package.
+The manifest retains `@VERSION@` until packaging fills it.
+
+The script builds only the Store feature with a static MSVC CRT in `target/store`,
+independent of direct-download binaries. It generates 50/44/150-pixel logos and
+200% variants from the committed icon, indexes them with MakePri, and packs with
+MakeAppx validation enabled. Staging is unique and removed even on failure;
+Cargo environment overrides and the caller's location are restored even if
+cleanup fails. Relative `-OutputDirectory` paths resolve from the repository root.
+Encoded compiler flags, including explicitly empty flags, take precedence over
+plain flags; plain flags are split without empty arguments.
+
+The unsigned output is
+`target/release-assets/store/snout-store-<app-version>.0-x64.msix`. Upload it to
+Partner Center; Microsoft signs it during Store publication. It is not a public
+unsigned sideload installer and needs no signing-certificate secret. The separate
+**Microsoft Store MSIX** workflow tests the Store edition and packaging script,
+checks tag/version consistency, and builds on relevant PRs, main pushes, version
+tags and manual dispatch. Download `snout-store-msix-<run-id>` from its artifacts.
+Reruns replace that run's artifact. It neither adds MSIX files to GitHub releases
+nor submits/publishes automatically. The existing build workflow keeps producing
+the direct-download Windows/Linux packages.
+
+### Store listing and privacy publication
+
+`docs/store-listing.md` contains listing text and reviewer instructions.
+`crates/snout/packaging/windows/store-listing/` contains app tiles (71/150/300 px),
+box art (1080/2160 px square) and poster art (720 × 1080 / 1440 × 2160).
+Regenerate with `python3 scripts/generate-store-images.py` (Pillow required).
+These are separate from manifest assets generated by the Windows packaging script.
+Use current screenshots, including the existing fixture-based Overview capture;
+confirm current Partner Center upload requirements when submitting.
+
+`docs/site/privacy/index.html` covers local firmware processing, saved metadata,
+retention, support correspondence and distribution-specific network behavior.
+Keep the content and visible date aligned with app behavior. Both editions link
+to `https://rustypig91.github.io/snout-firmware-explorer/privacy/` from the menu.
+
+The reusable **Publish privacy policy** workflow publishes only `docs/site` to
+GitHub Pages after a successful tagged release, or on manual dispatch for first
+publication and policy-only updates. Repository **Settings → Pages** must use
+**GitHub Actions**. The `github-pages` environment must allow `v*` tags and the
+manual-publication branch (normally `main`). The URL becomes live after a
+successful deployment. Publishing replaces this repository's Pages site; keep
+future pages under `docs/site` too. The release workflow calls it explicitly,
+since releases created with `GITHUB_TOKEN` do not trigger other release workflows.
+Deployment runs serialize; artifacts use run/attempt names, with successful build
+outputs retained for deploy-only retries. No custom token or domain is required.
+
+Before submission, test the package on Windows with package identity. From a
+Windows SDK Developer PowerShell, unpack to a persistent test directory:
+
+```powershell
+MakeAppx.exe unpack /p <package.msix> /d <test-directory>
+Add-AppxPackage -Register <test-directory>\AppxManifest.xml
+```
+
+Development registration may require Developer Mode; retain the test directory
+while registered and launch the Start menu entry. Check launch/icons and Windows
+DX12 selection, folder/ELF opening, native dialogs, drag/drop, maps/stack reports,
+baseline persistence/deletion, configuration-folder opening, Store/privacy links,
+and independent storage with the direct edition installed. Test an upgrade with
+saved settings and baselines present, and run the Windows App Certification Kit.
+Final Store installation/signing/update delivery requires separate native testing;
+headless tests and local development registration do not verify those behaviors.
+
+Complete Partner Center availability/pricing, properties, age ratings, listing,
+screenshots, support/privacy URLs and certification notes. Explain `runFullTrust`
+as normal Win32 execution with native file dialogs and user-selected firmware
+access. No connected hardware or ARM toolchain is required to inspect the committed
+fixtures. Review the submission before publishing.
+
+References: [manual desktop packaging](https://learn.microsoft.com/en-us/windows/msix/desktop/desktop-to-uwp-manual-conversion),
+[Store package/version rules](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/app-package-requirements),
+and [submission readiness](https://learn.microsoft.com/en-us/windows/apps/publish/store-readiness-checklist).
 
 ## Architecture
 
@@ -161,7 +291,17 @@ ELF metadata does not conclusively identify physical memory technology. Writable
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --all-features --locked
 ```
+
+Run `pwsh -NoProfile -File scripts/tests/build-msix.Tests.ps1` for packaging-script
+regressions without Rust builds or SDK tools. Coverage includes derived package
+versions, invalid versions, compiler flags, relative output paths, build/cleanup
+failures and caller-state restoration. Store-feature tests cover update rejection,
+menu controls and independent workspace/snapshot cleanup. Graphics tests inspect
+the backend mask without loading native graphics drivers. These checks do not
+replace native Windows packaging, installation and upgrade tests.
 
 Tests cover real GNU Arm GCC Cortex-M ELF files, DWARF function locations, local/global symbols, aliases, stripped files, initialized data, reservations, RAM code, unusual sections, comparisons, malformed input, 32/64-bit and little/big-endian synthetic ELF, CLI JSON/errors, compiler stack reports, and headless rendering of every data view. The checked-in fixtures allow tests without an ARM toolchain. Their C sources and linker script are in `fixtures/src`; regeneration instructions are in `fixtures/README.md`. A Docker compiler environment builds Cortex-M3 firmware with GCC, upstream Clang/lld, classic TI Arm CGT and TI Arm Clang. Generated artifacts live in `fixtures/build/<toolchain>`; only ELF, map and stack-report files are retained and committed. Tests cover custom copied RAM sections, stripped images and growth comparisons without requiring compilers. GCC retains its reference capacities, cross references and supported stack-report format. See `fixtures/README.md` for generation commands and compiler-specific limitations.
 
@@ -175,7 +315,7 @@ This is the first implementation milestone, not a claim of universal firmware su
 2. **Memory layouts:** add saved target profiles, explicit unknown memory roles, overlay policies and segment-only fallback. Relocatable objects, overlapping ordinary allocated/load ranges and sectionless ELFs currently return clear unsupported errors. HEX/BIN analysis and standalone MAP symbol/section analysis are not supported. Dynamic-symbol-only attribution is not yet implemented.
 3. **Comparisons:** normalize source roots across build machines, improve duplicate/renamed symbol matching and introduce simple CI budgets. Matching currently uses file label, section and mangled symbol name, with duplicate identities aggregated. Differences in attribution or debug availability can affect per-file/symbol deltas.
 4. **Stack:** import evidenced call graphs and represent recursion, indirect calls, assembly, interrupts and missing data before estimating call chains. The model reserves these uncertainty categories. CFA/disassembly, RTOS task stacks and runtime high-water marks are later inputs.
-5. **Desktop delivery:** validate on representative user firmware and Linux desktops, refine large-report performance, add installers, accessibility/keyboard review and preferences. Source tables currently rebuild their display rows each frame, although visible rows are virtualized. Region occupancy and largest-contributor rankings are cached per analysis. Workspace preferences remember the folder, firmware, layout, view and overview memory selection. Refresh (F5) rescans and reloads the selected firmware while preserving the last successful report on failure. Preferences are stored in `snout-firmware-explorer/workspace.json` under the user configuration directory (APPDATA on Windows, XDG_CONFIG_HOME or ~/.config elsewhere). Use **Menu > Open configuration folder** to open Snout’s settings and snapshot directory in your system file explorer. No export dialog is included yet; use CLI JSON for export.
+5. **Desktop delivery:** validate on representative user firmware and Linux desktops, refine large-report performance, add installers, accessibility/keyboard review and preferences. Source tables currently rebuild their display rows each frame, although visible rows are virtualized. Region occupancy and largest-contributor rankings are cached per analysis. Workspace preferences remember the folder, firmware, layout, view and overview memory selection. Refresh (F5) rescans and reloads the selected firmware while preserving the last successful report on failure. Direct-download preferences are stored in `snout-firmware-explorer/workspace.json` (the Store edition uses `snout-firmware-explorer-store/workspace.json`) under the user configuration directory (APPDATA on Windows, XDG_CONFIG_HOME or ~/.config elsewhere). Use **Menu > Open configuration folder** to open Snout’s settings and snapshot directory in your system file explorer. No export dialog is included yet; use CLI JSON for export.
 
 No VS Code dependency is present. A future extension or CI service can consume core reports or the CLI without the desktop frontend.
 
