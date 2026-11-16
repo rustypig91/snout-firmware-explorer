@@ -232,6 +232,7 @@ fn download(
 }
 
 pub fn spawn_download(version: String, wake: Wake) -> std::io::Result<Receiver<InstallEvent>> {
+    crate::distribution::require_self_updates()?;
     let (tx, rx) = crossbeam_channel::unbounded();
     std::thread::Builder::new()
         .name("update-download".into())
@@ -410,6 +411,7 @@ pub fn spawn_install(
     update: PreparedUpdate,
     wake: Wake,
 ) -> std::io::Result<Receiver<InstallEvent>> {
+    crate::distribution::require_self_updates()?;
     let (tx, rx) = crossbeam_channel::unbounded();
     std::thread::Builder::new()
         .name("update-install".into())
@@ -423,6 +425,34 @@ pub fn spawn_install(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "microsoft-store")]
+    #[test]
+    fn store_edition_rejects_installation_and_preserves_the_target() {
+        for worker in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let installed = tempfile::tempdir().unwrap();
+            let target = installed.path().join("snout.exe");
+            std::fs::write(&target, b"original").unwrap();
+            let file = directory.path().join("replacement.exe");
+            std::fs::write(&file, b"replacement").unwrap();
+            let prepared = PreparedUpdate {
+                directory,
+                file,
+                target: target.clone(),
+                format: Format::Binary,
+            };
+            if worker {
+                assert!(spawn_install(prepared, Wake::default()).is_err());
+            } else {
+                assert_eq!(
+                    prepared.install().unwrap_err(),
+                    crate::distribution::STORE_UPDATE_MESSAGE
+                );
+            }
+            assert_eq!(std::fs::read(target).unwrap(), b"original");
+        }
+    }
 
     #[test]
     fn portable_replacement_probe() {
@@ -468,6 +498,7 @@ mod tests {
         assert_eq!(std::fs::read(target).unwrap(), b"original");
     }
 
+    #[cfg(not(feature = "microsoft-store"))]
     #[test]
     fn portable_update_replaces_only_the_isolated_running_copy() {
         let directory = tempfile::tempdir().unwrap();

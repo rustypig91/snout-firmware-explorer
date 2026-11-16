@@ -6,7 +6,46 @@ pub(super) fn preferences_path() -> Option<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from))
         .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".config")))
-        .map(|p| p.join("snout-firmware-explorer").join("workspace.json"))
+        .map(|p| preferences_path_in(&p, crate::distribution::MICROSOFT_STORE))
+}
+
+pub(super) fn preferences_path_in(base: &Path, store: bool) -> PathBuf {
+    base.join(crate::distribution::application_directory(store))
+        .join("workspace.json")
+}
+
+fn configuration_folder(preferences: Option<&Path>) -> Result<PathBuf, String> {
+    let folder = preferences
+        .and_then(Path::parent)
+        .ok_or("Configuration folder is unavailable")?;
+    std::fs::create_dir_all(folder)
+        .map_err(|error| format!("Could not create configuration folder: {error}"))?;
+    // Explorer runs outside our MSIX filesystem view. Resolve the directory
+    // handle to its physical location before handing the path to another app.
+    let folder = std::fs::canonicalize(folder)
+        .map_err(|error| format!("Could not resolve configuration folder: {error}"))?;
+    #[cfg(windows)]
+    let folder = explorer_path(&folder);
+    Ok(folder)
+}
+
+#[cfg(windows)]
+fn explorer_path(path: &Path) -> PathBuf {
+    use std::path::{Component, Prefix};
+
+    let mut components = path.components();
+    let Some(Component::Prefix(prefix)) = components.next() else {
+        return path.to_owned();
+    };
+    // canonicalize adds a verbatim prefix, which Explorer does not support.
+    // Work with path components to preserve non-Unicode Windows filenames.
+    let mut result = match prefix.kind() {
+        Prefix::VerbatimDisk(drive) => PathBuf::from(format!("{}:", char::from(drive))),
+        Prefix::VerbatimUNC(server, share) => PathBuf::from(r"\\").join(server).join(share),
+        _ => return path.to_owned(),
+    };
+    result.push(components.as_path());
+    result
 }
 
 fn write_preferences(
@@ -40,13 +79,7 @@ fn write_preferences(
 
 impl Explorer {
     pub(super) fn open_configuration_folder(&self) -> Result<(), String> {
-        let folder = self
-            .preferences_file
-            .as_ref()
-            .and_then(|path| path.parent())
-            .ok_or("Configuration folder is unavailable")?;
-        std::fs::create_dir_all(folder)
-            .map_err(|error| format!("Could not create configuration folder: {error}"))?;
+        let folder = configuration_folder(self.preferences_file.as_deref())?;
         #[cfg(target_os = "windows")]
         let launcher = "explorer.exe";
         #[cfg(target_os = "macos")]
@@ -200,6 +233,53 @@ mod tests {
     #[cfg(unix)]
     use std::io::Read;
 
+    #[test]
+    fn configuration_folder_creates_storage_without_creating_a_workspace() {
+        let directory = tempfile::tempdir().unwrap();
+        let preferences = directory.path().join("config/workspace.json");
+        let folder = configuration_folder(Some(&preferences)).unwrap();
+        assert!(folder.is_dir());
+        assert!(std::fs::read_dir(folder).unwrap().next().is_none());
+        assert!(!preferences.exists());
+        assert!(configuration_folder(None).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn configuration_folder_resolves_redirected_storage_for_external_apps() {
+        let directory = tempfile::tempdir().unwrap();
+        let actual = directory.path().join("package storage");
+        std::fs::create_dir(&actual).unwrap();
+        let redirected = directory.path().join("appdata");
+        std::os::unix::fs::symlink(&actual, &redirected).unwrap();
+        let preferences = redirected.join("snout/workspace.json");
+        let folder = configuration_folder(Some(&preferences)).unwrap();
+        assert_eq!(folder, actual.join("snout").canonicalize().unwrap());
+        assert!(!folder.starts_with(redirected));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn explorer_paths_preserve_drive_unc_and_non_unicode_names() {
+        for (input, expected) in [
+            (r"\\?\C:\package storage\snout", r"C:\package storage\snout"),
+            (r"\\?\UNC\server\share\snout", r"\\server\share\snout"),
+            (r"C:\config\snout", r"C:\config\snout"),
+        ] {
+            assert_eq!(explorer_path(Path::new(input)), Path::new(expected));
+        }
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        let suffix = std::ffi::OsString::from_wide(&[0xd800]);
+        let input = Path::new(r"\\?\C:\config").join(&suffix);
+        let expected = Path::new(r"C:\config").join(suffix);
+        assert_eq!(
+            explorer_path(&input)
+                .as_os_str()
+                .encode_wide()
+                .collect::<Vec<_>>(),
+            expected.as_os_str().encode_wide().collect::<Vec<_>>()
+        );
+    }
     #[test]
     fn preferences_save_and_replace_beyond_windows_max_path() {
         let directory = tempfile::tempdir().unwrap();

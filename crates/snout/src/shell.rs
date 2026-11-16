@@ -779,23 +779,33 @@ impl Explorer {
                     }
                 }
                 ui.separator();
-                if ui
-                    .add_enabled(self.updates.idle(), egui::Button::new("Check for updates"))
-                    .on_disabled_hover_text("An update check or installation is in progress")
-                    .clicked()
-                {
-                    self.start_update_check(ui.ctx(), true);
-                    ui.close();
-                }
-                if ui
-                    .checkbox(
-                        &mut self.updates.check_on_startup,
-                        "Check for updates on startup",
-                    )
-                    .changed()
-                {
-                    if let Err(error) = self.save_preferences() {
-                        self.error = Some(format!("Could not save update preferences: {error}"));
+                if crate::distribution::MICROSOFT_STORE {
+                    if ui.button("Open in Microsoft Store").clicked() {
+                        ui.ctx()
+                            .open_url(egui::OpenUrl::new_tab(crate::distribution::STORE_URI));
+                        ui.close();
+                    }
+                    ui.label(crate::distribution::STORE_UPDATE_MESSAGE);
+                } else {
+                    if ui
+                        .add_enabled(self.updates.idle(), egui::Button::new("Check for updates"))
+                        .on_disabled_hover_text("An update check or installation is in progress")
+                        .clicked()
+                    {
+                        self.start_update_check(ui.ctx(), true);
+                        ui.close();
+                    }
+                    if ui
+                        .checkbox(
+                            &mut self.updates.check_on_startup,
+                            "Check for updates on startup",
+                        )
+                        .changed()
+                    {
+                        if let Err(error) = self.save_preferences() {
+                            self.error =
+                                Some(format!("Could not save update preferences: {error}"));
+                        }
                     }
                 }
                 ui.separator();
@@ -805,6 +815,11 @@ impl Explorer {
                     .clicked()
                 {
                     self.show_notes = !self.show_notes;
+                    ui.close();
+                }
+                if ui.button("Privacy policy").clicked() {
+                    ui.ctx()
+                        .open_url(egui::OpenUrl::new_tab(crate::distribution::PRIVACY_URL));
                     ui.close();
                 }
                 if ui

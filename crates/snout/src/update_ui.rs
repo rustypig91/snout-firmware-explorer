@@ -14,7 +14,7 @@ pub struct Updates {
 impl Default for Updates {
     fn default() -> Self {
         Self {
-            check_on_startup: true,
+            check_on_startup: !crate::distribution::MICROSOFT_STORE,
             skipped_version: None,
             check: None,
             install: None,
@@ -36,7 +36,7 @@ fn wake(ctx: &egui::Context) -> Wake {
 }
 impl Explorer {
     pub(super) fn start_update_check(&mut self, ctx: &egui::Context, manual: bool) {
-        if !self.updates.idle() {
+        if crate::distribution::MICROSOFT_STORE || !self.updates.idle() {
             return;
         }
         self.updates.manual = manual;
@@ -227,6 +227,26 @@ impl Explorer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "microsoft-store")]
+    #[test]
+    fn store_edition_rejects_checks_even_with_restored_update_preferences() {
+        let mut app = Explorer::default();
+        app.apply_preferences(&serde_json::json!({
+            "version": 1,
+            "check_updates_on_startup": true,
+            "skipped_version": "v0.1.0"
+        }));
+        assert!(app.updates.check_on_startup);
+        for manual in [false, true] {
+            app.start_update_check(&egui::Context::default(), manual);
+            assert!(app.updates.idle());
+            assert!(app.updates.notice.is_none());
+        }
+        assert!(update::fetch_latest().is_err());
+        assert!(update::spawn_check(Wake::default()).is_err());
+        assert!(update::spawn_download("v9.9.9".into(), Wake::default()).is_err());
+    }
 
     #[test]
     fn failed_startup_checks_stay_quiet_and_manual_checks_report_errors() {

@@ -32,12 +32,18 @@ pub fn msi_installation() -> Result<bool, String> {
 
 /// Cached policy for drawing the update UI without enumerating MSI every frame.
 pub fn manual_update_reason() -> Option<String> {
+    if crate::distribution::MICROSOFT_STORE {
+        return Some(crate::distribution::STORE_UPDATE_MESSAGE.into());
+    }
     manual_update_message(is_debian_installation(), msi_installation())
 }
 
 /// Workers must recheck registration: MSI ownership can change while the app runs,
 /// including between the release check, download, and replacement.
 fn replacement_block_reason() -> Option<String> {
+    if crate::distribution::MICROSOFT_STORE {
+        return Some(crate::distribution::STORE_UPDATE_MESSAGE.into());
+    }
     #[cfg(windows)]
     let msi = msi::installed();
     #[cfg(not(windows))]
@@ -185,6 +191,9 @@ pub fn notice_for(
 
 /// Ask GitHub for the newest release. Blocks; call it off the UI thread.
 pub fn fetch_latest() -> CheckResult {
+    if crate::distribution::MICROSOFT_STORE {
+        return Err(crate::distribution::STORE_UPDATE_MESSAGE.into());
+    }
     let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest");
     let mut resp = ureq::get(&url)
         .header("Accept", "application/vnd.github+json")
@@ -235,10 +244,10 @@ pub fn fetch_latest() -> CheckResult {
 
 /// Run [`fetch_latest`] on a background thread. The single result arrives on the
 /// returned channel; `wake` brings an idle UI back to read it. Dropping the
-/// receiver is fine — the send simply fails and the thread exits. Fails only
-/// if the OS refuses to create the thread (e.g. resource exhaustion), which
-/// callers should surface as an error rather than letting it crash the app.
+/// receiver is fine — the send simply fails and the thread exits. Rejects Store
+/// builds before starting a worker; also reports thread-creation failures.
 pub fn spawn_check(wake: Wake) -> std::io::Result<Receiver<CheckResult>> {
+    crate::distribution::require_self_updates()?;
     let (tx, rx) = crossbeam_channel::bounded(1);
     std::thread::Builder::new()
         .name("update-check".into())

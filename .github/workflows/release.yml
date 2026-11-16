@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  # Select an existing version tag in the Run workflow ref selector.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-version:
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify version tag
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            echo '::error::Run Release against an existing v<workspace-version> tag.'
+            exit 1
+          fi
+          VERSION="$(grep -m1 '^version = "' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          if [[ "$GITHUB_REF_NAME" != "v$VERSION" ]]; then
+            echo "::error::Tag '$GITHUB_REF_NAME' does not match workspace version '$VERSION'."
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: verify-version
+    uses: ./.github/workflows/build.yml
+
+  store:
+    needs: verify-version
+    uses: ./.github/workflows/store.yml
+
+  publish-privacy-policy:
+    needs: [build, store]
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/privacy-policy.yml
+
+  # Default success() gating blocks failed, cancelled and skipped dependencies.
+  # Publication is the final step, after all release assets upload to a draft.
+  release:
+    needs: [verify-version, build, store, publish-privacy-policy]
+    permissions:
+      contents: write
+    runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ needs.verify-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download Linux release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: snout-v${{ env.VERSION }}-x86_64-unknown-linux-gnu-build-${{ github.run_id }}
+          path: release-assets
+      - name: Download Windows release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: snout-v${{ env.VERSION }}-x86_64-pc-windows-msvc-build-${{ github.run_id }}
+          path: release-assets
+      - name: Download Store submission archive
+        uses: actions/download-artifact@v4
+        with:
+          name: snout-store-submission-${{ github.run_id }}
+          path: release-assets
+      - name: Publish completed release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash scripts/publish-release.sh "$GITHUB_REF_NAME" release-assets
